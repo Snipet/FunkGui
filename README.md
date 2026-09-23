@@ -26,6 +26,21 @@ target_link_libraries(my_probe PRIVATE FunkGui::harness)
 
 Agents: read `CLAUDE.md` first.
 
+## Unreleased: S0 review fixes
+
+These are the consumer-visible rules added since v0.0.1. `CHANGELOG.md` → Unreleased has the full list.
+
+- **Blessing stays with the lead.** A probe's `--bless-to` may not be `--golden-root`, lie inside it or contain it
+  (harness error). `golden.py adopt` accepts only an `--allow-env` name of the form `*_ALLOW_BLESS`, only the statuses
+  `pass`/`golden_drift`/`golden_missing`, and only candidates whose files match their results. It refuses Mode-scoped
+  candidates unless the build's dsp.registry noted `"provisional"` (as `[]` when empty).
+- **Goldens hold finite values only.** `num()` refuses NaN and ±Inf, and compares exactly the printed `%.9g` value.
+- **Candidates are never stale.** Each probe run replaces its own candidate files and removes the rest.
+- **The shaderc is stamped.** A given `FUNKGUI_SHADERC` needs `shaderc.stamp` = `bgfx.cmake <pinned SHA>` beside it.
+  `fg.shader.hash` checks the stamp with a spec row.
+- **The font data has hidden symbols.** `FunkGuiFonts` is built with hidden visibility, so no plug-in exports it.
+- `report` and `diff` accept `--allow-env`, so FCompressor's `Scripts/golden.py` can pass it to every subcommand.
+
 ## Provenance
 
 FunkGui starts as a byte-for-byte copy of HardwareReverb's GUI files (commit 1, "Snapshot of HardwareReverb GUI";

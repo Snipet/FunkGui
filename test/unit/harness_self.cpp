@@ -3,21 +3,25 @@
 // fg.harness.self: Harness v2 against its own contract (FCompressor docs/design/03-build-verify-process.md §3.2.1-§3.2.4,
 // 02 §3.11) and the G1 additions (note, setEnv/unsetEnv, positionals, jsonArray): the tolerance grammar, duplicate
 // keys, golden files, arch overlays, `lines` sidecars, exit codes and their order, --only/--quick, the results JSON and
-// the RESULT line, and atomic candidate writes. Every check is a spec row of this probe; the probes under test run
-// in-process against scratch golden trees under <cwd>/work (ctest runs this in <build>/sandbox/fg.harness.self), with
-// their stdout captured so that only this probe's RESULT line reaches CTest.
+// the RESULT line, and atomic candidate writes; since the S0 review (R-G1 #3, #4, #6, #7), --bless-to outside the
+// golden root, stale candidate removal, num() compared as printed and non-finite values refused. Every check is a
+// spec row of this probe; the probes under test run in-process against scratch golden trees under <cwd>/work (ctest
+// runs this in <build>/sandbox/fg.harness.self), with their stdout captured so that only this probe's RESULT line
+// reaches CTest.
 
 #include <funkgui/test/Harness.h>
 
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -581,6 +585,152 @@ namespace
         S.eq("atomic.unwritable_is_error", unwritable.exit, 4);
     }
 
+    // ---- --bless-to never reaches the golden tree (S0 review R-G1 #3) -----------------------------------------------
+    void blessToOutsideRoot(Suite& S)
+    {
+        const auto body = [](T::Probe& P) { P.num("a", 1, T::Tol::exact()); };
+        const auto runWith = [&](const Sandbox& sb, const fs::path& blessTo) {
+            std::vector<std::string> args = sb.args();
+            args[7] = blessTo.string();                          // args[6] is "--bless-to"
+            return S.run(sb, "self.bless", "", args, body);
+        };
+        {
+            // The review's scenario: the first run drifts and, with --bless-to <golden root>, would write the arm64
+            // overlay; the second run would then pass.
+            const Sandbox sb = S.fresh("bless-to-root");
+            put(sb.base("self.bless"), "a\t2\texact\n");
+            const auto first = runWith(sb, sb.golden());
+            const auto second = runWith(sb, sb.golden());
+            S.eq("bless_to.equal_root", first.exit, 4);
+            S.yes("bless_to.equal_root.no_overlay", !fs::exists(sb.overlay("arm64", "self.bless")));
+            S.eq("bless_to.equal_root.still_refused", second.exit, 4);
+            S.yes("bless_to.message", has(first.out, "--bless-to must be outside --golden-root"));
+            S.eq("bless_to.relative_spelling", runWith(sb, fs::relative(sb.golden())).exit, 4);
+            S.eq("bless_to.dot_dot", runWith(sb, sb.golden() / "arm64" / "..").exit, 4);
+            S.eq("bless_to.inside_root", runWith(sb, sb.golden() / "candidates").exit, 4);
+            S.eq("bless_to.contains_root", runWith(sb, sb.root).exit, 4);
+            std::error_code ec;
+            fs::create_directory_symlink(sb.golden(), sb.root / "link", ec);
+            S.yes("bless_to.symlink", !ec && runWith(sb, sb.root / "link").exit == 4);
+            S.yes("bless_to.symlink_inside", !ec && runWith(sb, sb.root / "link" / "arm64").exit == 4);
+            // A case-insensitive volume (the macOS default) spells the golden directory many ways.
+            const bool caseInsensitive = fs::exists(sb.root / "GOLDEN", ec);
+            S.yes("bless_to.case_variant", !caseInsensitive || runWith(sb, sb.root / "GOLDEN" / "x").exit == 4);
+            S.yes("bless_to.golden_untouched", !fs::exists(sb.golden() / "arm64") && !fs::exists(sb.golden() / "x")
+                                                   && !fs::exists(sb.golden() / "candidates"));
+            // A sibling whose name merely starts with the root's name is outside it.
+            const auto sibling = runWith(sb, sb.root / "golden-cand");
+            S.yes("bless_to.sibling_prefix_ok",
+                  sibling.exit == 2 && fs::exists(sb.root / "golden-cand" / "arm64" / "global" / "self.bless.txt"));
+        }
+    }
+
+    // ---- a probe's candidate files always come from its latest run (R-G1 #4) ----------------------------------------
+    void staleCandidates(Suite& S)
+    {
+        const Sandbox sb = S.fresh("stale");
+        const fs::path dir = sb.cand() / "arm64" / "global";
+        const auto at = [&](std::string_view name) { return fs::exists(dir / std::string(name)); };
+        const auto full = [](T::Probe& P) {
+            P.num("n", 1, T::Tol::exact());
+            const std::string a[] = { "Button MODE" }, b[] = { "Tab 1" };
+            P.lines("a11y", a);
+            P.lines("tabs", b);
+        };
+        // A longer probe's candidate beside this one (golden.py's longest-owner rule): never touched.
+        put(dir / "self.stale.more.txt", "x\t1\texact\n");
+        put(dir / "self.stale.more.k.lines", "kept\n");
+        const auto longerKept = [&] { return at("self.stale.more.txt") && at("self.stale.more.k.lines"); };
+
+        const auto first = S.run(sb, "self.stale", "", sb.args(), full);
+        S.yes("stale.first_run",
+              first.exit == 3 && at("self.stale.txt") && at("self.stale.a11y.lines") && at("self.stale.tabs.lines"));
+        const auto fewer = S.run(sb, "self.stale", "", sb.args(), [](T::Probe& P) {
+            P.num("n", 1, T::Tol::exact());
+            const std::string a[] = { "Button MODE" };
+            P.lines("a11y", a);
+        });
+        S.yes("stale.dropped_sidecar_removed",
+              fewer.exit == 3 && at("self.stale.a11y.lines") && !at("self.stale.tabs.lines"));
+        S.yes("stale.longer_probe_kept", longerKept());
+        const auto linesOnly = S.run(sb, "self.stale", "", sb.args(), [](T::Probe& P) {
+            const std::string a[] = { "Button MODE" };
+            P.lines("a11y", a);
+        });
+        S.yes("stale.txt_removed_without_rows",
+              linesOnly.exit == 3 && !at("self.stale.txt") && at("self.stale.a11y.lines"));
+
+        const auto noneLeft = [&] {
+            return !at("self.stale.txt") && !at("self.stale.a11y.lines") && !at("self.stale.tabs.lines")
+                && !at("self.stale.diff") && longerKept();
+        };
+        S.run(sb, "self.stale", "", sb.args(), full);
+        const auto partial = S.run(sb, "self.stale", "", sb.args({ "--only", "n" }), full);
+        S.yes("stale.partial_run_leaves_none", partial.exit == 3 && noneLeft());
+        S.run(sb, "self.stale", "", sb.args(), full);
+        const auto failed = S.run(sb, "self.stale", "", sb.args(), [&](T::Probe& P) {
+            full(P);
+            P.harnessError("forced by the self-test");
+        });
+        S.yes("stale.failed_run_leaves_none", failed.exit == 4 && noneLeft());
+        S.run(sb, "self.stale", "", sb.args(), full);
+        const auto specOnly = S.run(sb, "self.stale", "", sb.args(), [](T::Probe& P) { P.eq("x", 1, 1); });
+        S.yes("stale.spec_only_run_leaves_none", specOnly.exit == 0 && noneLeft());
+
+        // A probe that no longer produces golden rows drifts against its golden; the .diff is its candidate.
+        put(sb.base("self.stale"), "n\t1\texact\n");
+        const auto dropped = S.run(sb, "self.stale", "", sb.args(), [](T::Probe& P) { P.eq("x", 1, 1); });
+        S.yes("stale.rows_dropped_diff", dropped.exit == 2 && at("self.stale.diff") && !at("self.stale.txt"));
+    }
+
+    // ---- num() compares what the golden file holds (R-G1 #6) --------------------------------------------------------
+    void printedValues(Suite& S)
+    {
+        const Sandbox sb = S.fresh("printed");
+        const auto body = [](T::Probe& P) {
+            P.num("f.le", 0.1f, T::Tol::le(0));
+            P.num("f.ge", 0.1f, T::Tol::ge(0));
+            P.num("f.abs", 0.1f, T::Tol::abs(0));
+            P.num("f.rel", 1.0 / 3.0, T::Tol::rel(0));
+            P.num("f.absrel", 2.0 / 3.0, T::Tol::absrel(0, 0));
+        };
+        const auto first = S.run(sb, "self.printed", "", sb.args(), body);
+        S.eq("printed.first_run_missing", first.exit, 3);
+        // Bless the candidate exactly as written (what golden.py adopt does), then run the same probe again.
+        std::error_code ec;
+        fs::create_directories(sb.base("self.printed").parent_path(), ec);
+        fs::copy_file(sb.cand() / "arm64" / "global" / "self.printed.txt", sb.base("self.printed"),
+                      fs::copy_options::overwrite_existing, ec);
+        const auto again = S.run(sb, "self.printed", "", sb.args(), body);
+        S.yes("printed.blessed_candidate_passes", !ec && again.exit == 0);
+    }
+
+    // ---- non-finite values never become goldens (R-G1 #7) -----------------------------------------------------------
+    void nonFinite(Suite& S)
+    {
+        const Sandbox sb = S.fresh("nonfinite");
+        const auto exitOf = [&](auto body) { return S.run(sb, "self.nf", "", sb.args(), body).exit; };
+        const double inf = std::numeric_limits<double>::infinity();
+        S.eq("nonfinite.num_nan", exitOf([](T::Probe& P) { P.num("a", std::nan(""), T::Tol::exact()); }), 4);
+        S.eq("nonfinite.num_inf", exitOf([&](T::Probe& P) { P.num("a", -inf, T::Tol::abs(1)); }), 4);
+        S.eq("nonfinite.text_nan", exitOf([](T::Probe& P) { P.text("t", "nan"); }), 4);
+        S.eq("nonfinite.text_infinity", exitOf([](T::Probe& P) { P.text("t", "-Infinity"); }), 4);
+        S.eq("nonfinite.text_nan_payload", exitOf([](T::Probe& P) { P.text("t", "NaN(0x1)"); }), 4);
+        S.eq("nonfinite.lookalikes_ok", exitOf([](T::Probe& P) {
+            P.text("t", "nano");
+            P.text("u", "info");
+            P.hash("h", 0x1e40000000000000ull);                 // "1e40000000000000": a hash, not an overflow
+        }), 3);
+        const auto goldenWith = [&](std::string_view key, std::string_view content) {
+            const Sandbox g = S.fresh(key);
+            put(g.base("self.nf"), content);
+            S.eq(key, S.run(g, "self.nf", "", g.args(), [](T::Probe& P) { P.text("t", "x"); }).exit, 4);
+        };
+        goldenWith("nonfinite.golden_nan_exact", "t\tx\texact\na\tnan\texact\n");
+        goldenWith("nonfinite.golden_inf_abs", "t\tx\texact\na\tinf\tabs:1\n");
+        goldenWith("nonfinite.golden_overflow_abs", "t\tx\texact\na\t1e999\tabs:1\n");
+    }
+
     // ---- setEnv / unsetEnv ------------------------------------------------------------------------------------------
     void environment(Suite& S)
     {
@@ -608,6 +758,10 @@ int main(int argc, char** argv)
     commandLine(suite);
     results(suite);
     candidates(suite);
+    blessToOutsideRoot(suite);
+    staleCandidates(suite);
+    printedValues(suite);
+    nonFinite(suite);
     environment(suite);
     return self.finish();
 }
