@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <memory>
 
-namespace hrvbgui
+namespace funkgui
 {
     // Machine-wide UI preferences, shared by every instance in every host.
     //
@@ -14,7 +14,7 @@ namespace hrvbgui
     // its author's palette and silently restyled the user's screen.
     //
     // Backed by a properties file under
-    //   ~/Library/Application Support/HardwareReverb/preferences.settings
+    //   ~/Library/Application Support/<PREFS_FOLDER>/preferences.settings
     // which is a different file from the Standalone wrapper's own settings.
     class UiPreferences
     {

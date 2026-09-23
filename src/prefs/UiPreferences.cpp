@@ -3,7 +3,7 @@
 
 #include <cstdlib>
 
-namespace hrvbgui
+namespace funkgui
 {
     namespace
     {
@@ -26,16 +26,16 @@ namespace hrvbgui
         juce::PropertiesFile::Options o;
         o.applicationName     = "preferences";
         o.filenameSuffix      = "settings";
-        o.folderName          = "HardwareReverb";
+        o.folderName          = FUNKGUI_PREFS_FOLDER;
         o.osxLibrarySubFolder = "Application Support";
         o.commonToAllUsers    = false;
         o.doNotSave           = false;
 
-        // HRVB_PREFS_DIR redirects the store to a directory of the caller's
+        // <ENV_PREFIX>PREFS_DIR redirects the store to a directory of the caller's
         // choosing. It exists so the preferences harness can run against a
         // scratch file instead of the real one — which it used to write, with
         // no teardown, and every editor on the machine then read.
-        if (const char* dir = std::getenv("HRVB_PREFS_DIR"))
+        if (const char* dir = funkgui::env("PREFS_DIR"))
             file_ = std::make_unique<juce::PropertiesFile>(
                 juce::File(juce::String(dir)).getChildFile("preferences.settings"), o);
         else

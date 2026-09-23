@@ -22,11 +22,11 @@
 int main(int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI init;
-    std::vector<hrvb::Metric> metrics;
+    std::vector<funkgui::test::Metric> metrics;
     int bad = 0;
 
-    hrvbgui::FontAtlasSdf ref;
-    if (!ref.bake(hrvbgui::BundledFont::data(), hrvbgui::BundledFont::size()))
+    funkgui::FontAtlasSdf ref;
+    if (!ref.bake(funkgui::BundledFont::data(), funkgui::BundledFont::size()))
     { std::printf("reference bake FAILED\n"); return 1; }
 
     // The reference, as numbers a golden can hold.
@@ -36,24 +36,24 @@ int main(int argc, char** argv)
         const size_t n = px.size() * sizeof(px[0]);
         uint64_t h = 1469598103934665603ull;
         for (size_t i = 0; i < n; ++i) { h ^= bytes[i]; h *= 1099511628211ull; }
-        hrvb::addHash(metrics, "font.atlas", h);
-        hrvb::addNum(metrics, "font.cap",    ref.capHeight(),      1.0e-3);
-        hrvb::addNum(metrics, "font.x",      ref.xHeight(),        1.0e-3);
-        hrvb::addNum(metrics, "font.ascent", ref.ascent(),         1.0e-3);
-        hrvb::addNum(metrics, "font.digit",  ref.maxDigitAdvance(), 1.0e-3);
+        funkgui::test::addHash(metrics, "font.atlas", h);
+        funkgui::test::addNum(metrics, "font.cap",    ref.capHeight(),      1.0e-3);
+        funkgui::test::addNum(metrics, "font.x",      ref.xHeight(),        1.0e-3);
+        funkgui::test::addNum(metrics, "font.ascent", ref.ascent(),         1.0e-3);
+        funkgui::test::addNum(metrics, "font.digit",  ref.maxDigitAdvance(), 1.0e-3);
         int missing = 0;
         for (int c = 33; c <= 126; ++c)
         { const auto* g = ref.glyph((uint32_t) c); if (!g || g->w <= 0.0f) ++missing; }
-        hrvb::addNum(metrics, "font.missing", missing, 0.0);
+        funkgui::test::addNum(metrics, "font.missing", missing, 0.0);
     }
 
-    auto describe = [](const char* what, const hrvbgui::FontAtlasSdf& a)
+    auto describe = [](const char* what, const funkgui::FontAtlasSdf& a)
     {
         int missing = 0;
         for (int c = 33; c <= 126; ++c)
         { const auto* g = a.glyph((uint32_t) c); if (!g || g->w <= 0.0f) ++missing; }
-        for (int i = 0; i < hrvbgui::FontAtlasSdf::kNumExtra; ++i)
-        { const auto* g = a.glyph(hrvbgui::FontAtlasSdf::kExtraChars[i]);
+        for (int i = 0; i < funkgui::FontAtlasSdf::kNumExtra; ++i)
+        { const auto* g = a.glyph(funkgui::FontAtlasSdf::kExtraChars[i]);
           if (!g || g->w <= 0.0f) ++missing; }
         std::printf("%-30s asc %7.3f desc %7.3f cap %7.3f x %7.3f space %7.3f digit %7.3f  missing %d\n",
                     what, a.ascent(), a.descent(), a.capHeight(), a.xHeight(),
@@ -69,7 +69,7 @@ int main(int argc, char** argv)
         if (!f.existsAsFile() || !f.loadFileAsData(mb))
         { std::printf("cannot read %s\n", argv[i]); ++bad; continue; }
 
-        hrvbgui::FontAtlasSdf cand;
+        funkgui::FontAtlasSdf cand;
         if (!cand.bake(mb.getData(), mb.getSize()))
         { std::printf("%-30s bake FAILED\n", f.getFileName().toRawUTF8()); ++bad; continue; }
         describe(f.getFileName().toRawUTF8(), cand);
@@ -93,6 +93,6 @@ int main(int argc, char** argv)
                     "  vs reference:", worstAdv, diff, pa.size(),
                     same ? "BIT-IDENTICAL" : "*** DIFFERS ***");
     }
-    const int rc = hrvb::finish(argc, argv, metrics);
+    const int rc = funkgui::test::finish(argc, argv, metrics);
     return bad > 0 ? 1 : rc;
 }

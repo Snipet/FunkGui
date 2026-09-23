@@ -7,7 +7,7 @@
 
 #include "SdfCanvas.h"
 
-namespace hrvbgui::type
+namespace funkgui::type
 {
     using TS = SdfCanvas::TextStyle;
 

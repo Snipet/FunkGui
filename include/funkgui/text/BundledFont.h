@@ -1,9 +1,9 @@
 #pragma once
 
-#include <HardwareReverbFonts.h>
+#include <FunkGuiFonts.h>
 #include <cstddef>
 
-namespace hrvbgui
+namespace funkgui
 {
     // The single place that names the shipping typeface.
     //
@@ -14,8 +14,8 @@ namespace hrvbgui
     // face from here so they cannot diverge.
     struct BundledFont
     {
-        static const void* data() { return hrvbfonts::JetBrainsMonoRegularsubset_ttf; }
-        static size_t      size() { return static_cast<size_t>(hrvbfonts::JetBrainsMonoRegularsubset_ttfSize); }
+        static const void* data() { return funkguifonts::JetBrainsMonoRegularsubset_ttf; }
+        static size_t      size() { return static_cast<size_t>(funkguifonts::JetBrainsMonoRegularsubset_ttfSize); }
         static const char* name() { return "JetBrains Mono Regular"; }
     };
 }

@@ -3,7 +3,7 @@
 // sampling the same runtime-baked atlas.
 //
 // The editor has no headless mode, so this is how the panel's real geometry
-// gets inspected: run the plugin once with HRVB_CANVAS_DUMP set, then render
+// gets inspected: run the plugin once with <ENV_PREFIX>CANVAS_DUMP set, then render
 // what it actually drew rather than a reimplementation of it.
 //
 //   cmake --build build --target HardwareReverbFrameRender
@@ -35,7 +35,7 @@
 #include <cstring>
 #include <vector>
 
-using hrvbgui::FontAtlasSdf;
+using funkgui::FontAtlasSdf;
 
 namespace
 {
@@ -107,7 +107,7 @@ int main(int argc, char** argv)
 
     if (fingerprint)
     {
-        std::vector<hrvb::Metric> metrics;
+        std::vector<funkgui::test::Metric> metrics;
         uint64_t h = 1469598103934665603ull;
         auto mix = [&](float v) { uint32_t b; std::memcpy(&b, &v, 4);
                                   for (int k = 0; k < 4; ++k) { h ^= (b >> (k * 8)) & 0xff; h *= 1099511628211ull; } };
@@ -135,25 +135,25 @@ int main(int argc, char** argv)
             for (float v : p.d2) mix(v);
             maxX = juce::jmax(maxX, p.x1); maxY = juce::jmax(maxY, p.y1);
         }
-        hrvb::addHash(metrics, "layout.geometry", h);
-        hrvb::addNum(metrics, "layout.static_count", statics, 0.0);
-        hrvb::addNum(metrics, "layout.text_count",   text,    0.0);
-        hrvb::addNum(metrics, "layout.rank_strokes", rank,    0.0);
-        hrvb::addNum(metrics, "layout.segments",     segments, 0.0);
-        hrvb::addNum(metrics, "layout.view_w", viewW, 0.0);
-        hrvb::addNum(metrics, "layout.view_h", viewH, 0.0);
-        hrvb::addNum(metrics, "layout.max_x",  maxX,  0.01);
-        hrvb::addNum(metrics, "layout.max_y",  maxY,  0.01);
+        funkgui::test::addHash(metrics, "layout.geometry", h);
+        funkgui::test::addNum(metrics, "layout.static_count", statics, 0.0);
+        funkgui::test::addNum(metrics, "layout.text_count",   text,    0.0);
+        funkgui::test::addNum(metrics, "layout.rank_strokes", rank,    0.0);
+        funkgui::test::addNum(metrics, "layout.segments",     segments, 0.0);
+        funkgui::test::addNum(metrics, "layout.view_w", viewW, 0.0);
+        funkgui::test::addNum(metrics, "layout.view_h", viewH, 0.0);
+        funkgui::test::addNum(metrics, "layout.max_x",  maxX,  0.01);
+        funkgui::test::addNum(metrics, "layout.max_y",  maxY,  0.01);
         std::printf("geometry %016llx  static %d (text %d, rank strokes %d)  live caps excluded %d  extent %.1f x %.1f\n",
                     (unsigned long long) h, statics, text, rank, caps, (double) maxX, (double) maxY);
-        return hrvb::finish(argc, argv, metrics);
+        return funkgui::test::finish(argc, argv, metrics);
     }
 
     const juce::File out{ juce::String(argv[2]) };
     const int ss = argc > 3 ? juce::jlimit(1, 4, std::atoi(argv[3])) : 2;
 
     FontAtlasSdf atlas;
-    if (!atlas.bake(hrvbgui::BundledFont::data(), hrvbgui::BundledFont::size())) { std::printf("atlas bake failed\n"); return 1; }
+    if (!atlas.bake(funkgui::BundledFont::data(), funkgui::BundledFont::size())) { std::printf("atlas bake failed\n"); return 1; }
 
     const int W = static_cast<int>(viewW) * ss;
     const int H = static_cast<int>(viewH) * ss;

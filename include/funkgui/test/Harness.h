@@ -32,7 +32,7 @@
   #include <xmmintrin.h>
 #endif
 
-namespace hrvb
+namespace funkgui::test
 {
     // Flush-to-zero, matching what juce::ScopedNoDenormals does on each
     // architecture (juce_FloatVectorOperations.cpp, JUCE 8.0.4):

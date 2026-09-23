@@ -6,16 +6,16 @@
 // Compiled without ARC (JUCE default), so the retain/release dance below is
 // deliberate. CADisplayLink retains its target and the target retains the
 // link, so -invalidate is what breaks the cycle; nothing else will.
-@interface HrvbDisplayLinkTarget : NSObject
+@interface FUNKGUI_OBJC_NAME(DisplayLinkTarget) : NSObject
 {
 @public
-    hrvbgui::DisplayLinkCallback cb;
+    funkgui::DisplayLinkCallback cb;
     void* user;
 }
 @property (nonatomic, retain) CADisplayLink* link;
 @end
 
-@implementation HrvbDisplayLinkTarget
+@implementation FUNKGUI_OBJC_NAME(DisplayLinkTarget)
 
 - (void) step: (CADisplayLink*) sender
 {
@@ -25,7 +25,7 @@
 
 @end
 
-namespace hrvbgui
+namespace funkgui
 {
     void* createDisplayLink(void* nsView, DisplayLinkCallback cb, void* user)
     {
@@ -33,7 +33,7 @@ namespace hrvbgui
         if (v == nil || [v window] == nil)
             return nullptr;   // no screen to sync to yet
 
-        HrvbDisplayLinkTarget* t = [[HrvbDisplayLinkTarget alloc] init];
+        FUNKGUI_OBJC_NAME(DisplayLinkTarget)* t = [[FUNKGUI_OBJC_NAME(DisplayLinkTarget) alloc] init];
         t->cb   = cb;
         t->user = user;
 
@@ -57,7 +57,7 @@ namespace hrvbgui
     void destroyDisplayLink(void* handle)
     {
         if (handle == nullptr) return;
-        HrvbDisplayLinkTarget* t = (HrvbDisplayLinkTarget*) handle;
+        FUNKGUI_OBJC_NAME(DisplayLinkTarget)* t = (FUNKGUI_OBJC_NAME(DisplayLinkTarget)*) handle;
         t->cb   = nullptr;
         t->user = nullptr;
         [t.link invalidate];   // releases the link's retain on t
@@ -68,7 +68,7 @@ namespace hrvbgui
     void setDisplayLinkRate(void* handle, float minHz, float maxHz, float preferredHz)
     {
         if (handle == nullptr) return;
-        HrvbDisplayLinkTarget* t = (HrvbDisplayLinkTarget*) handle;
+        FUNKGUI_OBJC_NAME(DisplayLinkTarget)* t = (FUNKGUI_OBJC_NAME(DisplayLinkTarget)*) handle;
         if (t.link == nil) return;
         t.link.preferredFrameRateRange =
             CAFrameRateRangeMake(minHz, maxHz, preferredHz);

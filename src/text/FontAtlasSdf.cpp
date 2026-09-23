@@ -5,7 +5,7 @@
 #include <cmath>
 #include <limits>
 
-namespace hrvbgui
+namespace funkgui
 {
     namespace
     {

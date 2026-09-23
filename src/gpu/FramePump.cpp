@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <bgfx/bgfx.h>
 
-namespace hrvbgui
+namespace funkgui
 {
     namespace
     {

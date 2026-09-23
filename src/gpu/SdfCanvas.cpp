@@ -7,7 +7,7 @@
 #include <cstdio>
 #include <cstring>
 
-namespace hrvbgui
+namespace funkgui
 {
     namespace
     {

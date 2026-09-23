@@ -2,7 +2,7 @@
 
 #include "Col.h"
 
-namespace hrvbgui
+namespace funkgui
 {
     // The whole visual system is nine ink levels plus two accents. Depth is
     // expressed only as ink percentage — there are no gradients, shadows or

@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace hrvbgui
+namespace funkgui
 {
     class BgfxContext;
 
@@ -81,7 +81,7 @@ namespace hrvbgui
         // Dark-on-light needs the inverse of the light-on-dark correction.
         void setTextGamma(float g) { textGamma_ = g; }
 
-        // Diagnostics: when HRVB_CANVAS_DUMP names a path, the first frame's
+        // Diagnostics: when <ENV_PREFIX>CANVAS_DUMP names a path, the first frame's
         // vertex list is written there as text. The editor has no headless
         // mode, so this is the only way to inspect the geometry the layout
         // code really produces rather than a reimplementation of it.

@@ -9,7 +9,7 @@
 // and every animation judders; on any display it means presenting at a moment
 // the compositor did not ask for.
 
-namespace hrvbgui
+namespace funkgui
 {
     // timestampSec is the display link's target presentation time, which is
     // the correct clock to advance animation against.

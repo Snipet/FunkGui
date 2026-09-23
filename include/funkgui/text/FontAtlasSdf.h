@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace hrvbgui
+namespace funkgui
 {
     // Signed-distance-field font atlas, baked once at runtime. JUCE is used
     // only to rasterise glyph coverage offscreen; the distance transform and

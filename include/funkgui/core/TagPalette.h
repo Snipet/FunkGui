@@ -9,7 +9,7 @@
 
 #include "Col.h"
 
-namespace hrvbgui
+namespace funkgui
 {
     inline Col tagColour(int themeIdx, int tag)
     {

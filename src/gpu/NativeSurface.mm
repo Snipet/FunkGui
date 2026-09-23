@@ -5,16 +5,16 @@
 
 // Layer-backed, click-through child view. bgfx replaces/attaches the Metal
 // layer; JUCE's flipped peer view keeps handling all input.
-@interface HrvbRenderView : NSView
+@interface FUNKGUI_OBJC_NAME(RenderView) : NSView
 @end
 
-@implementation HrvbRenderView
+@implementation FUNKGUI_OBJC_NAME(RenderView)
 - (NSView*) hitTest:(NSPoint) point { (void) point; return nil; }
 - (BOOL) isFlipped { return YES; }
 - (BOOL) wantsUpdateLayer { return YES; }
 @end
 
-namespace hrvbgui
+namespace funkgui
 {
     // Compiled without ARC (JUCE default): the pointer we hand back owns the
     // +1 from alloc, released in destroyRenderView.
@@ -23,7 +23,7 @@ namespace hrvbgui
         NSView* parent = (NSView*) parentNSView;
         if (parent == nil) return nullptr;
 
-        HrvbRenderView* v = [[HrvbRenderView alloc]
+        FUNKGUI_OBJC_NAME(RenderView)* v = [[FUNKGUI_OBJC_NAME(RenderView) alloc]
             initWithFrame: NSMakeRect(x, y, w, h)];
         [v setWantsLayer: YES];
         // JUCE's peer view is flipped, so child frames use top-left origin

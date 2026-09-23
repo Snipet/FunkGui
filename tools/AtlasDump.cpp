@@ -25,7 +25,7 @@
 #include <string>
 #include <vector>
 
-using hrvbgui::FontAtlasSdf;
+using funkgui::FontAtlasSdf;
 
 namespace
 {
@@ -93,13 +93,13 @@ int main(int argc, char** argv)
         const bool ok = fromFile
             ? atlas.bake(mb.getData(), mb.getSize())
             : (faces[fi].isEmpty()
-                 ? atlas.bake(hrvbgui::BundledFont::data(), hrvbgui::BundledFont::size())
+                 ? atlas.bake(funkgui::BundledFont::data(), funkgui::BundledFont::size())
                  : atlas.bake(nullptr, 0, faces[fi].toRawUTF8()));
         const double ms = std::chrono::duration<double, std::milli>(
                               std::chrono::steady_clock::now() - t0).count();
 
         const juce::String label = faces[fi].isEmpty()
-            ? juce::String("(bundled: ") + hrvbgui::BundledFont::name() + ")"
+            ? juce::String("(bundled: ") + funkgui::BundledFont::name() + ")"
             : (faces[fi].contains("/") ? juce::File{ faces[fi] }.getFileNameWithoutExtension()
                                        : faces[fi]);
         std::printf("%-24s %s  %5.1f ms  cap %.1f  x %.1f  x/cap %.2f\n",

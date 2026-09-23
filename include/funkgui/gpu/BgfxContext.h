@@ -3,7 +3,7 @@
 #include <bgfx/bgfx.h>
 #include "FontAtlasSdf.h"
 
-namespace hrvbgui
+namespace funkgui
 {
     // Process-wide bgfx state. bgfx is a global singleton, but a host can
     // open several instances of the plugin: the first surface's window backs

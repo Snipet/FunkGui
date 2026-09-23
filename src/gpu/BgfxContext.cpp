@@ -6,10 +6,10 @@
 #include <cstring>
 
 // Metal binaries produced by shaderc at build time.
-#include <shaders/vs_ui.mtl.h>
-#include <shaders/fs_ui.mtl.h>
+#include <funkgui/shaders/vs_ui.mtl.h>
+#include <funkgui/shaders/fs_ui.mtl.h>
 
-namespace hrvbgui
+namespace funkgui
 {
     BgfxContext& BgfxContext::get()
     {

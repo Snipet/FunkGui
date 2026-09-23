@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace hrvbgui
+namespace funkgui
 {
     // Plain 8-bit RGBA. Lives in its own header so that the palette (Theme.h)
     // carries no dependency on bgfx — anything that only needs colours, such

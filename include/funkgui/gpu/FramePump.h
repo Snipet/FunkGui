@@ -3,7 +3,7 @@
 #include <juce_events/juce_events.h>
 #include <vector>
 
-namespace hrvbgui
+namespace funkgui
 {
     // One redraw clock for every open editor in the process.
     //
