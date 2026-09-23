@@ -3,6 +3,18 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.5.0 — 2026-09-23 · S4: RuleSlider, AttachedWord, FocusRing
+
+Golden impact: **new** `fg.gallery.{ruleslider,word,focusring}`; no existing golden moved. Card G5.
+
+- `RuleSlider`: live / stepped / locked / derived / n/a states, hybrid end cells, rename / `+` / `~` / clamped markers,
+  detent ticks with the adjacent-pair label fit rule (`detentLabelsFit`, shared with products' text-fit lints),
+  index-space accessibility (0…n−1, step 1), arrows and PageUp/Down move one detent, wheel accumulation
+  (`kWheelNotch` 0.10), drags land on detents, locked/derived/n/a refuse writes. Additive API: `pointerMove`,
+  `pointerExit`, `settled`, `detentLabelsDrawn`, `kWheelNotch`, `kEndCell`, `kEndGap`.
+- `AttachedWord` with `WordModel : ToggleModel` (`visible()`): hidden when n/a, disabled with its reason when locked.
+- `FocusRing`. Test `fg.ruleslider.input` (201 spec rows).
+
 ## v0.4.0 — 2026-09-23 · S3: shapes, AREA shader, SoftRaster, FrameRender CLI, glyphs
 
 Golden impact: **atlas** (`fg.font.probe` re-blessed: 10 glyphs appended via `Glyphs.def`; ASCII and HR's nine keep
