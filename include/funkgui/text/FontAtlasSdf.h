@@ -24,15 +24,9 @@ namespace funkgui
         // explicit list rather than a range so the atlas only pays for
         // glyphs that get drawn.
         static constexpr uint32_t kExtraChars[] = {
-            0x00B0,   // degree
-            0x00B1,   // plus-minus
-            0x00D7,   // multiplication sign
-            0x2013,   // en dash
-            0x2192,   // rightwards arrow
-            0x221E,   // infinity
-            0x00B7,   // middle dot
-            0x2191,   // upwards arrow
-            0x2193,   // downwards arrow
+#define FUNKGUI_GLYPH(cp, name) cp,
+#include <funkgui/text/Glyphs.def>
+#undef FUNKGUI_GLYPH
         };
         static constexpr int kNumExtra =
             static_cast<int>(sizeof(kExtraChars) / sizeof(kExtraChars[0]));

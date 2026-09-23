@@ -1,5 +1,6 @@
 #include <funkgui/panel/HeadlessHost.h>
 
+#include <funkgui/canvas/SoftRaster.h>
 #include <funkgui/text/FontService.h>
 #include <funkgui/text/TextFit.h>
 
@@ -29,9 +30,10 @@
 // - draw(): FrameInfo is the panel's size, the host's dpi and theme (its ground as the clear colour and its text
 //   gamma), seconds = the simulated clock, frame = frames ticked, dt = the last tick's dt, clock fixed, fps 0,
 //   rate = wantsFullRate(), no overflows.
-// - writeDump() writes the last draw()'s frame and returns false when nothing was drawn yet. writePng() needs
-//   canvas/SoftRaster (G4, src/canvas/SoftRaster.cpp, not in this tree yet) and returns false until it is wired;
-//   `funkgui_framerender <dump> <png>` renders a dump meanwhile.
+// - writeDump() writes the last draw()'s frame and returns false when nothing was drawn yet. writePng() rasterises that
+//   same frame with canvas/SoftRaster (G4) over FontService's atlas at the frame's physical size (logical size * dpi),
+//   `supersample` samples per physical pixel and axis (clamped to 1..4), and returns false when nothing was drawn yet
+//   or the file cannot be written; `funkgui_framerender <dump> <png> [ss]` gives the same picture from the dump.
 // - The destructor calls Panel::closeGestures() (EditorHost's rule when the host closes the editor mid-gesture), so
 //   the Panel must outlive its host.
 
@@ -289,9 +291,13 @@ namespace funkgui
         return false;
     }
 
-    bool HeadlessHost::writePng(const char* /*path*/, int /*supersample*/) const
+    bool HeadlessHost::writePng(const char* path, int supersample) const
     {
-        return false;                                    // canvas/SoftRaster (G4) is not in this tree yet
+        const PrimList& last = const_cast<Canvas&>(canvas_).end();   // as writeDump(): reading changes nothing
+        if (path == nullptr || last.info.logicalW <= 0 || last.info.logicalH <= 0)
+            return false;                                // nothing drawn yet
+        const Image img = rasterise(last, FontService::get().atlas(), supersample);
+        return img.w > 0 && img.h > 0 && funkgui::writePng(img, path);
     }
 
     // ---- HostServices -----------------------------------------------------------------------------------------------
