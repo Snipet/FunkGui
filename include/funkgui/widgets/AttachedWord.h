@@ -6,6 +6,11 @@
 // ink16 (refused; the footer shows the reason). In the Tab order it follows its slot (02 §8.9).
 //
 // Declared in G2 (v0.2.0, frozen at FZ1); implemented by G5 (src/widgets/AttachedWord.cpp).
+//
+// Word states (02 §6.4, K1 #23): hidden when the word's parameter is n/a in the Mode (a WordModel whose visible() is
+// false: nothing drawn, no hit, no a11y item, no key, and its slot takes the hit back); disabled with the reason when
+// it is locked (ToggleModel::enabled() false: ink16, every write refused, reason() for the footer and a11y help); else
+// rest / on / hover / pressed. The popup click opens the host menu of the model's port in every visible state.
 
 #include <funkgui/a11y/A11yItem.h>
 #include <funkgui/core/Geometry.h>
@@ -22,10 +27,19 @@ namespace funkgui
     class GestureController;
     struct Theme;
 
+    // A word's model (G5 addition): a ToggleModel that can also be absent from the Mode. FCompressor's AUTO word is
+    // hidden while `automu` is n/a (K1 #23); a plain ToggleModel word is always visible.
+    class WordModel : public ToggleModel
+    {
+    public:
+        virtual bool visible() const { return true; }
+    };
+
     class AttachedWord
     {
     public:
         AttachedWord(ToggleModel&, const SlotGeom&, const char* word, uint32_t a11yId);
+        AttachedWord(WordModel&, const SlotGeom&, const char* word, uint32_t a11yId);    // G5 addition
 
         static constexpr Rect hitFor(const SlotGeom& g) noexcept
         {
@@ -47,13 +61,20 @@ namespace funkgui
 
         uint32_t a11yId() const noexcept { return a11yId_; }
 
+        // ---- G5 additions (additive API, flagged in the S4.3 handoff) ------------------------------------------------
+        bool visible() const;                            // false: hidden (the WordModel says the parameter is n/a)
+        bool armed() const noexcept { return armed_; }
+        bool settled() const;                            // the hover ease has reached its target
+
     private:
         // Private state: completed by the implementing card (G5); not part of the frozen API.
-        ToggleModel& model_;
-        SlotGeom     geom_;
-        const char*  word_;
-        uint32_t     a11yId_;
-        bool         armed_ = false;
-        float        hover_ = 0.0f;
+        ToggleModel&     model_;
+        SlotGeom         geom_;
+        const char*      word_;
+        uint32_t         a11yId_;
+        bool             armed_ = false;
+        float            hover_ = 0.0f;
+        const WordModel* wordModel_ = nullptr;           // set by the WordModel constructor
+        bool             hoverOn_ = false;               // the hover ease's target
     };
 }
