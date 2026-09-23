@@ -4,12 +4,15 @@
 // comes from size, case, tracking, colour and the SDF weight axis — never from
 // a second face. 10px is the hard floor: below that the field is more than a
 // 4.8x downsample of a 48px bake and thin stems disappear.
+//
+// The styles are text/TextStyle.h's plain struct, so the scale carries no bgfx (02 §2.2): the snapshot's
+// gpu/SdfCanvas.h names the same struct as SdfCanvas::TextStyle.
 
-#include "SdfCanvas.h"
+#include <funkgui/text/TextStyle.h>
 
 namespace funkgui::type
 {
-    using TS = SdfCanvas::TextStyle;
+    using TS = TextStyle;                                      // { px, tracking, weight, tabular }
 
     inline constexpr TS kDisplay { 44.0f, 0.0f,  0.03f, true  };
     inline constexpr TS kValueP  { 24.0f, 0.0f,  0.00f, true  };
@@ -20,4 +23,5 @@ namespace funkgui::type
     inline constexpr TS kLabel   { 11.0f, 1.6f,  0.03f, false };
     inline constexpr TS kCaption { 10.0f, 2.0f,  0.03f, false };
     inline constexpr TS kMicro   { 10.0f, 1.4f,  0.03f, false };
+    inline constexpr TS kUnit    { 14.0f, 1.0f,  0.03f, false };   // units beside kDisplay (HR BgfxEditor.cpp:~1173)
 }

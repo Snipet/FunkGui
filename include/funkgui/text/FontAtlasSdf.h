@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -62,13 +63,20 @@ namespace funkgui
         // Whether the last successful bake used the caller's embedded bytes.
         bool usedEmbeddedFace() const { return usedEmbedded_; }
 
+        // Whether the last bake() succeeded, so glyphs, metrics and pixels()
+        // are real (02 §3.3: text needs only this, no GPU texture). False
+        // before the first bake and after a failed one.
+        bool baked() const { return baked_; }
+
         // Codepoint lookup. ASCII hits a flat array; the handful of extras
         // are linear-searched, which at kNumExtra entries beats any map.
+        // nullptr for a codepoint outside the baked set, and for every
+        // codepoint before the first bake() (the tables are still empty).
         const Glyph* glyph(uint32_t cp) const
         {
             if (cp >= kFirstChar && cp <= kLastChar)
-                return &glyphs_[cp - kFirstChar];
-            for (size_t i = 0; i < static_cast<size_t>(kNumExtra); ++i)
+                return glyphs_.empty() ? nullptr : &glyphs_[cp - kFirstChar];
+            for (size_t i = 0; i < static_cast<size_t>(kNumExtra) && i < extras_.size(); ++i)
                 if (kExtraChars[i] == cp) return &extras_[i];
             return nullptr;
         }
@@ -104,5 +112,6 @@ namespace funkgui
         float xHeight_      = 24.0f;
         float maxDigitAdvance_ = 26.0f;
         bool  usedEmbedded_ = false;
+        bool  baked_ = false;
     };
 }
