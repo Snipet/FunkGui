@@ -1,66 +1,77 @@
-# FunkGui v0.0.1: bootstrap CMake (lead pre-work G0; FCompressor docs/design/02-funkgui-and-ui.md §2.1 step 3,
-# SPRINTS.md S0.L3). Only FunkGui::harness is real. FunkGui::core, ::gpu and ::presets are EMPTY placeholders and the
-# three consumer functions only print, so FCompressor's final link lines configure against v0.0.1 without JUCE or bgfx.
-# G1 (v0.1.0) replaces this file with cmake/FunkGuiDeps.cmake + cmake/FunkGuiTargets.cmake; the target, option and
-# function names below are frozen from FZ0 (02 §1.2, §1.7, §1.8; 03 §1.2).
+# FunkGui: an SDF/bgfx GUI library for JUCE plug-ins, consumed by FetchContent at a pinned tag. The design is
+# FCompressor's docs/design/02-funkgui-and-ui.md Part 1 and 03-build-verify-process.md §1.2, §3.2. This file and
+# cmake/ are written once (task G1, Sprint 0) and are not edited afterwards: sources, tools and tests are found by
+# per-directory globs and self-registration, so later work adds files only (SPRINTS.md D18).
 cmake_minimum_required(VERSION 3.30)
+
+# Top-level builds only (FunkGui's own tools and tests): the deployment target must precede project(), and a consumer
+# sets its own (HR CMakeLists.txt:133, 03 §2.1). Guarded so that a consumer's cache is never written from here.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS")
+endif()
+
 project(FunkGui VERSION 0.0.1 LANGUAGES C CXX)       # VERSION changes only in tagging commits (02 §1.10)
 
 # project() variables do not reach the parent scope; the consumer reads this (02 §1.7).
 set(FUNKGUI_VERSION ${PROJECT_VERSION} CACHE INTERNAL "FunkGui version")
 
-# Options (02 §1.7). Accepted now so consumers can set them as normal variables (CMP0077); only
-# FUNKGUI_HARNESS_ONLY and the two target switches change anything at v0.0.1.
-option(FUNKGUI_WITH_BGFX    "GPU target (FunkGui::gpu), shaders, bgfx"                  ON)
-option(FUNKGUI_WITH_PRESETS "FunkPresets (FunkGui::presets)"                             ON)
-option(FUNKGUI_HARNESS_ONLY "Define only FunkGui::harness and never require JUCE"        OFF)
-option(FUNKGUI_BUILD_TOOLS  "Tool targets (none exist at v0.0.1)"                        ${PROJECT_IS_TOP_LEVEL})
-
-# FunkGuiHarness (alias FunkGui::harness): header-only, JUCE-free Harness v2, available in every configuration.
-add_library(FunkGuiHarness INTERFACE)
-add_library(FunkGui::harness ALIAS FunkGuiHarness)
-target_include_directories(FunkGuiHarness INTERFACE ${PROJECT_SOURCE_DIR}/include)
-target_compile_features(FunkGuiHarness INTERFACE cxx_std_20)
-
-# Empty placeholders, defined under the same conditions as the real targets (02 §1.2).
-if(NOT FUNKGUI_HARNESS_ONLY)
-  add_library(FunkGuiCore INTERFACE)
-  add_library(FunkGui::core ALIAS FunkGuiCore)
-  if(FUNKGUI_WITH_BGFX)
-    add_library(FunkGuiGpu INTERFACE)
-    add_library(FunkGui::gpu ALIAS FunkGuiGpu)
+if(PROJECT_IS_TOP_LEVEL)
+  set(CMAKE_CXX_STANDARD 20)
+  set(CMAKE_CXX_STANDARD_REQUIRED ON)
+  set(CMAKE_CXX_EXTENSIONS OFF)
+  if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
   endif()
-  if(FUNKGUI_WITH_PRESETS)
-    add_library(FunkPresets INTERFACE)
-    add_library(FunkGui::presets ALIAS FunkPresets)
-  endif()
+  set(FUNKGUI_SHADERC "" CACHE FILEPATH "Prebuilt shaderc (empty: the stamped one in FUNKGUI_DEPS_DIR, or build it)")
 endif()
 
-# Placeholder consumer functions (02 §1.5, §1.6, §1.8): same signatures as v0.1.0, they only print.
-function(funkgui_configure_product target)
-  cmake_parse_arguments(PARSE_ARGV 1 _fg "" "PRODUCT;OBJC_PREFIX;ENV_PREFIX;PREFS_FOLDER" "")
-  message(STATUS "FunkGui ${FUNKGUI_VERSION} placeholder: funkgui_configure_product(${target} PRODUCT ${_fg_PRODUCT}"
-                 " OBJC_PREFIX ${_fg_OBJC_PREFIX} ENV_PREFIX ${_fg_ENV_PREFIX} PREFS_FOLDER ${_fg_PREFS_FOLDER})"
-                 " defines nothing before v0.1.0")
-endfunction()
-function(funkgui_compile_shaders target)
-  message(STATUS "FunkGui ${FUNKGUI_VERSION} placeholder: funkgui_compile_shaders(${target}) compiles no shaders"
-                 " before v0.1.0")
-endfunction()
-function(funkgui_add_font target)
-  message(STATUS "FunkGui ${FUNKGUI_VERSION} placeholder: funkgui_add_font(${target}) bundles no font or licences"
-                 " before v0.1.0")
-endfunction()
+# ---- Options (02 §1.7). A consumer sets them as NORMAL variables before FetchContent_MakeAvailable (CMP0077). --------
+option(FUNKGUI_WITH_BGFX        "FunkGui::gpu, shaders and bgfx (OFF: headless, FunkGui = FunkGuiCore)" ON)
+option(FUNKGUI_WITH_PRESETS     "FunkGui::presets (FunkPresets; SQLite once it has sources)"                 ON)
+option(FUNKGUI_HARNESS_ONLY     "Define only FunkGui::harness and never require JUCE (DSP-only consumers)"   OFF)
+option(FUNKGUI_BUILD_TOOLS      "Tool targets (EXCLUDE_FROM_ALL; FCompressor sets ON, K2 #26d)"    ${PROJECT_IS_TOP_LEVEL})
+option(FUNKGUI_BUILD_TESTS      "FunkGui's own fg.* CTest suite (02 §3.11)"                        ${PROJECT_IS_TOP_LEVEL})
+option(FUNKGUI_ALLOW_OTHER_JUCE "Downgrade the JUCE 8.0.4 check to a warning"                                OFF)
+option(FUNKGUI_WERROR           "-Werror on FunkGui's own sources in FunkGui's own tools and tests"          ON)
+set(FUNKGUI_TRANSIENT_VB_MIB 32 CACHE STRING "bgfx transient vertex buffer, MiB (FUNKGUI_TRANSIENT_VB_BYTES, 02 §4.5)")
+# FUNKGUI_SHADERC (02 §1.7): path to a prebuilt shaderc; a consumer sets it as a normal variable (03 §2.5).
 
-set(_fg_targets "FunkGui::harness")
+if(NOT FUNKGUI_TRANSIENT_VB_MIB MATCHES "^[1-9][0-9]*$")
+  message(FATAL_ERROR "FunkGui: FUNKGUI_TRANSIENT_VB_MIB must be a positive integer, not '${FUNKGUI_TRANSIENT_VB_MIB}'")
+endif()
+if(FUNKGUI_HARNESS_ONLY)
+  set(FUNKGUI_BUILD_TOOLS OFF)                       # tools need JUCE
+endif()
+if(FUNKGUI_BUILD_TESTS AND NOT FUNKGUI_HARNESS_ONLY AND NOT FUNKGUI_BUILD_TOOLS)
+  message(FATAL_ERROR "FunkGui: FUNKGUI_BUILD_TESTS needs FUNKGUI_BUILD_TOOLS (fg.font.probe and fg.prefs.check run "
+                      "tools)")
+endif()
+
+include(${PROJECT_SOURCE_DIR}/cmake/FunkGuiDeps.cmake)
+include(${PROJECT_SOURCE_DIR}/cmake/FunkGuiTargets.cmake)
+
+if(FUNKGUI_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(test)
+endif()
+
+set(_fg_summary "FunkGui::harness")
 foreach(_t core gpu presets)
   if(TARGET FunkGui::${_t})
-    string(APPEND _fg_targets ", FunkGui::${_t} (empty placeholder)")
+    string(APPEND _fg_summary ", FunkGui::${_t}")
   endif()
 endforeach()
-message(STATUS "FunkGui ${FUNKGUI_VERSION} (bootstrap): ${_fg_targets}")
-if(PROJECT_IS_TOP_LEVEL)                             # exercise the placeholder signatures on a standalone configure
-  funkgui_configure_product(FunkGuiHarness PRODUCT FunkGui OBJC_PREFIX FunkGui ENV_PREFIX FUNKGUI_ PREFS_FOLDER FunkGui)
-  funkgui_compile_shaders(FunkGuiHarness)
-  funkgui_add_font(FunkGuiHarness)
+if(TARGET FunkPresets)
+  get_target_property(_fg_presets_sources FunkPresets INTERFACE_SOURCES)
+  if(NOT _fg_presets_sources)
+    string(APPEND _fg_summary " (presets: empty placeholder)")
+  endif()
 endif()
+if(FUNKGUI_WITH_BGFX AND NOT FUNKGUI_HARNESS_ONLY)
+  if(FUNKGUI_SHADERC)
+    string(APPEND _fg_summary "; shaderc: ${FUNKGUI_SHADERC}")
+  else()
+    string(APPEND _fg_summary "; shaderc: built from bgfx.cmake")
+  endif()
+endif()
+message(STATUS "FunkGui ${FUNKGUI_VERSION}: ${_fg_summary}")

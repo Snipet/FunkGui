@@ -1,6 +1,6 @@
-#include "FramePump.h"
-#include "BgfxContext.h"
-#include "DisplayLink.h"
+#include <funkgui/gpu/FramePump.h>
+#include <funkgui/gpu/BgfxContext.h>
+#include <funkgui/gpu/DisplayLink.h>
 
 #include <algorithm>
 #include <bgfx/bgfx.h>

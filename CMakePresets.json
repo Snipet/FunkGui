@@ -1,0 +1,105 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 30, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-${presetName}",
+      "cacheVariables": {
+        "FUNKGUI_BUILD_TOOLS": "ON",
+        "FUNKGUI_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "agent",
+      "inherits": "base",
+      "displayName": "agent (headless: FUNKGUI_WITH_BGFX=OFF, RelWithDebInfo)",
+      "description": "Core, the harness, the tools and the headless fg tests. No bgfx, no shaders.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "FUNKGUI_WITH_BGFX": "OFF"
+      }
+    },
+    {
+      "name": "agent-gui",
+      "inherits": "base",
+      "displayName": "agent-gui (GPU, RelWithDebInfo)",
+      "description": "Adds FunkGui::gpu, bgfx and the shaders (prebuilt shaderc from ~/audio/.deps), fg.shader.hash and fg.smoke.gpu.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "FUNKGUI_WITH_BGFX": "ON"
+      }
+    },
+    {
+      "name": "lead",
+      "inherits": "base",
+      "displayName": "lead (GPU, Release)",
+      "description": "The lead's tag gate and blessing tree (02 §1.10). Agents never build it.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "FUNKGUI_WITH_BGFX": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "agent",
+      "configurePreset": "agent",
+      "targets": ["all", "funkgui_tools", "funkgui_tests"],
+      "jobs": 4,
+      "nativeToolOptions": ["-l", "12"]
+    },
+    {
+      "name": "agent-gui",
+      "configurePreset": "agent-gui",
+      "targets": ["all", "funkgui_tools", "funkgui_tests"],
+      "jobs": 4,
+      "nativeToolOptions": ["-l", "12"]
+    },
+    {
+      "name": "lead",
+      "configurePreset": "lead",
+      "targets": ["all", "funkgui_tools", "funkgui_tests"]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "filter": { "include": { "label": "verify" } },
+      "execution": { "jobs": 4, "noTestsAction": "error" },
+      "output": { "outputOnFailure": true }
+    },
+    { "name": "agent", "inherits": "base", "configurePreset": "agent" },
+    { "name": "agent-gui", "inherits": "base", "configurePreset": "agent-gui" },
+    { "name": "lead", "inherits": "base", "configurePreset": "lead" }
+  ],
+  "workflowPresets": [
+    {
+      "name": "agent-verify",
+      "steps": [
+        { "type": "configure", "name": "agent" },
+        { "type": "build", "name": "agent" },
+        { "type": "test", "name": "agent" }
+      ]
+    },
+    {
+      "name": "agent-gui-verify",
+      "steps": [
+        { "type": "configure", "name": "agent-gui" },
+        { "type": "build", "name": "agent-gui" },
+        { "type": "test", "name": "agent-gui" }
+      ]
+    },
+    {
+      "name": "lead-verify",
+      "steps": [
+        { "type": "configure", "name": "lead" },
+        { "type": "build", "name": "lead" },
+        { "type": "test", "name": "lead" }
+      ]
+    }
+  ]
+}

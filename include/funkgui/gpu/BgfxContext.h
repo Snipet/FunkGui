@@ -1,7 +1,7 @@
 #pragma once
 
 #include <bgfx/bgfx.h>
-#include "FontAtlasSdf.h"
+#include <funkgui/text/FontAtlasSdf.h>
 
 namespace funkgui
 {

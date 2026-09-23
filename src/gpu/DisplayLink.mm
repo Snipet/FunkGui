@@ -1,7 +1,9 @@
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
 
-#include "DisplayLink.h"
+#include <funkgui/gpu/DisplayLink.h>
+
+#include <funkgui/core/Config.h>   // FUNKGUI_OBJC_NAME
 
 // Compiled without ARC (JUCE default), so the retain/release dance below is
 // deliberate. CADisplayLink retains its target and the target retains the

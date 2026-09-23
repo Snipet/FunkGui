@@ -1,7 +1,7 @@
-#include "SdfCanvas.h"
+#include <funkgui/gpu/SdfCanvas.h>
 #include <string>
-#include "BgfxContext.h"
-#include "FramePump.h"
+#include <funkgui/gpu/BgfxContext.h>
+#include <funkgui/gpu/FramePump.h>
 
 #include <cmath>
 #include <cstdio>

@@ -1,40 +1,37 @@
-// Rasterises a canvas dump produced by SdfCanvas::dumpNextFrameTo into a PNG,
-// evaluating the same signed-distance fields the fragment shader does and
-// sampling the same runtime-baked atlas.
+// funkgui_framerender: rasterises a canvas dump (the snapshot's SdfCanvas::dumpNextFrameTo format, v1) into a PNG,
+// evaluating the same signed-distance fields the fragment shader does and sampling the same runtime-baked atlas.
 //
-// The editor has no headless mode, so this is how the panel's real geometry
-// gets inspected: run the plugin once with <ENV_PREFIX>CANVAS_DUMP set, then render
-// what it actually drew rather than a reimplementation of it.
+// This is how a panel's real geometry gets inspected: run the product once with <ENV_PREFIX>CANVAS_DUMP set, then
+// render what it actually drew rather than a reimplementation of it.
 //
-//   cmake --build build --target HardwareReverbFrameRender
-//   ./build/.../HardwareReverbFrameRender /tmp/hrvb_frame.txt out.png
+//   funkgui_framerender <dump> <out.png> [supersample 1-4, default 2]
 //
-// It is also the panel's layout gate. A picture needs a person to look at it;
-// a fingerprint does not:
+// It is also a layout gate. A picture needs a person to look at it; a fingerprint does not:
 //
-//   ./build/.../HardwareReverbFrameRender --fingerprint <dump> [--check <golden>]
+//   funkgui_framerender fingerprint <probe> <dump> --golden-root <dir> --arch arm64|x86_64 [--bless-to <dir>]
+//                       [--results <dir>]
 //
-// hashes every primitive's geometry and atlas coordinates — positions, SDF
-// extents, corner radii, glyph UVs — and deliberately NOT its colours, so the
-// theme and the first-run hint's fade (colour-only) do not move it, nor the
-// energy caps on the Rank, which are the one piece of live geometry (they
-// ride each line's RMS and differ between any two captures). Everything else
-// on the panel is a function of the layout constants, the parameters and the
-// font, and Scripts/capture-frame.sh pins the rest. Two captures of the same
-// build fingerprint identically; a moved label, a changed type size, a new
-// primitive or a re-subset font does not.
+// hashes every primitive's geometry and atlas coordinates (positions, SDF extents, corner radii, glyph UVs) and
+// deliberately NOT its colours, so the theme and colour-only fades do not move it. Two captures of the same build
+// fingerprint identically; a moved label, a changed type size, a new primitive or a re-subset font does not. This is
+// HardwareReverb's layout hash, kept exactly (the future `--legacy-hr` hash, 02 §3.9): it skips the "energy caps" of
+// HR's Rank display (3 px bars inside y 165-295, its one piece of live geometry). G3/G4 replace the dump format (v2),
+// the live-geometry rule (the Prim `live` flag) and the rasteriser (canvas/SoftRaster) and give this tool AREA prims.
+// (Seeded from HardwareReverb Tools/FrameRender.cpp; ported to Harness v2.)
 
-#include "gui/FontAtlasSdf.h"
-
-#include "gui/BundledFont.h"
-#include "Harness.h"
+#include <funkgui/test/Harness.h>
+#include <funkgui/text/BundledFont.h>
+#include <funkgui/text/FontAtlasSdf.h>
 
 #include <juce_gui_basics/juce_gui_basics.h>
+
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
+namespace T = funkgui::test;
 using funkgui::FontAtlasSdf;
 
 namespace
@@ -67,10 +64,22 @@ int main(int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
 
-    const bool fingerprint = argc > 2 && std::strcmp(argv[1], "--fingerprint") == 0;
-    if (argc < 3) { std::printf("usage: FrameRender <dump> <out.png> [scale]  |  --fingerprint <dump> [--check <golden>]\n"); return 2; }
-    const juce::File in{ juce::String(argv[fingerprint ? 2 : 1]) };
-    if (!in.existsAsFile()) { std::printf("no dump at %s\n", in.getFullPathName().toRawUTF8()); return 1; }
+    const std::vector<std::string> args = T::positionals(argc, argv);
+    const bool fingerprint = !args.empty() && args[0] == "fingerprint";
+    if (fingerprint ? args.size() != 3 : (args.size() < 2 || args.size() > 3))
+    {
+        std::printf("usage: funkgui_framerender <dump> <out.png> [scale]\n"
+                    "       funkgui_framerender fingerprint <probe> <dump> --golden-root <dir> --arch arm64|x86_64 "
+                    "[--bless-to <dir>] [--results <dir>]\n");
+        return 2;
+    }
+    const juce::File in = juce::File::getCurrentWorkingDirectory().getChildFile(
+        juce::String::fromUTF8(args[fingerprint ? 2 : 0].c_str()));
+    if (!fingerprint && !in.existsAsFile())
+    {
+        std::printf("no dump at %s\n", in.getFullPathName().toRawUTF8());
+        return 1;
+    }
 
     float viewW = 880.0f, viewH = 520.0f, dpi = 2.0f;
     unsigned clearRgb = 0x16171A;
@@ -102,12 +111,14 @@ int main(int argc, char** argv)
         if (n == 20) prims.push_back(p);
     }
     std::printf("view %.0fx%.0f dpi %.1f, %d primitives\n",
-                viewW, viewH, dpi, (int) prims.size());
-    if (prims.empty()) return 1;
+                (double) viewW, (double) viewH, (double) dpi, (int) prims.size());
 
     if (fingerprint)
     {
-        std::vector<funkgui::test::Metric> metrics;
+        T::Probe P(args[1], "", argc, argv);
+        P.eq("dump.readable", in.existsAsFile(), 1);
+        if (!P.ge("dump.primitives", static_cast<double>(prims.size()), 1))
+            return P.finish();
         uint64_t h = 1469598103934665603ull;
         auto mix = [&](float v) { uint32_t b; std::memcpy(&b, &v, 4);
                                   for (int k = 0; k < 4; ++k) { h ^= (b >> (k * 8)) & 0xff; h *= 1099511628211ull; } };
@@ -135,22 +146,24 @@ int main(int argc, char** argv)
             for (float v : p.d2) mix(v);
             maxX = juce::jmax(maxX, p.x1); maxY = juce::jmax(maxY, p.y1);
         }
-        funkgui::test::addHash(metrics, "layout.geometry", h);
-        funkgui::test::addNum(metrics, "layout.static_count", statics, 0.0);
-        funkgui::test::addNum(metrics, "layout.text_count",   text,    0.0);
-        funkgui::test::addNum(metrics, "layout.rank_strokes", rank,    0.0);
-        funkgui::test::addNum(metrics, "layout.segments",     segments, 0.0);
-        funkgui::test::addNum(metrics, "layout.view_w", viewW, 0.0);
-        funkgui::test::addNum(metrics, "layout.view_h", viewH, 0.0);
-        funkgui::test::addNum(metrics, "layout.max_x",  maxX,  0.01);
-        funkgui::test::addNum(metrics, "layout.max_y",  maxY,  0.01);
+        P.hash("layout.geometry", h);
+        P.num("layout.static_count", statics,  T::Tol::exact());
+        P.num("layout.text_count",   text,     T::Tol::exact());
+        P.num("layout.rank_strokes", rank,     T::Tol::exact());
+        P.num("layout.segments",     segments, T::Tol::exact());
+        P.num("layout.view_w", viewW, T::Tol::exact());
+        P.num("layout.view_h", viewH, T::Tol::exact());
+        P.num("layout.max_x",  maxX,  T::Tol::abs(0.01));
+        P.num("layout.max_y",  maxY,  T::Tol::abs(0.01));
         std::printf("geometry %016llx  static %d (text %d, rank strokes %d)  live caps excluded %d  extent %.1f x %.1f\n",
                     (unsigned long long) h, statics, text, rank, caps, (double) maxX, (double) maxY);
-        return funkgui::test::finish(argc, argv, metrics);
+        return P.finish();
     }
+    if (prims.empty()) return 1;
 
-    const juce::File out{ juce::String(argv[2]) };
-    const int ss = argc > 3 ? juce::jlimit(1, 4, std::atoi(argv[3])) : 2;
+    const juce::File out =
+        juce::File::getCurrentWorkingDirectory().getChildFile(juce::String::fromUTF8(args[1].c_str()));
+    const int ss = args.size() > 2 ? juce::jlimit(1, 4, std::atoi(args[2].c_str())) : 2;
 
     FontAtlasSdf atlas;
     if (!atlas.bake(funkgui::BundledFont::data(), funkgui::BundledFont::size())) { std::printf("atlas bake failed\n"); return 1; }
