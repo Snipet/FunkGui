@@ -1,0 +1,10 @@
+ 3 View                     16,12,132,16         value=MOD
+ 4 RANK                     16,12,40,16          unchecked
+ 4 FILTER                   60,12,52,16          unchecked
+ 4 MOD                      116,12,32,16         checked
+ 1 SCREEN                   352,8,112,24         unchecked
+ 2 SIZE                     16,40,136,28         help=HOLDS THE VIEW WHILE PRESSED
+ 2 CUTOFF                   160,40,136,28        help=HOLDS THE VIEW WHILE PRESSED
+ 2 RATE                     304,40,136,28        help=HOLDS THE VIEW WHILE PRESSED
+ 8 VIEW                     16,80,448,88         value=MOD
+ 7 SCREEN                   16,180,448,16        value=PANEL [ro]

@@ -1,0 +1,18 @@
+ 3 QUALITY                  82,16,98,16          value=Std
+ 4 Eco                      82,16,32,16          unchecked help=ECO: NO OVERSAMPLING, NO ADDED LATENCY
+ 4 Std                      118,16,32,16         checked help=STD: 2 TIMES IIR OVERSAMPLING, 4 SAMPLES LATENCY
+ 4 HQ                       154,16,26,16         unchecked help=HQ: 4 TIMES LINEAR-PHASE OVERSAMPLING
+ 3 LOOKAHEAD                82,42,122,16         value=Off
+ 4 Off                      82,42,32,16          checked help=NO LOOKAHEAD
+ 4 5 milliseconds           118,42,38,16         unchecked help=5 MS LOOKAHEAD, 5 MS LATENCY
+ 4 20 milliseconds          160,42,44,16         unchecked [off] help=20 MS NEEDS THE HQ SETTING IN THIS GALLERY
+ 3 RATIO                    82,70,224,28         value=4 to 1
+ 4 4 to 1                   82,70,40,28          checked
+ 4 8 to 1                   126,70,40,28         unchecked
+ 4 12 to 1                  170,70,40,28         unchecked
+ 4 20 to 1                  214,70,40,28         unchecked
+ 4 all buttons              258,70,48,28         unchecked
+ 3 Side-chain or colour     82,110,112,16        value=Side-chain
+ 4 Side-chain               82,110,62,16         checked help=SHOWS THE SIDE-CHAIN FILTER
+ 4 Colour                   150,110,44,16        unchecked help=SHOWS THE COLOUR STAGE
+ 7 LOG                      16,156,448,14        value=WRITES 0   MENUS 1   TAB SIDECHAIN [ro]

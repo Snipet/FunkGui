@@ -1,0 +1,3 @@
+ 7 PRESET                   16,12,300,32         value=Keep [ro]
+ 7 EDIT                     16,12,300,32         value=COMMITTED [ro]
+ 7 SEARCH                   16,56,200,22         value=[] [ro]

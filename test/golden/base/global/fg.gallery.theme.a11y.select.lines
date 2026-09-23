@@ -1,0 +1,14 @@
+ 3 Meter scale              82,16,92,16          value=48 decibels
+ 4 12 decibels              82,16,20,16          unchecked
+ 4 24 decibels              106,16,20,16         unchecked
+ 4 48 decibels              130,16,20,16         checked
+ 4 72 decibels              154,16,20,16         unchecked
+ 3 History span             82,42,94,16          value=5 seconds
+ 4 2.5 seconds              82,42,26,16          unchecked
+ 4 5 seconds                112,42,16,16         checked
+ 4 10 seconds               132,42,20,16         unchecked
+ 4 20 seconds               156,42,20,16         unchecked
+ 3 Theme                    196,68,130,16        value=Paper theme
+ 4 Graphite theme           196,68,72,16         unchecked
+ 4 Paper theme              272,68,54,16         checked
+ 7 STORE                    16,92,328,14         value=THEME 1   SCALE 48   SPAN 50 [ro]
