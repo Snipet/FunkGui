@@ -89,6 +89,7 @@ namespace funkgui
         pixels_.assign(static_cast<size_t>(kAtlasW) * kAtlasH, 0);
 
         usedEmbedded_ = false;
+        baked_ = false;               // until this bake has proved itself below
 
         FontOptions opts = FontOptions { kBasePx };
         if (ttfData != nullptr && ttfBytes > 0)
@@ -275,6 +276,7 @@ namespace funkgui
             if (const auto* g = glyph(static_cast<uint32_t>(static_cast<unsigned char>(ch)));
                 g == nullptr || !(g->w > 0.0f))
                 return false;
+        baked_ = true;
         return true;
     }
 }

@@ -18,7 +18,7 @@ namespace funkgui
         Col ink16;       // datum rule, tracks, ghost strokes
         Col accent;      // the control under the hand. Nothing else.
         Col accentDim;   // the drag/hover track fill
-        Col ice;         // reserved for exactly one thing: Freeze
+        Col signal;      // reserved for exactly one job, which the product names (HR's `ice`, 02 §2.3; same values)
         float textGamma; // sRGB blend correction; sign depends on polarity
 
         static constexpr Theme graphite()

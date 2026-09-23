@@ -2,6 +2,7 @@
 
 #include <bgfx/bgfx.h>
 #include <funkgui/core/Col.h>
+#include <funkgui/text/TextStyle.h>
 #include <cstdint>
 #include <vector>
 
@@ -48,15 +49,10 @@ namespace funkgui
                      float softness = 0.0f);
         float snapY(float y) const;
 
-        struct TextStyle
-        {
-            float px       = 13.0f;
-            float tracking = 0.0f;   // extra advance per glyph, logical px
-            float weight   = 0.0f;   // SDF threshold shift; ~0.05 reads semibold
-            bool  tabular  = false;  // every digit takes the widest digit's slot
-        };
-
-        enum class Align { left, centre, right };
+        // text/TextStyle.h's types under the snapshot's names (G2): the type
+        // scale (core/TypeScale.h) no longer includes this bgfx-coupled header.
+        using TextStyle = funkgui::TextStyle;
+        using Align     = funkgui::Align;
 
         // y is the TOP of the line's em box.
         void  text(const char* s, float x, float y, const TextStyle& st, Col c,
