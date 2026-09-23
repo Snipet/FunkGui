@@ -1,0 +1,35 @@
+// The atlas's codepoints past printable ASCII (FCompressor docs/design/02-funkgui-and-ui.md §4.6): the single source
+// for FontAtlasSdf::kExtraChars, the subset script (tools/subset-font.sh greps the hex codepoints below) and FontProbe
+// (every entry must bake: font.missing = 0).
+//
+// An X-macro with no include guard: define FUNKGUI_GLYPH(cp, name) before including this file and undefine it after.
+// cp is the codepoint as an upper-case 0x literal, name a C++ identifier.
+//
+// APPEND-ONLY. The atlas packs glyphs in this order, so inserting, removing or reordering an entry moves every later
+// glyph's UVs (every text hash in every golden) and must not happen; appending one is a MINOR bump with golden impact
+// `atlas` (02 §1.10), and needs the subset regenerated (tools/subset-font.sh) and FontProbe's proof that it bakes
+// bit-identically to upstream. Only codepoints present in fonts/upstream/JetBrainsMono-Regular.ttf may be added
+// (A §4's cmap check; not in upstream: U+2206, U+25CB, U+21BA, U+21BB, U+2009, U+2217).
+
+// HR's nine, in HR's order (v0.0.1 snapshot).
+FUNKGUI_GLYPH(0x00B0, degree)
+FUNKGUI_GLYPH(0x00B1, plusMinus)
+FUNKGUI_GLYPH(0x00D7, times)
+FUNKGUI_GLYPH(0x2013, enDash)
+FUNKGUI_GLYPH(0x2192, rightArrow)
+FUNKGUI_GLYPH(0x221E, infinity)
+FUNKGUI_GLYPH(0x00B7, middleDot)
+FUNKGUI_GLYPH(0x2191, upArrow)
+FUNKGUI_GLYPH(0x2193, downArrow)
+
+// G4 (v0.4.0): ten more, all in upstream JetBrains Mono.
+FUNKGUI_GLYPH(0x00B5, micro)            // µS attack readouts (FET 20–800 µs)
+FUNKGUI_GLYPH(0x2212, minus)            // every negative number (the minus policy, 02 §4.6)
+FUNKGUI_GLYPH(0x2026, ellipsis)         // text::fitEllipsis()
+FUNKGUI_GLYPH(0x2264, lessEqual)        // "≤ 0.1 DB"
+FUNKGUI_GLYPH(0x2265, greaterEqual)     // "≥ 20:1"
+FUNKGUI_GLYPH(0x2248, almostEqual)      // "≈ THR −28 DB" remap sub-readouts
+FUNKGUI_GLYPH(0x0394, delta)            // DELTA latch caption, ΔGR
+FUNKGUI_GLYPH(0x2014, emDash)           // footer separators
+FUNKGUI_GLYPH(0x2022, bullet)           // browser current-row marker
+FUNKGUI_GLYPH(0x2190, leftArrow)        // "← PANEL" hints, stereo lanes

@@ -266,17 +266,17 @@ int main(int argc, char** argv)
         }(), 1);
 
         bool widths = true;
-        for (const char* s : { "THRESHOLD", "-12.5 dB", "0123456789", "\xC2\xB0 x \xE2\x88\x92", "", "  " })
+        for (const char* s : { "THRESHOLD", "-12.5 dB", "0123456789", "\xC2\xB0 x \xE2\x88\x86", "", "  " })
             for (const auto& st : { funkgui::type::kLabel, funkgui::type::kDisplay, funkgui::type::kMicro })
                 widths = widths && sameBits(canvas.textWidth(s, st), funkgui::text::width(atlas, s, st));
         P.eq("canvas.text_width_is_text_width", widths, 1);
 
         canvas.begin(frameFor(graphite, 0, 2.0f));
-        canvas.text("A\xE2\x88\x92" "B\xE2\x80\xA6\xE2\x88\x92\xFF" "C\t", 0.0f, 0.0f, funkgui::type::kLabel,
+        canvas.text("A\xE2\x88\x86" "B\xE2\x86\xBA\xE2\x88\x86\xFF" "C\t", 0.0f, 0.0f, funkgui::type::kLabel,
                     graphite.ink100);
         const PrimList& m = canvas.end();
         P.eq("missing.count", canvas.missingGlyphs(), 5);
-        P.eq("missing.list", m.missingFirst[0] == 0x2212u && m.missingFirst[1] == 0x2026u
+        P.eq("missing.list", m.missingFirst[0] == 0x2206u && m.missingFirst[1] == 0x21BAu
                                  && m.missingFirst[2] == 0xFFFDu && m.missingFirst[3] == 0x09u
                                  && m.missingFirst[4] == 0u, 1);
         P.eq("missing.glyphs_drawn", static_cast<int64_t>(m.prims.size()), 3);
@@ -316,7 +316,7 @@ int main(int argc, char** argv)
             info.fps = themeIdx == 1 ? 59.9f : 0.0f;
             canvas.begin(info);
             drawScene(canvas, th, true);
-            canvas.text("\xE2\x88\x92" "3", 10.0f, 280.0f, funkgui::type::kMicro, th.ink32);   // one missing glyph
+            canvas.text("\xE2\x88\x86" "3", 10.0f, 280.0f, funkgui::type::kMicro, th.ink32);   // one missing glyph
             PrimList rec = canvas.end();
             funkgui::AxisRec ax;
             ax.tag = kCurve;
@@ -348,7 +348,7 @@ int main(int argc, char** argv)
                                             && text.find("axis TRANSFER_CURVE x 250 310.25 -42 6 lin y 104 70 "
                                                          "0.00100000005 1000 log\n") != std::string::npos
                                             && text.find("axis 999 x - y 1 2 3 4 lin\n") != std::string::npos
-                                            && text.find("glyphs missing 1 U+2212\n") != std::string::npos
+                                            && text.find("glyphs missing 1 U+2206\n") != std::string::npos
                                             && (themeIdx != 0 || text.find("overflow 3\n") != std::string::npos), 1);
             if (dpi > 1.5f)
             {
@@ -481,7 +481,7 @@ int main(int argc, char** argv)
         c.prims.resize(5);
         c.axes.resize(2);
         c.missingGlyphs = 3;
-        c.missingFirst[0] = 0x2212u;
+        c.missingFirst[0] = 0x2206u;
         c.info.logicalW = 7;
         const size_t pc = c.prims.capacity();
         c.clear();

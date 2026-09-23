@@ -448,9 +448,9 @@ int main(int argc, char** argv)
             hr.segment(0.0f, 0.0f, 10.0f, 10.0f, 0.0f, ink);
         }, 0);
 
-        // Text: the recorder's text() against HR's, with an unknown codepoint (U+2212, not in the atlas until G4) that
-        // both skip without an advance: the label run is 11 glyphs, 2 spaces and the skipped U+2212.
-        const char* label = "Ab 1\xC2\xB0x \xE2\x88\x92q\xE2\x86\x92|%()";
+        // Text: the recorder's text() against HR's, with an unknown codepoint (U+2206, absent from JetBrains Mono) that
+        // both skip without an advance: the label run is 11 glyphs, 2 spaces and the skipped U+2206.
+        const char* label = "Ab 1\xC2\xB0x \xE2\x88\x86q\xE2\x86\x92|%()";
         check("text_left", [&] {
             canvas.text(label, 20.3f, 40.7f, funkgui::type::kLabel, ink);
             hr.text(label, 20.3f, 40.7f, funkgui::type::kLabel, ink);
