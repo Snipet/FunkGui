@@ -3,6 +3,21 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.2.0 — 2026-09-23 · S1: public UI API (FZ1) and core utilities
+
+Golden impact: **none** (`fg.font.probe`, `fg.shader.hash` unchanged). Card G2.
+
+- Public headers frozen at FZ1 (public declarations only; private sections marked provisional may grow in G3–G7):
+  `core/{Geometry,Ease,Format}`, `text/{TextStyle,FontService,TextFit}`, `canvas/{Prim (84 B),PrimList,Canvas,Tags,
+  Axis,Fingerprint,SoftRaster,Expand (Vtx 64 B)}`, `panel/{Input,Panel,HostServices,CaptureConfig,HeadlessHost}`,
+  `params/{ParamPort,GestureController,JuceParamPort}`, `widgets/*` (9), `a11y/A11yItem`.
+- Implemented: `GestureController` (begin/set/end, drag, wheel, `tapMany` bracketed by `HostServices::beginBatch/
+  endBatch`), `JuceParamPort`, `ease`, `fmt` (U+2212), `text::width/fits/fitEllipsis`, `a11yDumpLine`,
+  `FontAtlasSdf::baked()`.
+- `Theme::ice` renamed `signal` (values bit-identical); `Col::fade/premix`; `TypeScale` via `text/TextStyle.h` (now
+  standalone and covered by `fg.headers`).
+- Tests: `fg.gesture`, `fg.paramport`, `fg.textfit`, `fg.format`, `fg.ease`, `fg.a11yline` (spec rows only).
+
 ## v0.1.0 — 2026-09-23 · S0: build system, tools on Harness v2, GPU build chain, review fixes
 
 First tag FCompressor consumes. Goldens blessed: `fg.font.probe`, `fg.prefs.check`, `fg.shader.hash` (golden impact
