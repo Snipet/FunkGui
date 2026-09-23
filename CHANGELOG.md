@@ -3,6 +3,20 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.3.0 — 2026-09-23 · S2: recorder, dump v2, fingerprint, HeadlessHost, gallery
+
+Golden impact: **new** `fg.gallery.primitives` (149 rows). Card G3. Spike passed: the recorder's vertex expansion is
+bit-identical to HardwareReverb's `SdfCanvas` for every rrect/hairline/segment/text case at dpi 1, 1.5, 2.
+
+- `Canvas` recorder (HR primitive maths byte-identical), tag/live scopes, dump v2 write/parse (reads HR v1 dumps; strict
+  parser, C locale), `Fingerprint` (skips live prims, colours, tags and text gamma), `FontService` (CPU bake;
+  `atlasHash()` equals FontProbe's), bgfx-free `expand()` (HR's a,b,c,a,c,d order).
+- `HeadlessHost`: fixed dt, `settle()` (returns maxFrames+1 when it never settles), key/drag/wheel replay, host-call log,
+  `writeDump`. `writePng()` returns false until SoftRaster (G4).
+- Gallery: `GalleryPanel` with self-registering `gallery::Section`s and `FunkGuiGalleryProbe` (`--section`, scripted
+  states, dpi 1/2, theme invariance, a11y lines); each widget card adds `fg.gallery.<section>`.
+- Tests: `fg.canvas.parity`, `fg.canvas.expansion`, `fg.headless.settle`, `fg.gallery.primitives`.
+
 ## v0.2.0 — 2026-09-23 · S1: public UI API (FZ1) and core utilities
 
 Golden impact: **none** (`fg.font.probe`, `fg.shader.hash` unchanged). Card G2.
