@@ -16,6 +16,18 @@ namespace funkgui
     // Backed by a properties file under
     //   ~/Library/Application Support/<PREFS_FOLDER>/preferences.settings
     // which is a different file from the Standalone wrapper's own settings.
+    // <PREFS_FOLDER> is the product's (funkgui_configure_product PREFS_FOLDER,
+    // 02 §1.8), so each product keeps its own preferences (Q7).
+    //
+    // Generic integer keys (02 §5.9, G6): any product preference that is an
+    // int (FCompressor: meterScaleDb, historySpanTenths) lives in the same
+    // file, as <VALUE name="<key>" val="<int>"/> beside the theme, with
+    // setTheme()'s semantics: written through at once, a write of the value
+    // already held is a no-op, and every change bumps revision(). "theme" is
+    // the theme's own key: getInt/setInt on it go through theme()/setTheme().
+    //
+    // Message thread only. Nothing here reads the file except the first get()
+    // and reload(): the getters read the in-memory copy.
     class UiPreferences
     {
     public:
@@ -24,16 +36,37 @@ namespace funkgui
         int  theme() const noexcept { return theme_; }
         void setTheme(int idx);
 
+        // The int held under `key`, clamped to [lo, hi] (bounds given in
+        // either order); `fallback` (clamped the same way) when the key is
+        // missing or its value is not a decimal integer that fits an int.
+        // A null or empty key reads as the fallback. (G6 addition.)
+        int  getInt(const char* key, int fallback, int lo, int hi) const;
+
+        // Stores `value` under `key` and saves immediately, ++revision (HR
+        // setTheme semantics); nothing at all when the key already holds
+        // exactly this value. A null or empty key is ignored. (G6 addition.)
+        void setInt(const char* key, int value);
+
         // Re-read the file. The value held here is a snapshot from when this
         // process first asked; another host on the same machine may have
         // changed the file since. Called when an editor opens, which is the
-        // moment a stale palette would be shown.
+        // moment a stale palette would be shown. Bumps revision() when any
+        // key changed.
         void reload();
 
         // Bumped on every change. Editors watch this so that switching the
         // theme in one open window updates the others in the same process;
         // across processes the file is read when an editor opens.
         uint32_t revision() const noexcept { return revision_; }
+
+        // The file this store reads and writes: <ENV_PREFIX>PREFS_DIR's
+        // preferences.settings when that variable was set at the first get(),
+        // else defaultFile(). (G6 addition.)
+        juce::File file() const;
+
+        // ~/Library/Application Support/<PREFS_FOLDER>/preferences.settings for
+        // the product this source is compiled into. (G6 addition.)
+        static juce::File defaultFile();
 
     private:
         UiPreferences();

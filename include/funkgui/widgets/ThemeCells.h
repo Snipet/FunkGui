@@ -6,6 +6,11 @@
 // gesture), which bumps UiPreferences::revision() and every open editor follows.
 //
 // Declared in G2 (v0.2.0, frozen at FZ1); implemented by G6 (src/widgets/ThemeCells.cpp).
+//
+// G6's choices: the cells speak as HR's a11y items did ("Graphite theme", "Paper theme") and the group's spoken title
+// is "Theme" (a caption, when given, is drawn but not spoken). Constructing ThemeCells opens the preferences store
+// (UiPreferences::get()), so no later tick or draw is the first file access (02 §3.7 rule 4). Selecting the active
+// cell writes nothing (setTheme's no-op).
 
 #include <funkgui/core/Geometry.h>
 #include <funkgui/widgets/SegmentedSelector.h>
