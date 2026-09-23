@@ -3,6 +3,20 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.6.0 — 2026-09-23 · S5: cell widgets and UI utilities
+
+Golden impact: **new** `fg.gallery.{segmented,latch,theme,hint,dwell,lineedit}`; no existing golden moved
+(`fg.prefs.check` unchanged: new int keys are more `<VALUE>` elements in the same file). Card G6.
+
+- `SegmentedSelector` with `CellText`, `ParamCells` (choice parameter), `PrefCells` (int preference); `CellModel::help`;
+  `SegmentedSelector::{settled,setSpokenTitle,bounds}`.
+- `LatchToggle` (+ `settled`, `reason`) and `ParamToggle`; `ThemeCells`; `HintLine` (+ `remaining`, `alpha`, `kCut`).
+- `DwellSelector` (+ `pinned`, `held`, `dwellLeft`) and `ScreenFader` (fixed dt, `kScreenFadeTau`).
+- `LiveFeed<Frame>` + `LiveState` (staleness rule).
+- `UiPreferences::{getInt,setInt,file,defaultFile}` (per-product folder, Q7); `reload()` bumps the revision on any key.
+- `MenuLook` (+ `setTheme`), `text::LineEdit` (+ `set`), `text::printable` overloads.
+- Tests `fg.livefeed`, `fg.lineedit`, `fg.dwell`; new `fg.prefs.check` rows.
+
 ## v0.5.0 — 2026-09-23 · S4: RuleSlider, AttachedWord, FocusRing
 
 Golden impact: **new** `fg.gallery.{ruleslider,word,focusring}`; no existing golden moved. Card G5.
