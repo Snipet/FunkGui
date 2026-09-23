@@ -48,15 +48,15 @@
       "name": "agent",
       "configurePreset": "agent",
       "targets": ["all", "funkgui_tools", "funkgui_tests"],
-      "jobs": 4,
-      "nativeToolOptions": ["-l", "12"]
+      "jobs": 6,
+      "nativeToolOptions": []
     },
     {
       "name": "agent-gui",
       "configurePreset": "agent-gui",
       "targets": ["all", "funkgui_tools", "funkgui_tests"],
-      "jobs": 4,
-      "nativeToolOptions": ["-l", "12"]
+      "jobs": 6,
+      "nativeToolOptions": []
     },
     {
       "name": "lead",
@@ -69,7 +69,7 @@
       "name": "base",
       "hidden": true,
       "filter": { "include": { "label": "verify" } },
-      "execution": { "jobs": 4, "noTestsAction": "error" },
+      "execution": { "jobs": 6, "noTestsAction": "error" },
       "output": { "outputOnFailure": true }
     },
     { "name": "agent", "inherits": "base", "configurePreset": "agent" },
