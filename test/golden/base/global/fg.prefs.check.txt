@@ -1,0 +1,5 @@
+# funkgui-golden 2  probe=fg.prefs.check  scope=global
+# key	value	tolerance
+prefs.disk.hash	886131d53bc39e2c	exact
+prefs.disk.bytes	104	exact
+prefs.theme_count	2	exact

@@ -3,7 +3,13 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
-## Unreleased — S0 review fixes (FCompressor docs/sprints/s0-review.md, R-G1 #1–#12)
+## v0.1.0 — 2026-09-23 · S0: build system, tools on Harness v2, GPU build chain, review fixes
+
+First tag FCompressor consumes. Goldens blessed: `fg.font.probe`, `fg.prefs.check`, `fg.shader.hash` (golden impact
+for consumers: none). Includes card G1 (FunkGui CMake, presets, tools ported, `golden.py`, self-tests) and the S0
+review fixes below.
+
+### S0 review fixes (FCompressor docs/sprints/s0-review.md, R-G1 #1–#12)
 
 Golden impact: **none** (FunkGui has no goldens yet; for consumers, no stored row changes meaning — rows that used to
 drift against their own blessed value now pass, and rows that could never be valid are now refused).
