@@ -3,13 +3,14 @@
 // fg.smoke.gpu: the GPU build-chain spike's consumer (SPRINTS.md S0.1, 03 §4.9.5). A console app that links
 // FunkGui::gpu, so every snapshot source under src/gpu/ (BgfxContext, FramePump, SdfCanvas, DisplayLink.mm,
 // NativeSurface.mm) compiles and links inside it against bgfx and the shaders embedded by FunkGuiShaders. At run time
-// it checks what needs no GPU and no window: the static Objective-C classes carry the configured FUNKGUI_OBJC_PREFIX
-// (02 §1.8; runtime names are G7's), the render view behaves as HR's did (click-through, flipped), a display link
-// refuses a view that has no window, bgfx reports its Metal backend, and the context is idle until a window is
-// acquired. Spec rows only.
+// it checks what needs no GPU and no window: the render view's Objective-C class name starts with the configured
+// FUNKGUI_OBJC_PREFIX "RenderView" (02 §1.8), the render view behaves as HR's did (click-through, flipped), a display
+// link refuses a view that has no window, bgfx reports its Metal backend, and the context is idle until a window is
+// acquired. Spec rows only. No row looks a class up by name: G7 registers the classes at runtime under randomised
+// names with that root (<OBJC_PREFIX>RenderView_<suffix>, K2 #16), so only the name root of the class of the view
+// createRenderView returns is checked (S0 review R-G1 #11).
 
 #import <Cocoa/Cocoa.h>
-#include <objc/runtime.h>
 
 #include <funkgui/core/Config.h>
 #include <funkgui/gpu/BgfxContext.h>
@@ -20,7 +21,9 @@
 #include <bgfx/bgfx.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <cstdio>
 #include <cstring>
+#include <string>
 #include <string_view>
 
 namespace T = funkgui::test;
@@ -34,15 +37,6 @@ int main(int argc, char** argv)
     P.eq("build.has_bgfx", FUNKGUI_HAS_BGFX, 1);
     P.eq("build.transient_vb_bytes", static_cast<int64_t>(FUNKGUI_TRANSIENT_VB_BYTES), int64_t{ 32 } << 20);
 
-    // ---- static Objective-C classes under the product prefix --------------------------------------------------------
-    Class renderView = objc_getClass(FUNKGUI_OBJC_PREFIX_STR "RenderView");
-    Class linkTarget = objc_getClass(FUNKGUI_OBJC_PREFIX_STR "DisplayLinkTarget");
-    P.eq("objc.render_view_class", renderView != nil, 1);
-    P.eq("objc.render_view_is_nsview", renderView != nil && [renderView isSubclassOfClass:[NSView class]], 1);
-    P.eq("objc.display_link_target_class", linkTarget != nil, 1);
-    P.eq("objc.hr_names_absent",
-         objc_getClass("HrvbRenderView") == nil && objc_getClass("HrvbDisplayLinkTarget") == nil, 1);
-
     // ---- NativeSurface.mm / DisplayLink.mm without a window ---------------------------------------------------------
     @autoreleasepool
     {
@@ -50,7 +44,12 @@ int main(int argc, char** argv)
         void* view = funkgui::createRenderView((void*) parent, 10, 20, 100, 50);
         NSView* v = (NSView*) view;
         P.eq("surface.created", view != nullptr, 1);
-        P.eq("surface.class", v != nil && [v isKindOfClass:renderView], 1);
+        // ---- the view's class: an NSView whose name has the product's root (static now, randomised from G7) -------
+        const std::string cls = v != nil ? std::string([NSStringFromClass([v class]) UTF8String]) : std::string();
+        std::printf("INFO     render view class %s\n", cls.c_str());
+        P.eq("objc.render_view_is_nsview", v != nil && [v isKindOfClass:[NSView class]], 1);
+        P.eq("objc.render_view_name_root", std::string_view(cls).starts_with(FUNKGUI_OBJC_PREFIX_STR "RenderView"), 1);
+        P.eq("objc.render_view_not_hr", !std::string_view(cls).starts_with("Hrvb"), 1);
         P.eq("surface.child_of_parent", v != nil && [v superview] == parent, 1);
         P.eq("surface.click_through", v != nil && [v hitTest:NSMakePoint(15, 25)] == nil, 1);
         P.eq("surface.flipped", v != nil && [v isFlipped], 1);

@@ -6,26 +6,33 @@ Specification: FCompressor docs/design/03-build-verify-process.md §3.2.3-§3.2.
 file with --golden-root tests/golden --allow-env FCMP_ALLOW_BLESS. Probes never write the golden tree: they write
 candidates into <build>/golden-candidates, and `adopt`, run by the lead from the main checkout, is the only way in.
 
-  golden.py report <build> [--junit <ctest junit xml>] [--golden-root <dir>]
+  golden.py report <build> [--junit <ctest junit xml>] [--golden-root <dir>] [--allow-env <NAME>]
       BLOCKING (spec_fail, harness_error, missing results, crashed/timed-out/disabled/not-run tests), DRIFT (with the
       .diff), MISSING (no golden yet), IMPROVED (le:/ge: rows that moved the good way), the 10 slowest tests.
       Exit 0 when nothing is blocking.
-  golden.py diff <build> [--only <glob>]... [--golden-root <dir>]
+  golden.py diff <build> [--only <glob>]... [--golden-root <dir>] [--allow-env <NAME>]
       Print each selected candidate's .diff (drift) or its rows (no golden yet).
   golden.py adopt <build> [--x86 <build-x86>] --only <glob> [--only <glob>]... --reason "<text>"
                   [--golden-root <dir>] [--allow-env <NAME>] [--allow-geometry]
-      Move the selected candidates into the golden tree. Refused unless <NAME> (default FUNKGUI_ALLOW_BLESS) is 1,
-      when run from a linked worktree, when the golden tree has uncommitted changes, when a selected candidate has a
-      blocking status or no results, when it belongs to a provisional Mode (a results JSON member "provisional": a
-      list of Mode keys, written by dsp.registry through Probe::note), or when it is a ui.geometry probe without
-      --allow-geometry (before the UI freeze FZ5). Merge rules: arm64 candidates alone overwrite base/ (a stale arm64
-      overlay is removed, x86_64 overlay rows no longer in base are pruned); with --x86, a row equal on both arches (or,
-      for a numeric tolerance, x86 within tolerance of arm64) goes to base/, any other row to base/ (arm64 value) and
-      both overlays, and an xarch. row that differs aborts: it is a determinism bug.
+      Move the selected candidates into the golden tree. Refused unless <NAME> (default FUNKGUI_ALLOW_BLESS) matches
+      ^[A-Z][A-Z0-9_]*_ALLOW_BLESS$ and is 1 in the environment; when run from a linked worktree; when the golden tree
+      has uncommitted changes; when a selected candidate has no results or a status other than pass, golden_drift or
+      golden_missing; when its files do not hold the golden_rows its results report (stale candidates: run verify,
+      which wipes them, first); when it belongs to a provisional Mode (a results JSON member "provisional": a list of
+      Mode keys, written by dsp.registry through Probe::note on every run, [] when none), or is Mode-scoped while no
+      results JSON of the build carries that list; or when it is a ui.geometry probe without --allow-geometry (before
+      the UI freeze FZ5). Merge rules: arm64 candidates alone overwrite base/ (a stale arm64 overlay is removed, x86_64
+      overlay rows no longer in base are pruned); with --x86, a row equal on both arches (or, for a numeric tolerance,
+      x86 within tolerance of arm64) goes to base/, any other row to base/ (arm64 value) and both overlays, and an
+      xarch. row that differs aborts: it is a determinism bug.
   golden.py selftest
       This file's own checks, in a scratch directory (never the golden tree, never the allow variable).
 
 --only globs match "<scope>/<probe>" (e.g. global/fg.font.probe, modes/clean/dsp.static) or "<probe>", with * ? [].
+Every subcommand but selftest accepts --allow-env, so a wrapper can pass it to all of them (FCompressor's
+Scripts/golden.py does); only adopt reads it. Golden rows never hold a non-finite number: a value spelled
+[+-]inf|infinity|nan|nan(...) (any case) is refused, and so is a numeric-tolerance value that reads as one (1e999),
+as in the harness.
 Exit codes: 0 ok, 1 blocking results (report), 2 refused or usage error.
 """
 
@@ -47,6 +54,10 @@ from pathlib import Path
 KEY_RE = re.compile(r"^[a-z0-9][a-z0-9._:+-]{0,119}$")
 ARCHES = ("arm64", "x86_64")
 BLOCKING = ("spec_fail", "harness_error")
+ADOPTABLE = ("pass", "golden_drift", "golden_missing")        # every other status (unreadable, ...) is refused
+ALLOW_ENV_RE = re.compile(r"^[A-Z][A-Z0-9_]*_ALLOW_BLESS$")
+# The harness's detail::nonFiniteSpelling: what strtod reads as a non-finite number. Hash values never match.
+NONFINITE_RE = re.compile(r"^[+-]?(inf|infinity|nan(\([0-9a-z_]*\))?)$", re.IGNORECASE)
 HEADER = "# funkgui-golden 2  probe={probe}  scope={scope}\n# key\tvalue\ttolerance\n"
 
 
@@ -126,6 +137,8 @@ def value_problem(v: str) -> str | None:
         return "value longer than 64 bytes"
     if any(ord(c) <= 0x20 or ord(c) == 0x7F for c in v):
         return "value contains whitespace or a control character"
+    if NONFINITE_RE.fullmatch(v):
+        return "value spells a non-finite number"
     return None
 
 
@@ -161,8 +174,12 @@ def read_rows(path: Path) -> dict[str, Row]:
         tol = parse_tol(tol_text)
         why = ("invalid key" if not KEY_RE.fullmatch(key) else value_problem(value) or
                ("bad tolerance" if tol is None else None))
-        if why is None and tol.kind != "exact" and parse_number(value) is None:
-            why = "numeric tolerance on a non-numeric value"
+        if why is None and tol.kind != "exact":
+            x = parse_number(value)
+            if x is None:
+                why = "numeric tolerance on a non-numeric value"
+            elif not math.isfinite(x):
+                why = "numeric tolerance on a non-finite value"
         if why is None and key in rows:
             why = "duplicate key '%s'" % key
         if why is not None:
@@ -546,17 +563,41 @@ def plan_merge(root: Path, arm: Candidate, x86: Candidate) -> Plan:
     return plan
 
 
-def all_provisional(*builds: Path) -> set[str]:
+def provisional_modes(build: Path) -> set[str] | None:
+    """The Mode keys the build's results list as provisional (dsp.registry's note, 03 §3.2.5), or None when no results
+    JSON carries a "provisional" member: then nothing tells a provisional Mode apart, and adopt fails closed."""
     keys: set[str] = set()
-    for b in builds:
-        for res in load_results(b).values():
-            prov = res.get("provisional")
-            if isinstance(prov, list):
-                keys.update(str(k) for k in prov)
-    return keys
+    found = False
+    for name, res in load_results(build).items():
+        if "provisional" not in res:
+            continue
+        prov = res["provisional"]
+        if not isinstance(prov, list) or not all(isinstance(k, str) for k in prov):
+            raise Refused("%s: the results of %s have a \"provisional\" member that is not a list of Mode keys"
+                          % (build / "probe-results", name))
+        found = True
+        keys.update(prov)
+    return keys if found else None
+
+
+def check_run(c: Candidate, res: dict | None, label: str) -> None:
+    """The results of the run a candidate came from: present, adoptable, and matching the candidate's files."""
+    if res is None:
+        raise Refused("%s: no %sresults for %s (run verify first)" % (c.label, label, c.test))
+    status = res.get("status")
+    if status not in ADOPTABLE:
+        raise Refused("%s: %sstatus %r is not adoptable (only %s)" % (c.label, label, status, ", ".join(ADOPTABLE)))
+    held = (len(read_rows(c.txt)) if c.txt is not None else 0) + len(c.sidecars)
+    want = res.get("golden_rows")
+    if isinstance(want, bool) or not isinstance(want, int) or held != want:
+        raise Refused("%s: the %scandidate holds %d golden row(s) but its results report golden_rows %r: stale "
+                      "candidate files (run verify, which wipes them, first)" % (c.label, label, held, want))
 
 
 def adopt(a: argparse.Namespace, environ) -> int:
+    if not ALLOW_ENV_RE.fullmatch(a.allow_env or ""):
+        raise Refused("--allow-env %r is not a bless variable (^[A-Z][A-Z0-9_]*_ALLOW_BLESS$, e.g. FUNKGUI_ALLOW_BLESS"
+                      " or FCMP_ALLOW_BLESS)" % a.allow_env)
     if environ.get(a.allow_env) != "1":
         raise Refused("%s=1 is not set: only the lead blesses, from the main checkout (03 §3.2.5)" % a.allow_env)
     if not a.only:
@@ -576,24 +617,32 @@ def adopt(a: argparse.Namespace, environ) -> int:
                       % wrong)
     results = load_results(build)
     x86_results = load_results(x86_build) if x86_build else {}
-    provisional = all_provisional(build, *([x86_build] if x86_build else []))
     x86_cands = {(c.scope, c.probe): c for c in discover(x86_build, "x86_64")} if x86_build else {}
+    # Fail closed (R-G1 #5): a Mode-scoped candidate needs every build's provisional list, even an empty one.
+    provisional: set[str] = set()
+    if any(c.mode for c in chosen):
+        for b in [build] + ([x86_build] if x86_build else []):
+            keys = provisional_modes(b)
+            if keys is None:
+                raise Refused("no results JSON in %s lists the provisional Modes (dsp.registry notes \"provisional\" "
+                              "on every run, [] when none), so Mode-scoped candidates cannot be checked (K3 #9)"
+                              % (b / "probe-results"))
+            provisional |= keys
 
     plan = Plan()
     for c in chosen:
-        for label, res in (("", results.get(c.test)), ("x86_64 ", x86_results.get(c.test) if x86_build else {})):
-            if res is None:
-                raise Refused("%s: no %sresults for %s (run verify first)" % (c.label, label, c.test))
-            if res and res.get("status") in BLOCKING:
-                raise Refused("%s: %sstatus %s is blocking" % (c.label, label, res.get("status")))
-        if c.mode and c.mode in provisional:
-            raise Refused("%s: Mode %s is provisional (01 §4.3; K3 #9)" % (c.label, c.mode))
-        if c.probe.startswith("ui.geometry") and not a.allow_geometry:
-            raise Refused("%s: ui.geometry rows are adopted only after the UI freeze FZ5 (--allow-geometry)" % c.label)
+        check_run(c, results.get(c.test), "")
+        other = None
         if x86_build:
             other = x86_cands.get((c.scope, c.probe))
             if other is None:
                 raise Refused("%s: no x86_64 candidate in %s" % (c.label, x86_build))
+            check_run(other, x86_results.get(c.test), "x86_64 ")
+        if c.mode and c.mode in provisional:
+            raise Refused("%s: Mode %s is provisional (01 §4.3; K3 #9)" % (c.label, c.mode))
+        if c.probe.startswith("ui.geometry") and not a.allow_geometry:
+            raise Refused("%s: ui.geometry rows are adopted only after the UI freeze FZ5 (--allow-geometry)" % c.label)
+        if other is not None:
             part = plan_merge(root, c, other)
         else:
             part = plan_single(root, c)
@@ -622,6 +671,9 @@ def cmd_adopt(a: argparse.Namespace) -> int:
 # ---- selftest --------------------------------------------------------------------------------------------------------
 
 def cmd_selftest(_: argparse.Namespace) -> int:
+    import contextlib
+    import io
+
     failures: list[str] = []
 
     def check(name: str, ok: bool) -> None:
@@ -629,11 +681,12 @@ def cmd_selftest(_: argparse.Namespace) -> int:
         if not ok:
             failures.append(name)
 
-    def refused(name: str, fn) -> None:
+    def refused(name: str, fn, why: str) -> None:
+        """fn must raise Refused, and for the reason `why` (a substring of the message), not some earlier one."""
         try:
             fn()
         except Refused as e:
-            check(name + " (" + str(e)[:70] + ")", True)
+            check("%s (%s)" % (name, str(e)[:90]), why in str(e))
             return
         check(name + " (not refused)", False)
 
@@ -645,6 +698,9 @@ def cmd_selftest(_: argparse.Namespace) -> int:
     check("tol.accepts", Tol("le", 1).accepts(3, 10) and not Tol("ge", 1).accepts(8.5, 10)
           and Tol("rel", 0.01).accepts(100.9, 100) and not Tol("abs", 0.1).accepts(1.2, 1))
     check("fmt.num", [fmt_num(x) for x in (0.1, 1.0 / 3.0, 1e-5, 32.0)] == ["0.1", "0.333333333", "1e-05", "32"])
+    check("allow_env.names", all(ALLOW_ENV_RE.fullmatch(n) for n in ("FCMP_ALLOW_BLESS", "FUNKGUI_ALLOW_BLESS"))
+          and not any(ALLOW_ENV_RE.fullmatch(n) for n in ("SHLVL", "CLICOLOR", "ALLOW_BLESS", "fcmp_ALLOW_BLESS",
+                                                            "FCMP_ALLOW_BLESS_X", "")))
 
     with tempfile.TemporaryDirectory(prefix="golden-selftest-") as tmp:
         t = Path(tmp)
@@ -658,6 +714,8 @@ def cmd_selftest(_: argparse.Namespace) -> int:
         sh("git", "init", "-q")
         sh("git", "config", "user.email", "selftest@example.invalid")
         sh("git", "config", "user.name", "golden selftest")
+        sh("git", "config", "commit.gpgsign", "false")                 # the user's global git config is not ours
+        sh("git", "config", "core.hooksPath", str(t / "no-hooks"))
         write_atomic(root / "base" / "global" / "p.txt", "a\t1\texact\nb\t2\tabs:0.1\n")
         write_atomic(root / "arm64" / "global" / "p.txt", "b\t2.5\tabs:0.1\n")
         write_atomic(root / "x86_64" / "global" / "p.txt", "b\t2.4\tabs:0.1\n")
@@ -665,11 +723,17 @@ def cmd_selftest(_: argparse.Namespace) -> int:
         sh("git", "add", "-A")
         sh("git", "commit", "-q", "-m", "init")
 
-        # malformed golden files are refused
+        # malformed golden files are refused, and so are non-finite values (R-G1 #7)
         bad = t / "bad.txt"
-        for content in ("a\t1\n", "a\t1\texact\na\t2\texact\n", "A\t1\texact\n", "a\tone\tabs:1\n"):
+        for content, why in (("a\t1\n", "malformed row"), ("a\t1\texact\na\t2\texact\n", "duplicate key"),
+                             ("A\t1\texact\n", "invalid key"), ("a\tone\tabs:1\n", "non-numeric value"),
+                             ("a\tnan\texact\n", "non-finite"), ("a\t-Infinity\texact\n", "non-finite"),
+                             ("a\tNaN(1)\texact\n", "non-finite"), ("a\tinf\tabs:1\n", "non-finite"),
+                             ("a\t1e999\tabs:1\n", "non-finite")):
             bad.write_text(content)
-            refused("rows.malformed %r" % content, lambda: read_rows(bad))
+            refused("rows.refused %r" % content, lambda: read_rows(bad), why)
+        bad.write_text("a\tnano\texact\nb\tinfo\texact\nh\t1e40000000000000\texact\nx\t-0.5\tabs:1\n")
+        check("rows.lookalikes_ok", len(read_rows(bad)) == 4)
 
         def build(name: str, arch: str, rows: str, status: str = "golden_drift", mode: str = "",
                   probe: str = "p", extra: dict | None = None, sidecars: dict | None = None) -> Path:
@@ -679,46 +743,83 @@ def cmd_selftest(_: argparse.Namespace) -> int:
                          HEADER.format(probe=probe, scope=scope) + rows)
             for k, v in (sidecars or {}).items():
                 write_atomic(b / "golden-candidates" / arch / scope / ("%s.%s.lines" % (probe, k)), v)
+            count = len([r for r in rows.split("\n") if r and not r.startswith("#")]) + len(sidecars or {})
             res = {"probe": probe, "mode": mode, "arch": arch, "status": status, "spec_pass": 1, "spec_fail": 0,
-                   "golden_rows": 2, "golden_fail": 1, "golden_new": 0, "golden_missing_rows": 0, "ms": 1}
+                   "golden_rows": count, "golden_fail": 1, "golden_new": 0, "golden_missing_rows": 0, "ms": 1}
             res.update(extra or {})
             write_atomic(b / "probe-results" / (probe + ("." + mode if mode else "") + ".json"), json.dumps(res))
             return b
 
-        def ns(b: Path, only=("p",), x86: Path | None = None, geometry=False) -> argparse.Namespace:
-            return argparse.Namespace(build=str(b), golden_root=str(root), only=list(only), reason="selftest",
-                                      allow_env="GOLDEN_SELFTEST_ALLOW", x86=str(x86) if x86 else None,
-                                      allow_geometry=geometry)
+        def registry(b: Path, provisional) -> None:
+            """dsp.registry's results in build b: its "provisional" note."""
+            write_atomic(b / "probe-results" / "dsp.registry.json",
+                         json.dumps({"probe": "dsp.registry", "mode": "", "arch": "arm64", "status": "pass",
+                                     "spec_pass": 1, "spec_fail": 0, "golden_rows": 0, "golden_fail": 0,
+                                     "golden_new": 0, "golden_missing_rows": 0, "ms": 1,
+                                     "provisional": provisional}))
 
-        env = {"GOLDEN_SELFTEST_ALLOW": "1"}
+        allow = "GOLDEN_SELFTEST_ALLOW_BLESS"
+
+        def ns(b: Path, only=("p",), x86: Path | None = None, geometry=False,
+               allow_env: str = allow) -> argparse.Namespace:
+            return argparse.Namespace(build=str(b), golden_root=str(root), only=list(only), reason="selftest",
+                                      allow_env=allow_env, x86=str(x86) if x86 else None, allow_geometry=geometry)
+
+        env = {allow: "1"}
         arm = build("arm", "arm64", "a\t1\texact\nb\t3\tabs:0.1\n", sidecars={"a11y": "x\ny\n"})
 
-        refused("adopt.no_allow_env", lambda: adopt(ns(arm), {}))
-        refused("adopt.no_only", lambda: adopt(ns(arm, only=()), env))
-        refused("adopt.nothing_selected", lambda: adopt(ns(arm, only=("q",)), env))
-        refused("adopt.blocking_status", lambda: adopt(ns(build("blk", "arm64", "a\t1\texact\n", "spec_fail")), env))
+        refused("adopt.no_allow_env", lambda: adopt(ns(arm), {}), "=1 is not set")
+        # Any variable that happens to be 1 is not a bless switch (R-G1 #8).
+        refused("adopt.allow_env_any_name", lambda: adopt(ns(arm, allow_env="SHLVL"), {"SHLVL": "1"}),
+                "is not a bless variable")
+        refused("adopt.no_only", lambda: adopt(ns(arm, only=()), env), "--only <glob> is required")
+        refused("adopt.nothing_selected", lambda: adopt(ns(arm, only=("q",)), env), "no candidate")
+        refused("adopt.blocking_status", lambda: adopt(ns(build("blk", "arm64", "a\t1\texact\n", "spec_fail")), env),
+                "'spec_fail' is not adoptable")
+        # Only pass / golden_drift / golden_missing are adoptable: an unreadable or unknown status is refused (R-G1 #5).
+        unread = build("unread", "arm64", "a\t1\texact\n")
+        (unread / "probe-results" / "p.json").write_text("{not json")
+        refused("adopt.unreadable_results", lambda: adopt(ns(unread), env), "'unreadable' is not adoptable")
+        refused("adopt.unknown_status", lambda: adopt(ns(build("odd", "arm64", "a\t1\texact\n", "crashed")), env),
+                "'crashed' is not adoptable")
         nores = build("nores", "arm64", "a\t1\texact\n", probe="q")
         (nores / "probe-results" / "q.json").unlink()
-        refused("adopt.no_results", lambda: adopt(ns(nores, only=("q",)), env))
+        refused("adopt.no_results", lambda: adopt(ns(nores, only=("q",)), env), "no results")
+        # A candidate whose files do not hold the rows its run reported: a stale sidecar from an earlier run (R-G1 #4).
+        stale = build("stale", "arm64", "a\t1\texact\nb\t3\tabs:0.1\n", sidecars={"a11y": "x\n", "gone": "old\n"},
+                      extra={"golden_rows": 3})
+        refused("adopt.stale_candidate_rows", lambda: adopt(ns(stale), env), "stale candidate files")
+        # Provisional Modes (K3 #9), failing closed when nothing lists them (R-G1 #5).
         prov = build("prov", "arm64", "a\t1\texact\n", mode="bus-g", extra={"provisional": ["bus-g"]})
-        refused("adopt.provisional_mode", lambda: adopt(ns(prov, only=("modes/bus-g/*",)), env))
+        refused("adopt.provisional_mode", lambda: adopt(ns(prov, only=("modes/bus-g/*",)), env), "is provisional")
+        registry(prov, [])
+        noprov = build("noprov", "arm64", "a\t1\texact\n", mode="bus-g")
+        refused("adopt.provisional_unknown", lambda: adopt(ns(noprov, only=("modes/bus-g/*",)), env),
+                "lists the provisional Modes")
+        registry(noprov, "bus-g")
+        refused("adopt.provisional_not_a_list", lambda: adopt(ns(noprov, only=("modes/bus-g/*",)), env),
+                "not a list of Mode keys")
         geo = build("geo", "arm64", "a\t1\texact\n", mode="clean", probe="ui.geometry")
-        refused("adopt.geometry_before_fz5", lambda: adopt(ns(geo, only=("ui.geometry",)), env))
-        refused("adopt.x86_as_primary", lambda: adopt(ns(build("x86only", "x86_64", "a\t1\texact\n")), env))
+        registry(geo, [])
+        refused("adopt.geometry_before_fz5", lambda: adopt(ns(geo, only=("ui.geometry",)), env), "--allow-geometry")
+        refused("adopt.x86_as_primary", lambda: adopt(ns(build("x86only", "x86_64", "a\t1\texact\n")), env),
+                "must hold arm64 candidates")
 
         (root / "base" / "global" / "dirty.txt").write_text("a\t1\texact\n")
-        refused("adopt.uncommitted_golden_tree", lambda: adopt(ns(arm), env))
+        refused("adopt.uncommitted_golden_tree", lambda: adopt(ns(arm), env), "uncommitted changes")
         (root / "base" / "global" / "dirty.txt").unlink()
 
         wt = t / "linked"
         sh("git", "worktree", "add", "-q", "--detach", str(wt))
         linked = ns(arm)
         linked.golden_root = str(wt / "test" / "golden")
-        refused("adopt.linked_worktree", lambda: adopt(linked, env))
+        refused("adopt.linked_worktree", lambda: adopt(linked, env), "linked worktree")
         sh("git", "worktree", "remove", "--force", str(wt))
 
         # arm64 alone: base overwritten, arm64 overlay removed, x86_64 overlay rows kept only if still in base
-        check("adopt.single.exit", adopt(ns(arm), env) == 0)
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = adopt(ns(arm), env)
+        check("adopt.single.exit", rc == 0)
         check("adopt.single.base", read_rows(root / "base" / "global" / "p.txt") ==
               {"a": Row("a", "1", Tol("exact")), "b": Row("b", "3", Tol("abs", 0.1))})
         check("adopt.single.arm_overlay_removed", not (root / "arm64" / "global" / "p.txt").exists())
@@ -734,7 +835,9 @@ def cmd_selftest(_: argparse.Namespace) -> int:
         # --x86: equal / within tolerance -> base; differing -> both overlays; xarch. differing -> abort
         a2 = build("arm2", "arm64", "a\t1\texact\nb\t3\tabs:0.1\nc\t5\texact\nh\tff\texact\n")
         x2 = build("x862", "x86_64", "a\t1\texact\nb\t3.05\tabs:0.1\nc\t6\texact\nh\tff\texact\n")
-        check("adopt.x86.exit", adopt(ns(a2, x86=x2), env) == 0)
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = adopt(ns(a2, x86=x2), env)
+        check("adopt.x86.exit", rc == 0)
         check("adopt.x86.base", read_rows(root / "base" / "global" / "p.txt") ==
               {"a": Row("a", "1", Tol("exact")), "b": Row("b", "3", Tol("abs", 0.1)),
                "c": Row("c", "5", Tol("exact")), "h": Row("h", "ff", Tol("exact"))})
@@ -744,12 +847,29 @@ def cmd_selftest(_: argparse.Namespace) -> int:
         sh("git", "commit", "-q", "-m", "adopt 2")
         a3 = build("arm3", "arm64", "xarch.h\taa\texact\n")
         x3 = build("x863", "x86_64", "xarch.h\tbb\texact\n")
-        refused("adopt.x86.xarch_differs", lambda: adopt(ns(a3, x86=x3), env))
+        refused("adopt.x86.xarch_differs", lambda: adopt(ns(a3, x86=x3), env), "determinism bug")
         x4 = build("x864", "x86_64", "a\t1\texact\n")
-        refused("adopt.x86.row_sets_differ", lambda: adopt(ns(a2, x86=x4), env))
+        refused("adopt.x86.row_sets_differ", lambda: adopt(ns(a2, x86=x4), env), "different rows")
         x5 = build("x865", "x86_64", "a\t1\texact\nb\t3\tabs:0.2\nc\t5\texact\nh\tff\texact\n")
-        refused("adopt.x86.tolerance_differs", lambda: adopt(ns(a2, x86=x5), env))
+        refused("adopt.x86.tolerance_differs", lambda: adopt(ns(a2, x86=x5), env), "has tolerance")
+        x6 = build("x866", "x86_64", "a\t1\texact\nb\t3\tabs:0.1\nc\t5\texact\nh\tff\texact\n", "unreadable")
+        refused("adopt.x86.status_checked", lambda: adopt(ns(a2, x86=x6), env), "x86_64 status 'unreadable'")
+        # Mode-scoped with --x86: each build must list its provisional Modes.
+        a7 = build("arm7", "arm64", "a\t1\texact\n", mode="clean")
+        registry(a7, ["bus-g"])
+        x7 = build("x867", "x86_64", "a\t1\texact\n", mode="clean")
+        refused("adopt.x86.provisional_unknown", lambda: adopt(ns(a7, only=("modes/clean/*",), x86=x7), env),
+                "x867")
         check("adopt.refusals_left_tree_clean", git(repo, "status", "--porcelain").strip() == "")
+
+        # A Mode-scoped candidate of a non-provisional Mode, with the registry's list present: adopted.
+        registry(x7, ["bus-g"])
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = adopt(ns(a7, only=("modes/clean/*",), x86=x7), env)
+        check("adopt.mode_not_provisional", rc == 0 and read_rows(root / "base" / "modes" / "clean" / "p.txt")
+              == {"a": Row("a", "1", Tol("exact"))})
+        sh("git", "add", "-A")
+        sh("git", "commit", "-q", "-m", "adopt 3")
 
         # report: classification from results + JUnit
         rep = t / "rep"
@@ -769,8 +889,6 @@ def cmd_selftest(_: argparse.Namespace) -> int:
                          '<testcase name="fg.f" time="0" status="disabled"/>'
                          '<testcase name="fg.lint" time="1" status="run"/>'
                          '</testsuite>')
-        import contextlib
-        import io
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             rc = cmd_report(argparse.Namespace(build=str(rep), golden_root=str(root), junit=str(junit)))
@@ -784,6 +902,23 @@ def cmd_selftest(_: argparse.Namespace) -> int:
         with contextlib.redirect_stdout(io.StringIO()):
             rc = cmd_report(argparse.Namespace(build=str(rep), golden_root=str(root), junit=str(junit)))
         check("report.exit_clean", rc == 0)
+
+        # The command line exactly as FCompressor's Scripts/golden.py builds it: every subcommand takes --allow-env
+        # (R-G1 #1); only adopt reads it.
+        def cli(argv: list[str]) -> int:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                try:
+                    return main(argv)
+                except SystemExit as e:                          # argparse's usage error
+                    return 100 + (e.code if isinstance(e.code, int) else 1)
+
+        wrapped = ["--allow-env", "FCMP_ALLOW_BLESS", "--golden-root", str(root)]
+        check("cli.report_accepts_allow_env", cli(["report", str(rep)] + wrapped + ["--junit", str(junit)]) == 0)
+        check("cli.diff_accepts_allow_env", cli(["diff", str(rep)] + wrapped + ["--only", "fg.*"]) == 0)
+        check("cli.adopt_refuses_other_names",
+              cli(["adopt", str(arm), "--allow-env", "SHLVL", "--golden-root", str(root), "--only", "p",
+                   "--reason", "selftest"]) == 2)
+        check("cli.unknown_flag_is_usage_error", cli(["report", str(rep), "--bogus"]) == 102)
 
     print("golden.py selftest: %d failure(s)" % len(failures))
     return 1 if failures else 0
@@ -802,6 +937,8 @@ def main(argv: list[str]) -> int:
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument("build")
         p.add_argument("--golden-root", default=default_golden_root())
+        # Accepted by report and diff too (and ignored there), so a wrapper can pass it to every subcommand (R-G1 #1).
+        p.add_argument("--allow-env", default="FUNKGUI_ALLOW_BLESS")
 
     p = sub.add_parser("report")
     common(p)
@@ -816,7 +953,6 @@ def main(argv: list[str]) -> int:
     p.add_argument("--x86")
     p.add_argument("--only", action="append", default=[])
     p.add_argument("--reason")
-    p.add_argument("--allow-env", default="FUNKGUI_ALLOW_BLESS")
     p.add_argument("--allow-geometry", action="store_true")
     p.set_defaults(fn=cmd_adopt)
     p = sub.add_parser("selftest")

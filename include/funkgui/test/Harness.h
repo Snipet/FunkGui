@@ -29,7 +29,8 @@
 //   (plus <probe>.<key>.lines sidecars and, on drift, <probe>.diff), each through a temp file and rename().
 //   Only the lead's golden.py adopt moves candidates into the golden tree.
 // - Harness errors (exit 4, blocking): invalid or duplicate key, malformed golden, overlay without base, overlay-only
-//   key, xarch.* key in an overlay, unknown flag, bad or missing --golden-root/--arch, harnessError() from the probe.
+//   key, xarch.* key in an overlay, unknown flag, bad or missing --golden-root/--arch, --bless-to equal to, inside or
+//   containing --golden-root, a non-finite num() value, harnessError() from the probe.
 //
 // Choices where 03 §3.2 is silent (recorded in the v0.0.1 handoff; G1's fg.harness.self pins them):
 // - Positional arguments (the subcommand itself, a tool's own inputs) are ignored; every "--" token must be one of
@@ -42,6 +43,17 @@
 // - golden_missing (exit 3) needs at least one golden row: a spec-only probe with no golden file passes.
 // - Candidates are not written under --only or --quick (the row set is partial), nor on a harness error; under
 //   --quick, golden rows the run did not produce are not counted as missing.
+// - A probe's candidate files always come from its latest run (S0 review R-G1 #4): after writing, every other
+//   <probe>.txt, <probe>.diff and <probe>.<key>.lines in <bless-to>/<arch>/<scope> is removed, including after a
+//   partial or failed run that writes none. A sidecar that belongs to a longer probe name (<probe>.<x>.txt or .diff
+//   exists beside it, golden.py's attribution rule) is left alone.
+// - --bless-to must not be --golden-root, lie inside it or contain it (compared after resolving symlinks and `..`, and
+//   by file identity on case-insensitive volumes): candidates at <root>/<arch>/<scope> would be the arch overlay, and
+//   the probe would bless itself (R-G1 #3).
+// - A num() row stores and compares exactly the "%.9g" text the golden file holds (R-G1 #6), so a freshly blessed
+//   candidate passes under le:0, ge:0, abs:0 and rel:0. num() refuses NaN and +-Inf (R-G1 #7); a value spelled as a
+//   non-finite number ([+-]inf, infinity, nan, nan(...), any case) is refused in text() rows and in golden files, and a
+//   golden row with a numeric tolerance must hold a finite number (golden.py refuses the same rows).
 // - Values are non-empty, at most 64 bytes, without whitespace or control characters. `lines` entries may hold any
 //   text except CR/LF. `lines` sidecars are base-only (03 §3.2.2 names no overlay for them); a sidecar's key is the
 //   file name between "<probe>." and ".lines", so a probe name must not be a dot-prefix of another probe's name in
@@ -53,8 +65,9 @@
 // - Probe::harnessError(why) (v0.0.1): a probe reports a harness-level failure (e.g. an unsettled UI ease, 03 §3.2.4)
 //   as exit 4.
 // - Probe::note(key, jsonValue): an extra member of the results JSON and the RESULT line, after the standard ones
-//   (03 §3.2.5: dsp.registry reports its provisional Mode keys as note("provisional", jsonArray(keys)), and
-//   golden.py adopt refuses rows of those Modes).
+//   (03 §3.2.5: dsp.registry reports its provisional Mode keys as note("provisional", jsonArray(keys)) on every run,
+//   "[]" when there are none; golden.py adopt refuses rows of those Modes, and refuses every Mode-scoped candidate
+//   when no results JSON of the build carries the list).
 // - setEnv / unsetEnv: HR's test helpers, for probes that sandbox a store through <ENV_PREFIX><NAME> variables.
 // - positionals(argc, argv): the arguments that are not harness flags or their values, so a tool can read its own
 //   inputs (a font file, a dump) from the same argv the Probe parses.
@@ -204,9 +217,9 @@ namespace funkgui::test
         Probe& operator=(const Probe&) = delete;
 
         // golden rows: drift detection, blessable
-        void num  (std::string_view key, double v, Tol t);                   // written with "%.9g"
+        void num  (std::string_view key, double v, Tol t);                   // finite; written and compared as "%.9g"
         void hash (std::string_view key, uint64_t h);                        // "%016llx", exact
-        void text (std::string_view key, std::string_view v);                // exact; no whitespace
+        void text (std::string_view key, std::string_view v);                // exact; no whitespace, not nan/inf
         void lines(std::string_view key, std::span<const std::string> v);    // multi-line text (a11y model, tab
                                                                              // order): sidecar <probe>.<key>.lines,
                                                                              // line-by-line diff
@@ -317,7 +330,27 @@ namespace funkgui::test
                                [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'; });
         }
 
-        // nullptr when the value is legal: non-empty, <= 64 bytes, no whitespace or control characters.
+        // Whether v spells a non-finite number the way strtod reads one: [+-]?(inf|infinity|nan|nan(<[0-9A-Za-z_]*>)),
+        // in any case (golden.py's NONFINITE_RE is the same set). Hash values never match: hex digits hold no 'i'/'n'.
+        inline bool nonFiniteSpelling(std::string_view v)
+        {
+            if (!v.empty() && (v.front() == '+' || v.front() == '-'))
+                v.remove_prefix(1);
+            std::string s(v);
+            for (char& c : s)
+                if (c >= 'A' && c <= 'Z')
+                    c = static_cast<char>(c - 'A' + 'a');
+            if (s == "inf" || s == "infinity" || s == "nan")
+                return true;
+            if (s.size() < 5 || !s.starts_with("nan(") || !s.ends_with(")"))
+                return false;
+            return std::all_of(s.begin() + 4, s.end() - 1, [](char c) {
+                return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+            });
+        }
+
+        // nullptr when the value is legal: non-empty, <= 64 bytes, no whitespace or control characters, not a spelling
+        // of a non-finite number (a NaN blessed as "nan<TAB>exact" would pass forever, R-G1 #7).
         inline const char* valueProblem(std::string_view v)
         {
             if (v.empty())
@@ -330,7 +363,48 @@ namespace funkgui::test
                 if (u <= 0x20 || u == 0x7f)
                     return "value contains whitespace or a control character";
             }
+            if (nonFiniteSpelling(v))
+                return "value spells a non-finite number";
             return nullptr;
+        }
+
+        // p made absolute, canonical as far as it exists (symlinks and `..` resolved) and lexically normal beyond.
+        inline std::filesystem::path resolvedPath(const std::filesystem::path& p)
+        {
+            std::error_code ec;
+            std::filesystem::path a = std::filesystem::absolute(p, ec);
+            if (ec)
+                a = p;
+            std::filesystem::path c = std::filesystem::weakly_canonical(a, ec);
+            return ec ? a.lexically_normal() : c;
+        }
+
+        // Whether `inner` is `outer` or lies under it (both resolved): by path components, or through an existing
+        // ancestor of `inner` that is the same directory as `outer` (a case-insensitive volume spells a directory many
+        // ways, and only a stat sees through that).
+        inline bool pathWithin(const std::filesystem::path& inner, const std::filesystem::path& outer)
+        {
+            const auto parts = [](const std::filesystem::path& p) {
+                std::vector<std::filesystem::path> v;
+                for (const auto& e : p)
+                    if (!e.empty())
+                        v.push_back(e);
+                return v;
+            };
+            const auto pi = parts(inner), po = parts(outer);
+            if (!po.empty() && pi.size() >= po.size() && std::equal(po.begin(), po.end(), pi.begin()))
+                return true;
+            std::error_code ec;
+            if (!std::filesystem::exists(outer, ec))
+                return false;
+            for (std::filesystem::path q = inner; !q.empty(); q = q.parent_path())
+            {
+                if (std::filesystem::exists(q, ec) && std::filesystem::equivalent(q, outer, ec))
+                    return true;
+                if (q == q.parent_path())
+                    break;
+            }
+            return false;
         }
 
         // Glob with `*` (any run, dots included) and `?` (one character).
@@ -769,6 +843,15 @@ namespace funkgui::test
             harnessError("--golden-root <dir> is required");
         else
             root_ = root;
+        // Candidates go to <bless-to>/<arch>/<scope>/<probe>.txt, which inside the golden tree is the arch overlay:
+        // a probe run could then bless itself (R-G1 #3; 03 §3.2.5 "the probes cannot bless at all").
+        if (haveRoot && !blessTo_.empty())
+        {
+            const std::filesystem::path r = detail::resolvedPath(root_), b = detail::resolvedPath(blessTo_);
+            if (detail::pathWithin(b, r) || detail::pathWithin(r, b))
+                harnessError("--bless-to must be outside --golden-root (--bless-to " + b.string() + ", --golden-root "
+                             + r.string() + "): probes never write the golden tree");
+        }
         if (!haveArch)
             harnessError("--arch arm64|x86_64 is required");
         else if (arch_ != "arm64" && arch_ != "x86_64")
@@ -843,7 +926,15 @@ namespace funkgui::test
             harnessError("invalid tolerance for '" + std::string(key) + "'");
             return;
         }
-        rows_.push_back({ std::string(key), detail::fmtNum(v), t, v, true });
+        if (!std::isfinite(v))
+        {
+            harnessError("num '" + std::string(key) + "': non-finite value " + detail::fmtNum(v));
+            return;
+        }
+        // Compared as the file holds it: the "%.9g" text read back, never the unrounded value (R-G1 #6).
+        std::string printed = detail::fmtNum(v);
+        const double stored = std::strtod(printed.c_str(), nullptr);
+        rows_.push_back({ std::string(key), std::move(printed), t, stored, true });
     }
 
     inline void Probe::hash(std::string_view key, uint64_t h)
@@ -974,6 +1065,11 @@ namespace funkgui::test
             if (g.tol.kind != Tol::Kind::exact && !detail::parseNum(g.value, g.num))
             {
                 harnessError(where + "numeric tolerance on the non-numeric value '" + g.value + "'");
+                continue;
+            }
+            if (g.tol.kind != Tol::Kind::exact && !std::isfinite(g.num))
+            {
+                harnessError(where + "numeric tolerance on the non-finite value '" + g.value + "'");
                 continue;
             }
             if (!seen.insert(key).second)
@@ -1154,44 +1250,85 @@ namespace funkgui::test
         }
         const bool drift = haveGolden && (goldenFail + goldenNew + goldenMissingRows) > 0;
 
-        // 4. candidates: the full measured row set, each file atomically (not under --only/--quick or an error)
+        // 4. candidates: the full measured row set, each file atomically (not under --only/--quick or an error). Then
+        //    every other candidate file of this probe is removed, so what golden.py finds always belongs to the run
+        //    the results JSON describes (R-G1 #4).
         if (locatable && !blessTo_.empty())
         {
             const fs::path dir = blessTo_ / arch_ / scope_;
+            std::set<std::string, std::less<>> written;                // file names in dir
             if (!errors_.empty() || quick_ || !only_.empty())
                 std::printf("CANDIDATE not written (%s)\n",
                             !errors_.empty() ? "harness error" : "partial row set under --only/--quick");
-            else if (goldenRows > 0)
+            else
             {
                 std::string err;
-                const fs::path txt = dir / (probe_ + ".txt");
+                const auto emit = [&](const std::string& fileName, const std::string& content)
+                {
+                    if (detail::writeAtomic(dir / fileName, content, err))
+                        written.insert(fileName);
+                    else
+                        harnessError(err);
+                };
                 if (!rows_.empty())
                 {
                     std::string body = "# funkgui-golden 2  probe=" + probe_ + "  scope=" + scope_ + "\n"
                                      + "# key\tvalue\ttolerance\n";
                     for (const auto& r : rows_)
                         body += r.key + "\t" + r.value + "\t" + r.tol.text() + "\n";
-                    if (!detail::writeAtomic(txt, body, err))
-                        harnessError(err);
+                    emit(probe_ + ".txt", body);
                 }
                 for (const auto& lr : lines_)
-                    if (!detail::writeAtomic(dir / (prefix + lr.key + suffix), detail::joinLines(lr.v), err))
-                        harnessError(err);
-                const fs::path diffPath = dir / (probe_ + ".diff");
-                if (drift)
+                    emit(prefix + lr.key + suffix, detail::joinLines(lr.v));
+                if (drift)                                             // also when this run has no golden rows left
                 {
                     std::string body = "# funkgui-golden-diff 2  probe=" + probe_ + "  scope=" + scope_
                                      + "  arch=" + arch_ + "\n";
                     for (const auto& l : diff)
                         body += l + "\n";
-                    if (!detail::writeAtomic(diffPath, body, err))
-                        harnessError(err);
+                    emit(probe_ + ".diff", body);
                 }
-                else
-                    fs::remove(diffPath, ec);
-                if (errors_.empty())
-                    std::printf("CANDIDATE %s%s\n", (rows_.empty() ? dir : txt).string().c_str(),
+                if (errors_.empty() && !written.empty())
+                    std::printf("CANDIDATE %s%s\n",
+                                (rows_.empty() ? dir : dir / (probe_ + ".txt")).string().c_str(),
                                 drift ? " (+ .diff)" : "");
+            }
+
+            // Stale files of this probe from an earlier run: a .txt when this run has no rows, a .diff when it does not
+            // drift, a sidecar of a key it no longer produces (golden.py would adopt that sidecar into base, and every
+            // later run would report it MISSING). A sidecar whose name also fits a longer probe that has a .txt or
+            // .diff here is that probe's (golden.py's longest-owner rule) and is kept.
+            std::vector<fs::path> stale;
+            if (fs::is_directory(dir, ec))
+                for (const auto& e : fs::directory_iterator(dir, ec))
+                {
+                    const std::string name = e.path().filename().string();
+                    if (written.contains(name))
+                        continue;
+                    bool mine = name == probe_ + ".txt" || name == probe_ + ".diff";
+                    if (!mine && name.size() > prefix.size() + suffix.size() && name.starts_with(prefix)
+                        && name.ends_with(suffix))
+                    {
+                        const std::string key = name.substr(prefix.size(), name.size() - prefix.size() - suffix.size());
+                        mine = detail::validKey(key);
+                        for (std::size_t dot = key.find('.'); mine && dot != std::string::npos;
+                             dot = key.find('.', dot + 1))
+                        {
+                            const std::string longer = prefix + key.substr(0, dot);
+                            std::error_code ignored;
+                            if (fs::exists(dir / (longer + ".txt"), ignored)
+                                || fs::exists(dir / (longer + ".diff"), ignored))
+                                mine = false;
+                        }
+                    }
+                    if (mine)
+                        stale.push_back(e.path());
+                }
+            for (const auto& p : stale)
+            {
+                std::error_code rec;
+                if (!fs::remove(p, rec) && rec)
+                    harnessError("cannot remove the stale candidate " + p.string() + ": " + rec.message());
             }
         }
 

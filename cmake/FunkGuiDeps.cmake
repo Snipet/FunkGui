@@ -5,17 +5,17 @@
 # targets available and that they are 8.0.4. In a GPU configuration it uses the consumer's bgfx when a `bgfx` target
 # exists and otherwise fetches it itself (the guarded fallback, with NORMAL variables only: a CACHE … FORCE write would
 # outlive this file in the consumer's cache, K2 #17). The shaderc check accepts either a prebuilt FUNKGUI_SHADERC or a
-# `shaderc` target.
+# `shaderc` target. A prebuilt FUNKGUI_SHADERC must carry a shaderc.stamp naming the pinned bgfx.cmake SHA (FATAL at
+# top level, a WARNING in a consumer, which checks its own pin).
 #
 # Top level (FunkGui's own tools and tests): the same ~/audio/.deps defaults, pins and SHA asserts as FCompressor's
 # cmake/FcmpDeps.cmake (03 §2.3), the stamped prebuilt shaderc when it matches the pin (03 §2.5), then the checks above.
+#
+# Output for FunkGuiTargets.cmake: FUNKGUI_SHADERC_STAMP, the stamp line of the shaderc that compiles the shaders (the
+# prebuilt one's shaderc.stamp, or "bgfx.cmake <HEAD>" of the sources a shaderc target is built from); fg.shader.hash
+# asserts it against the pin with a spec row (S0 review R-G1 #9).
 
 include(FetchContent)
-
-# A prebuilt shaderc that does not exist fails first, before JUCE or bgfx is configured (02 §1.4, 03 §2.5).
-if(FUNKGUI_WITH_BGFX AND NOT FUNKGUI_HARNESS_ONLY AND FUNKGUI_SHADERC AND NOT EXISTS "${FUNKGUI_SHADERC}")
-  message(FATAL_ERROR "FunkGui: FUNKGUI_SHADERC=${FUNKGUI_SHADERC} does not exist")
-endif()
 
 # ---- Pins (03 §1.3). The consumer pins its own copies; top-level FunkGui builds assert these. ------------------------
 set(FUNKGUI_JUCE_TAG  8.0.4)
@@ -28,24 +28,51 @@ set(FUNKGUI_BGFX_SUB_SHAS bgfx=c7684e20da1e385edc439ef39cdb42b8c661016f bx=0b001
 
 # ---- Helpers ---------------------------------------------------------------------------------------------------------
 
-# DIR must be its own git repository root and its HEAD must equal SHA. A SHA mismatch is FATAL; a directory that is not
-# a git checkout gets a WARNING (the version checks still apply). Read-only git commands only (.deps is chmod a-w).
-function(_funkgui_assert_git dir sha name)
+# HEAD of DIR when DIR is its own git repository root ("(no HEAD)" when it has none), else "". Read-only git commands
+# only (.deps is chmod a-w).
+function(_funkgui_git_head dir out_var)
+  set(${out_var} "" PARENT_SCOPE)
   execute_process(COMMAND git -C "${dir}" rev-parse --show-toplevel
                   OUTPUT_VARIABLE _top OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _rc ERROR_QUIET)
-  if(_rc EQUAL 0)
-    file(REAL_PATH "${_top}" _top)
-    file(REAL_PATH "${dir}" _dir)
+  if(NOT _rc EQUAL 0)
+    return()
   endif()
-  if(NOT _rc EQUAL 0 OR NOT _top STREQUAL _dir)
+  file(REAL_PATH "${_top}" _top)
+  file(REAL_PATH "${dir}" _dir)
+  if(NOT _top STREQUAL _dir)
+    return()
+  endif()
+  execute_process(COMMAND git -C "${dir}" rev-parse --verify HEAD
+                  OUTPUT_VARIABLE _head OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _rc ERROR_QUIET)
+  if(NOT _rc EQUAL 0 OR _head STREQUAL "")
+    set(_head "(no HEAD)")
+  endif()
+  set(${out_var} "${_head}" PARENT_SCOPE)
+endfunction()
+
+# DIR must be its own git repository root and its HEAD must equal SHA. A SHA mismatch is FATAL; a directory that is not
+# a git checkout gets a WARNING (the version checks still apply).
+function(_funkgui_assert_git dir sha name)
+  _funkgui_git_head("${dir}" _head)
+  if(_head STREQUAL "")
     message(WARNING "FunkGui: ${name} at ${dir} is not a git checkout of its own; its SHA cannot be checked")
     return()
   endif()
-  execute_process(COMMAND git -C "${dir}" rev-parse HEAD
-                  OUTPUT_VARIABLE _head OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
   if(NOT _head STREQUAL sha)
     message(FATAL_ERROR "FunkGui: ${name} at ${dir} is ${_head}, the pin is ${sha}")
   endif()
+endfunction()
+
+# The first line of <directory of SHADERC>/shaderc.stamp ("bgfx.cmake <sha>", written last by deps.sh), or "" when
+# there is none. The stamp file becomes a configure dependency, so a re-stamped tool re-runs these checks.
+function(_funkgui_shaderc_stamp shaderc out_var)
+  get_filename_component(_dir "${shaderc}" DIRECTORY)
+  set(_line "")
+  if(EXISTS "${_dir}/shaderc.stamp")
+    file(STRINGS "${_dir}/shaderc.stamp" _line LIMIT_COUNT 1)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_dir}/shaderc.stamp")
+  endif()
+  set(${out_var} "${_line}" PARENT_SCOPE)
 endfunction()
 
 # Parse JUCE's version from juce_core/system/juce_StandardHeader.h under the modules directory.
@@ -66,6 +93,31 @@ function(_funkgui_juce_version modules_dir out_var)
   list(JOIN _v "." _v)
   set(${out_var} "${_v}" PARENT_SCOPE)
 endfunction()
+
+# ---- A given prebuilt shaderc fails first, before JUCE or bgfx is configured (02 §1.4, 03 §2.5) ---------------------
+# It must exist, and its stamp must name the pinned bgfx.cmake: a shaderc built from another bgfx would otherwise show
+# only as a DRIFT row of fg.shader.hash, which passes CTest (R-G1 #9).
+if(FUNKGUI_WITH_BGFX AND NOT FUNKGUI_HARNESS_ONLY AND FUNKGUI_SHADERC)
+  if(NOT EXISTS "${FUNKGUI_SHADERC}")
+    message(FATAL_ERROR "FunkGui: FUNKGUI_SHADERC=${FUNKGUI_SHADERC} does not exist")
+  endif()
+  _funkgui_shaderc_stamp("${FUNKGUI_SHADERC}" _fg_given_stamp)
+  if(NOT _fg_given_stamp STREQUAL "bgfx.cmake ${FUNKGUI_BGFX_SHA}")
+    if(_fg_given_stamp STREQUAL "")
+      set(_fg_why "has no shaderc.stamp beside it")
+    else()
+      set(_fg_why "is stamped '${_fg_given_stamp}'")
+    endif()
+    if(PROJECT_IS_TOP_LEVEL)
+      message(FATAL_ERROR "FunkGui: FUNKGUI_SHADERC=${FUNKGUI_SHADERC} ${_fg_why}; FunkGui needs a shaderc stamped "
+                          "'bgfx.cmake ${FUNKGUI_BGFX_SHA}' (FCompressor's Scripts/deps.sh builds one; or leave "
+                          "FUNKGUI_SHADERC empty to use the stamped one in FUNKGUI_DEPS_DIR or build it, 03 §2.5)")
+    else()
+      message(WARNING "FunkGui: FUNKGUI_SHADERC=${FUNKGUI_SHADERC} ${_fg_why}; FunkGui is pinned to bgfx.cmake "
+                      "${FUNKGUI_BGFX_SHA} (03 §2.5)")
+    endif()
+  endif()
+endif()
 
 # ---- Top level: machine-cache defaults, declarations, prebuilt shaderc -----------------------------------------------
 if(PROJECT_IS_TOP_LEVEL)
@@ -195,5 +247,17 @@ if(FUNKGUI_WITH_BGFX AND NOT FUNKGUI_HARNESS_ONLY)
       list(GET _pair 1 _sha)
       _funkgui_assert_git("${_fg_bgfx_src}/${_sub}" ${_sha} bgfx.cmake/${_sub})
     endforeach()
+  endif()
+
+  # FUNKGUI_SHADERC_STAMP (see the top of this file): what the shaders are compiled with.
+  if(FUNKGUI_SHADERC)
+    _funkgui_shaderc_stamp("${FUNKGUI_SHADERC}" FUNKGUI_SHADERC_STAMP)
+  else()
+    _funkgui_git_head("${_fg_bgfx_src}" _fg_head)
+    if(NOT _fg_head STREQUAL "")
+      set(FUNKGUI_SHADERC_STAMP "bgfx.cmake ${_fg_head}")
+    else()
+      set(FUNKGUI_SHADERC_STAMP "bgfx.cmake (unknown: ${_fg_bgfx_src} is not a git checkout)")
+    endif()
   endif()
 endif()
