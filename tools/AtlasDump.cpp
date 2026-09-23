@@ -1,22 +1,21 @@
-// Offscreen harness: bakes the SDF font atlas exactly as the editor does,
-// times it, and writes two PNGs — the raw distance field, and a rendering of
-// a sample string through the same edge function the fragment shader uses.
+// AtlasDump: bakes the SDF font atlas exactly as the editor does, times it, and writes a specimen PNG: sample strings
+// rendered through the same edge function the fragment shader uses, at the sizes a panel draws them.
 //
-// The editor has no headless mode, so without this there is no way to inspect
-// glyph quality or bake cost except by eye on a running plugin.
+// Without it there is no way to inspect glyph quality or bake cost except by eye on a running plug-in. It is a tool
+// for people, not a probe: it writes pictures and prints timings, and gates nothing.
 //
-// Extra arguments are typeface names; each is baked and rendered so the same
-// strings can be compared at the sizes the panel actually draws them. This is
-// how a bundled face gets chosen: the 48 px bake is downsampled to 10-11 px
-// for labels, and that downsample is what separates faces that survive from
-// faces that go to mush.
+// Extra arguments are typeface names (or paths to font files); each is baked and rendered so the same strings can be
+// compared at the sizes the panel actually draws them. This is how a bundled face gets chosen: the 48 px bake is
+// downsampled to 10-11 px for labels, and that downsample is what separates faces that survive from faces that go to
+// mush. No face argument means the bundled face.
 //
-//   cmake --build build --target HardwareReverbAtlasDump
-//   ./build/HardwareReverbAtlasDump /tmp/out "IBM Plex Sans" "Open Sans"
+//   cmake --build <build> --target FunkGuiAtlasDump
+//   <build>/FunkGuiAtlasDump_artefacts/<config>/FunkGuiAtlasDump [<out-dir>] ["IBM Plex Sans" "/path/face.ttf" ...]
+//
+// <out-dir> defaults to <system temp>/FunkGuiAtlasDump. (Seeded from HardwareReverb Tools/AtlasDump.cpp.)
 
-#include "gui/FontAtlasSdf.h"
-
-#include "gui/BundledFont.h"
+#include <funkgui/text/BundledFont.h>
+#include <funkgui/text/FontAtlasSdf.h>
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <chrono>
@@ -52,8 +51,9 @@ int main(int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
 
-    const juce::File outDir(argc > 1 ? juce::String(argv[1])
-                                     : juce::String("/tmp/hrvb-atlas"));
+    const juce::File outDir = argc > 1
+        ? juce::File::getCurrentWorkingDirectory().getChildFile(juce::String::fromUTF8(argv[1]))
+        : juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("FunkGuiAtlasDump");
     outDir.createDirectory();
 
     juce::StringArray faces;
@@ -63,7 +63,7 @@ int main(int argc, char** argv)
     // The strings the panel actually draws, at the sizes it draws them.
     struct Line { const char* text; float px; float weight; };
     static const Line lines[] = {
-        { "DECAY  SIZE  DAMPING  MIX  PRE-DELAY  X-OVER", 11.0f, 0.03f },
+        { "INPUT  THRESHOLD  RATIO  ATTACK  RELEASE  MIX", 11.0f, 0.03f },
         { "4.04 S   94 MS   0.30 HZ   35 %   1.00 X", 24.0f, 0.0f },
         { "PER PASS -1.40 DB   HF CORNER 3.3 KHZ", 10.0f, 0.03f },
         { "1.00  11.5  4.04", 44.0f, 0.03f },
@@ -85,7 +85,7 @@ int main(int argc, char** argv)
         bool fromFile = false;
         if (faces[fi].contains("/"))
         {
-            juce::File f{ faces[fi] };
+            const juce::File f = juce::File::getCurrentWorkingDirectory().getChildFile(faces[fi]);
             fromFile = f.existsAsFile() && f.loadFileAsData(mb);
         }
         // An empty name means "what the plugin actually ships", i.e. the
@@ -100,8 +100,9 @@ int main(int argc, char** argv)
 
         const juce::String label = faces[fi].isEmpty()
             ? juce::String("(bundled: ") + funkgui::BundledFont::name() + ")"
-            : (faces[fi].contains("/") ? juce::File{ faces[fi] }.getFileNameWithoutExtension()
-                                       : faces[fi]);
+            : (faces[fi].contains("/")
+                   ? juce::File::getCurrentWorkingDirectory().getChildFile(faces[fi]).getFileNameWithoutExtension()
+                   : faces[fi]);
         std::printf("%-24s %s  %5.1f ms  cap %.1f  x %.1f  x/cap %.2f\n",
                     label.toRawUTF8(), ok ? "ok " : "BAD", ms,
                     atlas.capHeight(), atlas.xHeight(),

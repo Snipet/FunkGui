@@ -1,7 +1,9 @@
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
 
-#include "NativeSurface.h"
+#include <funkgui/gpu/NativeSurface.h>
+
+#include <funkgui/core/Config.h>   // FUNKGUI_OBJC_NAME
 
 // Layer-backed, click-through child view. bgfx replaces/attaches the Metal
 // layer; JUCE's flipped peer view keeps handling all input.

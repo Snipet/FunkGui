@@ -48,8 +48,19 @@
 //   the same scope if either writes `lines` (FCompressor's <layer>.<name> names never are).
 // - Results JSON: <results>/<probe>.json (global) or <probe>.<mode>.json, written atomically; the same object is
 //   printed as the final "RESULT {...}" line.
-// - harnessError(why) is the one addition to the 03 §3.2.1 API: it lets a probe report a harness-level failure
-//   (e.g. an unsettled UI ease, 03 §3.2.4) as exit 4.
+//
+// Additions to the 03 §3.2.1 API (v0.0.1 and G1/v0.1.0; additions only, never renames):
+// - Probe::harnessError(why) (v0.0.1): a probe reports a harness-level failure (e.g. an unsettled UI ease, 03 §3.2.4)
+//   as exit 4.
+// - Probe::note(key, jsonValue): an extra member of the results JSON and the RESULT line, after the standard ones
+//   (03 §3.2.5: dsp.registry reports its provisional Mode keys as note("provisional", jsonArray(keys)), and
+//   golden.py adopt refuses rows of those Modes).
+// - setEnv / unsetEnv: HR's test helpers, for probes that sandbox a store through <ENV_PREFIX><NAME> variables.
+// - positionals(argc, argv): the arguments that are not harness flags or their values, so a tool can read its own
+//   inputs (a font file, a dump) from the same argv the Probe parses.
+// - jsonArray(items): a JSON array of strings, for note().
+// There is no --check flag: every run compares against the golden files (v1's --check is the only mode), and
+// candidates go to --bless-to, never into the tree.
 
 #include <algorithm>
 #include <chrono>
@@ -171,6 +182,19 @@ namespace funkgui::test
         return h;
     }
 
+    // HR's test helpers (POSIX setenv/unsetenv; not safe against a concurrent getenv on another thread). A probe sets
+    // <ENV_PREFIX><NAME> before the library reads it; funkgui::env() caches on first use, so a value the library has
+    // already read needs funkgui::envReload() (core/Env.h) afterwards. Return false when the call fails.
+    inline bool setEnv(const char* name, const char* value) { return ::setenv(name, value, 1) == 0; }
+    inline bool unsetEnv(const char* name) { return ::unsetenv(name) == 0; }
+
+    // argv[1..] without the harness flags of 03 §3.2.2 and their values, in order: the subcommand (<layer>.<name>)
+    // and a tool's own inputs. Parsed exactly as Probe parses them, so a flag's value is never taken for an input.
+    std::vector<std::string> positionals(int argc, char** argv);
+
+    // A JSON array of strings, e.g. for Probe::note("provisional", jsonArray(keys)).
+    std::string jsonArray(std::span<const std::string> items);
+
     class Probe
     {
     public:
@@ -198,6 +222,12 @@ namespace funkgui::test
 
         void harnessError(std::string_view why);     // addition to 03 §3.2.1: fail the run with exit 4
 
+        // Addition to 03 §3.2.1: add the member "<key>":<jsonValue> to the results JSON and the RESULT line, after
+        // the standard members, in call order. key matches ^[a-z][a-z0-9_]{0,63}$, is not a standard member and is
+        // noted at most once per run; jsonValue is exactly one JSON value on one line ("3", "true", "\"text\"",
+        // jsonArray(keys)). Anything else is a harness error. Notes are kept whatever the run's status.
+        void note(std::string_view key, std::string_view jsonValue);
+
     private:
         struct Row      { std::string key, value; Tol tol; double num = 0; bool numeric = false; };
         struct LinesRow { std::string key; std::vector<std::string> v; };
@@ -214,6 +244,7 @@ namespace funkgui::test
 
         std::vector<Row> rows_;
         std::vector<LinesRow> lines_;
+        std::vector<std::pair<std::string, std::string>> notes_;
         std::set<std::string, std::less<>> goldenKeys_, specKeys_;
         std::vector<std::string> errors_;
         int specPass_ = 0, specFail_ = 0;
@@ -335,6 +366,156 @@ namespace funkgui::test
             }
             return o + "\"";
         }
+
+        // The harness flags of 03 §3.2.2 that take a value (the others are --quick and --verbose).
+        inline bool flagTakesValue(std::string_view a) noexcept
+        {
+            return a == "--mode" || a == "--golden-root" || a == "--arch" || a == "--bless-to" || a == "--results"
+                || a == "--only";
+        }
+
+        // ^[a-z][a-z0-9_]{0,63}$ and not one of the standard results members.
+        inline bool validNoteKey(std::string_view k)
+        {
+            if (k.empty() || k.size() > 64 || !(k[0] >= 'a' && k[0] <= 'z'))
+                return false;
+            for (const char c : k)
+                if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_'))
+                    return false;
+            static constexpr std::string_view kStandard[] = { "probe", "mode", "arch", "status", "spec_pass",
+                                                              "spec_fail", "golden_rows", "golden_fail", "golden_new",
+                                                              "golden_missing_rows", "ms" };
+            return std::find(std::begin(kStandard), std::end(kStandard), k) == std::end(kStandard);
+        }
+
+        // Whether s is exactly one JSON value (RFC 8259) on one line: no CR or LF anywhere, nesting depth <= 64.
+        class JsonCheck
+        {
+        public:
+            explicit JsonCheck(std::string_view s) : s_(s) {}
+            bool ok()
+            {
+                space();
+                if (!value(0))
+                    return false;
+                space();
+                return i_ == s_.size();
+            }
+
+        private:
+            std::string_view s_;
+            std::size_t i_ = 0;
+
+            char peek() const noexcept { return i_ < s_.size() ? s_[i_] : '\0'; }
+            bool digit() const noexcept { return peek() >= '0' && peek() <= '9'; }
+            void space() noexcept { while (peek() == ' ' || peek() == '\t') ++i_; }
+            bool literal(std::string_view w)
+            {
+                if (s_.substr(i_, w.size()) != w)
+                    return false;
+                i_ += w.size();
+                return true;
+            }
+            bool value(int depth)
+            {
+                if (depth > 64)
+                    return false;
+                switch (peek())
+                {
+                    case '{': return container(depth, '}', true);
+                    case '[': return container(depth, ']', false);
+                    case '"': return string();
+                    case 't': return literal("true");
+                    case 'f': return literal("false");
+                    case 'n': return literal("null");
+                    default:  return number();
+                }
+            }
+            bool container(int depth, char close, bool members)
+            {
+                ++i_;
+                space();
+                if (peek() == close) { ++i_; return true; }
+                for (;;)
+                {
+                    space();
+                    if (members)
+                    {
+                        if (!string())
+                            return false;
+                        space();
+                        if (peek() != ':')
+                            return false;
+                        ++i_;
+                        space();
+                    }
+                    if (!value(depth + 1))
+                        return false;
+                    space();
+                    if (peek() == ',') { ++i_; continue; }
+                    if (peek() == close) { ++i_; return true; }
+                    return false;
+                }
+            }
+            bool string()
+            {
+                if (peek() != '"')
+                    return false;
+                ++i_;
+                while (i_ < s_.size())
+                {
+                    const auto c = static_cast<unsigned char>(s_[i_++]);
+                    if (c == '"')
+                        return true;
+                    if (c < 0x20)
+                        return false;
+                    if (c != '\\')
+                        continue;
+                    const char e = peek();
+                    ++i_;
+                    if (e == 'u')
+                    {
+                        for (int k = 0; k < 4; ++k, ++i_)
+                        {
+                            const char h = peek();
+                            if (!((h >= '0' && h <= '9') || (h >= 'a' && h <= 'f') || (h >= 'A' && h <= 'F')))
+                                return false;
+                        }
+                    }
+                    else if (e == '\0' || std::string_view("\"\\/bfnrt").find(e) == std::string_view::npos)
+                        return false;
+                }
+                return false;
+            }
+            bool number()
+            {
+                if (peek() == '-')
+                    ++i_;
+                if (peek() == '0')
+                    ++i_;
+                else if (digit())
+                    while (digit()) ++i_;
+                else
+                    return false;
+                if (peek() == '.')
+                {
+                    ++i_;
+                    if (!digit())
+                        return false;
+                    while (digit()) ++i_;
+                }
+                if (peek() == 'e' || peek() == 'E')
+                {
+                    ++i_;
+                    if (peek() == '+' || peek() == '-')
+                        ++i_;
+                    if (!digit())
+                        return false;
+                    while (digit()) ++i_;
+                }
+                return true;
+            }
+        };
 
         inline bool tolAccepts(const Tol& t, double got, double golden) noexcept
         {
@@ -516,6 +697,34 @@ namespace funkgui::test
         return std::nullopt;
     }
 
+    inline std::vector<std::string> positionals(int argc, char** argv)
+    {
+        std::vector<std::string> out;
+        for (int i = 1; i < argc; ++i)
+        {
+            const std::string_view a = argv[i] != nullptr ? argv[i] : "";
+            if (!a.starts_with("--"))
+            {
+                out.emplace_back(a);
+                continue;
+            }
+            // A value flag consumes the next token unless it is missing, empty or another flag (the Probe reports
+            // that as a harness error and does not consume it either).
+            if (detail::flagTakesValue(a) && i + 1 < argc && argv[i + 1] != nullptr && argv[i + 1][0] != '\0'
+                && !std::string_view(argv[i + 1]).starts_with("--"))
+                ++i;
+        }
+        return out;
+    }
+
+    inline std::string jsonArray(std::span<const std::string> items)
+    {
+        std::string o = "[";
+        for (std::size_t i = 0; i < items.size(); ++i)
+            o += (i == 0 ? "" : ",") + detail::jsonString(items[i]);
+        return o + "]";
+    }
+
     inline Probe::Probe(std::string_view probe, std::string_view mode, int argc, char** argv)
         : probe_(probe), mode_(mode), t0_(std::chrono::steady_clock::now())
     {
@@ -576,6 +785,28 @@ namespace funkgui::test
     {
         errors_.emplace_back(why);
         std::printf("HARNESS ERROR  %.*s\n", static_cast<int>(why.size()), why.data());
+    }
+
+    inline void Probe::note(std::string_view key, std::string_view jsonValue)
+    {
+        if (!detail::validNoteKey(key))
+        {
+            harnessError("note: invalid or reserved key '" + std::string(key) + "' (^[a-z][a-z0-9_]{0,63}$, not a "
+                         "standard results member)");
+            return;
+        }
+        if (std::any_of(notes_.begin(), notes_.end(), [&](const auto& n) { return n.first == key; }))
+        {
+            harnessError("note: duplicate key '" + std::string(key) + "' in this run");
+            return;
+        }
+        if (!detail::JsonCheck(jsonValue).ok())
+        {
+            harnessError("note '" + std::string(key) + "': not exactly one JSON value on one line: "
+                         + std::string(jsonValue.substr(0, 80)));
+            return;
+        }
+        notes_.emplace_back(std::string(key), std::string(jsonValue));
     }
 
     inline bool Probe::quick() const noexcept { return quick_; }
@@ -977,13 +1208,16 @@ namespace funkgui::test
                                  std::chrono::steady_clock::now() - t0_).count();
         const auto json = [&]()
         {
-            return std::string("{\"probe\":") + detail::jsonString(probe_) + ",\"mode\":" + detail::jsonString(mode_)
+            std::string o = std::string("{\"probe\":") + detail::jsonString(probe_) + ",\"mode\":" + detail::jsonString(mode_)
                  + ",\"arch\":" + detail::jsonString(arch_) + ",\"status\":\"" + statusOf().second + "\""
                  + ",\"spec_pass\":" + std::to_string(specPass_) + ",\"spec_fail\":" + std::to_string(specFail_)
                  + ",\"golden_rows\":" + std::to_string(goldenRows) + ",\"golden_fail\":" + std::to_string(goldenFail)
                  + ",\"golden_new\":" + std::to_string(goldenNew)
                  + ",\"golden_missing_rows\":" + std::to_string(goldenMissingRows)
-                 + ",\"ms\":" + std::to_string(ms) + "}";
+                 + ",\"ms\":" + std::to_string(ms);
+            for (const auto& [key, value] : notes_)
+                o += ",\"" + key + "\":" + value;
+            return o + "}";
         };
         if (!results_.empty())
         {

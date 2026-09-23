@@ -1,6 +1,6 @@
-#include "BgfxContext.h"
+#include <funkgui/gpu/BgfxContext.h>
 
-#include "BundledFont.h"
+#include <funkgui/text/BundledFont.h>
 
 #include <cassert>
 #include <cstring>

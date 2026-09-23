@@ -1,7 +1,7 @@
 #pragma once
 
 #include <bgfx/bgfx.h>
-#include "Col.h"
+#include <funkgui/core/Col.h>
 #include <cstdint>
 #include <vector>
 

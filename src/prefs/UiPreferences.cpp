@@ -1,7 +1,8 @@
-#include "UiPreferences.h"
-#include "Theme.h"
+#include <funkgui/prefs/UiPreferences.h>
 
-#include <cstdlib>
+#include <funkgui/core/Config.h>
+#include <funkgui/core/Env.h>
+#include <funkgui/core/Theme.h>
 
 namespace funkgui
 {
