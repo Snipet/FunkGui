@@ -4,11 +4,52 @@
 #include <funkgui/core/Env.h>
 #include <funkgui/core/Theme.h>
 
+#include <charconv>
+#include <string>
+#include <system_error>
+#include <utility>
+
 namespace funkgui
 {
     namespace
     {
         constexpr const char* kThemeKey = "theme";
+
+        juce::PropertiesFile::Options storeOptions()
+        {
+            juce::PropertiesFile::Options o;
+            o.applicationName     = "preferences";
+            o.filenameSuffix      = "settings";
+            o.folderName          = FUNKGUI_PREFS_FOLDER;
+            o.osxLibrarySubFolder = "Application Support";
+            o.commonToAllUsers    = false;
+            o.doNotSave           = false;
+            return o;
+        }
+
+        // The store's keys ignore case (juce::PropertiesFile::Options::ignoreCaseOfKeyNames), so "Theme" is the theme.
+        bool isThemeKey(const char* key)
+        {
+            return juce::String(key).equalsIgnoreCase(kThemeKey);
+        }
+
+        int clampTo(int v, int lo, int hi) noexcept
+        {
+            return v < lo ? lo : (v > hi ? hi : v);
+        }
+
+        // A decimal integer that fits an int ("-12", "48"), and nothing else: juce::String::getIntValue() reads "48abc"
+        // as 48 and "abc" as 0, which would turn a damaged file into a real setting.
+        bool parseInt(const juce::String& s, int& out)
+        {
+            const std::string t = s.toStdString();
+            if (t.empty())
+                return false;
+            const char* first = t.data();
+            const char* last = t.data() + t.size();
+            const auto [end, ec] = std::from_chars(first, last, out);
+            return ec == std::errc{} && end == last;
+        }
     }
 
     UiPreferences& UiPreferences::get()
@@ -22,15 +63,14 @@ namespace funkgui
         return *prefs;
     }
 
+    juce::File UiPreferences::defaultFile()
+    {
+        return storeOptions().getDefaultFile();
+    }
+
     UiPreferences::UiPreferences()
     {
-        juce::PropertiesFile::Options o;
-        o.applicationName     = "preferences";
-        o.filenameSuffix      = "settings";
-        o.folderName          = FUNKGUI_PREFS_FOLDER;
-        o.osxLibrarySubFolder = "Application Support";
-        o.commonToAllUsers    = false;
-        o.doNotSave           = false;
+        const juce::PropertiesFile::Options o = storeOptions();
 
         // <ENV_PREFIX>PREFS_DIR redirects the store to a directory of the caller's
         // choosing. It exists so the preferences harness can run against a
@@ -45,13 +85,20 @@ namespace funkgui
                               file_->getIntValue(kThemeKey, 0));
     }
 
+    juce::File UiPreferences::file() const
+    {
+        return file_ != nullptr ? file_->getFile() : juce::File();
+    }
+
     void UiPreferences::reload()
     {
         if (file_ == nullptr) return;
+        const juce::StringPairArray before = file_->getAllProperties();
         file_->reload();
-        const int fresh = juce::jlimit(0, Theme::kCount - 1,
-                                       file_->getIntValue(kThemeKey, 0));
-        if (fresh != theme_) { theme_ = fresh; ++revision_; }
+        theme_ = juce::jlimit(0, Theme::kCount - 1,
+                              file_->getIntValue(kThemeKey, 0));
+        // Any key, not just the theme: an editor follows every preference.
+        if (file_->getAllProperties() != before) ++revision_;
     }
 
     void UiPreferences::setTheme(int idx)
@@ -71,5 +118,38 @@ namespace funkgui
             // last-writer-wins, which is the right semantics for a preference.
             file_->saveIfNeeded();
         }
+    }
+
+    int UiPreferences::getInt(const char* key, int fallback, int lo, int hi) const
+    {
+        if (lo > hi)
+            std::swap(lo, hi);
+        if (key == nullptr || key[0] == '\0')
+            return clampTo(fallback, lo, hi);
+        if (isThemeKey(key))
+            return clampTo(theme_, lo, hi);
+        int v = fallback;
+        if (file_ != nullptr && file_->containsKey(key) && !parseInt(file_->getValue(key), v))
+            v = fallback;
+        return clampTo(v, lo, hi);
+    }
+
+    void UiPreferences::setInt(const char* key, int value)
+    {
+        if (key == nullptr || key[0] == '\0')
+            return;
+        if (isThemeKey(key))
+        {
+            setTheme(value);                             // the theme keeps its clamp and its cached copy
+            return;
+        }
+        if (file_ == nullptr)
+            return;
+        const juce::String text(value);
+        if (file_->containsKey(key) && file_->getValue(key) == text)
+            return;                                      // already held: no write, no revision
+        file_->setValue(key, text);
+        file_->saveIfNeeded();                           // written through, as setTheme()
+        ++revision_;
     }
 }

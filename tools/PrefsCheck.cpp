@@ -11,9 +11,12 @@
 //
 //   FunkGuiPrefsCheck <probe> --golden-root <dir> --arch arm64|x86_64 [--bless-to <dir>] [--results <dir>]
 //   FunkGuiPrefsCheck write <n> | read | clamp        by hand, in <ENV_PREFIX>PREFS_DIR or a fresh temp directory
+//   FunkGuiPrefsCheck setint <key> <n> | getint <key>  the same, for a generic int key (G6)
 //
-// Spec rows: the store's contract. Golden rows: the on-disk format (bytes of a freshly written store) and the number
-// of themes, which other processes and older builds read.
+// Spec rows: the store's contract, including the generic int keys of 02 §5.9 (G6: getInt / setInt, written through
+// beside the theme in the product's folder, Q7). Golden rows: the on-disk format (bytes of a freshly written store) and
+// the number of themes, which other processes and older builds read. The generic-key rows run after the golden rows
+// are measured, so the golden bytes are still those of a store holding only the theme.
 // (Seeded from HardwareReverb Tools/PrefsCheck.cpp; ported to Harness v2 and funkgui::env().)
 
 #include <funkgui/core/Config.h>
@@ -24,9 +27,12 @@
 
 #include <juce_data_structures/juce_data_structures.h>
 
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
+#include <initializer_list>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace T = funkgui::test;
@@ -54,13 +60,38 @@ namespace
         funkgui::envReload();                               // funkgui::env() caches: forget the earlier read
     }
 
-    int diskTheme(const juce::File& store)
+    // The value of the <VALUE name="<key>" val="…"/> element on disk, as the text it holds ("" when absent).
+    juce::String diskText(const juce::File& store, const char* key)
     {
         if (const auto xml = juce::XmlDocument::parse(store))
             for (auto* e : xml->getChildIterator())
-                if (e->hasTagName("VALUE") && e->getStringAttribute("name") == "theme")
-                    return e->getIntAttribute("val", -1);
-        return -1;
+                if (e->hasTagName("VALUE") && e->getStringAttribute("name") == key)
+                    return e->getStringAttribute("val");
+        return {};
+    }
+
+    int diskInt(const juce::File& store, const char* key)
+    {
+        const juce::String t = diskText(store, key);
+        return t.isEmpty() ? -1 : t.getIntValue();
+    }
+
+    int diskTheme(const juce::File& store)
+    {
+        return diskInt(store, "theme");
+    }
+
+    // Another process's write: the whole store replaced by these VALUE elements.
+    void writeStore(const juce::File& store, std::initializer_list<std::pair<const char*, const char*>> values)
+    {
+        juce::XmlElement root("PROPERTIES");
+        for (const auto& [name, val] : values)
+        {
+            auto* v = root.createNewChildElement("VALUE");
+            v->setAttribute("name", name);
+            v->setAttribute("val", val);
+        }
+        root.writeTo(store);
     }
 
     int byHand(const std::vector<std::string>& args)
@@ -81,6 +112,21 @@ namespace
                         prefs.revision(), store.getFullPathName().toRawUTF8());
             return prefs.theme() == want ? 0 : 1;
         }
+        if (mode == "setint" && args.size() > 2)
+        {
+            const int want = std::atoi(args[2].c_str());
+            prefs.setInt(args[1].c_str(), want);
+            const int got = prefs.getInt(args[1].c_str(), 0, INT_MIN, INT_MAX);
+            std::printf("wrote %s=%d rev=%u  [%s]\n", args[1].c_str(), got, prefs.revision(),
+                        store.getFullPathName().toRawUTF8());
+            return got == want ? 0 : 1;
+        }
+        if (mode == "getint" && args.size() > 1)
+        {
+            std::printf("read %s=%d  [%s]\n", args[1].c_str(), prefs.getInt(args[1].c_str(), 0, INT_MIN, INT_MAX),
+                        store.getFullPathName().toRawUTF8());
+            return 0;
+        }
         if (mode == "clamp")
         {
             prefs.setTheme(99);
@@ -98,12 +144,13 @@ int main(int argc, char** argv)
 {
     const juce::ScopedJuceInitialiser_GUI juceInit;
     const std::vector<std::string> args = T::positionals(argc, argv);
-    if (!args.empty() && (args[0] == "write" || args[0] == "read" || args[0] == "clamp"))
+    if (!args.empty() && (args[0] == "write" || args[0] == "read" || args[0] == "clamp" || args[0] == "setint"
+                          || args[0] == "getint"))
         return byHand(args);
     if (args.empty())
     {
         std::fprintf(stderr, "usage: %s <probe> --golden-root <dir> --arch arm64|x86_64 [--bless-to <dir>] "
-                             "[--results <dir>]\n       %s write <n> | read | clamp\n",
+                             "[--results <dir>]\n       %s write <n> | read | clamp | setint <key> <n> | getint <key>\n",
                      argc > 0 ? argv[0] : "FunkGuiPrefsCheck", argc > 0 ? argv[0] : "FunkGuiPrefsCheck");
         return 4;
     }
@@ -169,6 +216,66 @@ int main(int argc, char** argv)
     P.in("prefs.clamp_in_range", prefs.theme(), 0, funkgui::Theme::kCount - 1);
     prefs.setTheme(-5);
     P.in("prefs.clamp_negative", prefs.theme(), 0, funkgui::Theme::kCount - 1);
+
+    // ---- Generic int keys (02 §5.9; G6). The product's folder (Q7), then getInt / setInt with setTheme's semantics. ----
+    P.eq("prefs.default_file_in_product_folder",
+         funkgui::UiPreferences::defaultFile() == juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                                                      .getChildFile("Application Support/" FUNKGUI_PREFS_FOLDER
+                                                                    "/preferences.settings"), 1);
+    P.eq("prefs.file_is_redirected_store", prefs.file() == store, 1);
+    writeStore(store, { { "theme", "0" } });
+    prefs.reload();
+    P.eq("prefs.int.missing_is_fallback", prefs.getInt("meterScaleDb", 48, 12, 72), 48);
+    P.eq("prefs.int.fallback_clamped", prefs.getInt("meterScaleDb", 99, 12, 72), 72);
+    P.eq("prefs.int.bounds_either_order", prefs.getInt("meterScaleDb", 5, 72, 12), 12);
+    P.eq("prefs.int.empty_key_is_fallback", prefs.getInt("", 5, 0, 10), 5);
+    P.eq("prefs.int.null_key_is_fallback", prefs.getInt(nullptr, 5, 0, 10), 5);
+    {
+        const uint32_t rev = prefs.revision();
+        prefs.setInt("meterScaleDb", 24);
+        P.eq("prefs.int.write_reaches_disk", diskInt(store, "meterScaleDb"), 24);
+        P.eq("prefs.int.write_bumps_revision", prefs.revision() != rev, 1);
+        P.eq("prefs.int.reads_back", prefs.getInt("meterScaleDb", 48, 12, 72), 24);
+        P.eq("prefs.int.theme_kept_on_disk", diskTheme(store), prefs.theme());
+    }
+    {
+        const uint32_t rev = prefs.revision();
+        const juce::Time before = store.getLastModificationTime();
+        prefs.setInt("meterScaleDb", 24);
+        P.eq("prefs.int.same_value_is_noop", prefs.revision() == rev && store.getLastModificationTime() == before, 1);
+    }
+    prefs.setInt("historySpanTenths", 200);
+    P.eq("prefs.int.keys_independent", prefs.getInt("meterScaleDb", 48, 12, 72) == 24
+                                            && prefs.getInt("historySpanTenths", 50, 25, 200) == 200
+                                            && diskInt(store, "meterScaleDb") == 24
+                                            && diskInt(store, "historySpanTenths") == 200, 1);
+    P.eq("prefs.int.clamped_on_read", prefs.getInt("historySpanTenths", 50, 25, 100), 100);
+    prefs.setInt("offsetDb", -12);
+    P.eq("prefs.int.negative_round_trip", prefs.getInt("offsetDb", 0, -100, 100), -12);
+    P.eq("prefs.int.disk_is_decimal_text", diskText(store, "offsetDb") == "-12", 1);
+    prefs.setInt("theme", 99);
+    P.eq("prefs.int.theme_key_is_the_theme", prefs.theme() == funkgui::Theme::kCount - 1
+                                                  && prefs.getInt("theme", 0, 0, 9) == funkgui::Theme::kCount - 1
+                                                  && diskTheme(store) == funkgui::Theme::kCount - 1, 1);
+    prefs.setInt("THEME", 0);
+    P.eq("prefs.int.theme_key_ignores_case", prefs.theme(), 0);
+
+    // Another process's store: its generic values are seen by reload(), which bumps the revision once; a damaged value
+    // reads as the fallback, never as whatever digits it starts with.
+    writeStore(store, { { "theme", "0" }, { "meterScaleDb", "72" }, { "historySpanTenths", "25x" },
+                        { "offsetDb", "" }, { "big", "99999999999" } });
+    {
+        const uint32_t rev = prefs.revision();
+        prefs.reload();
+        P.eq("prefs.int.reload_sees_other_process", prefs.getInt("meterScaleDb", 48, 12, 72) == 72
+                                                        && prefs.revision() == rev + 1, 1);
+        const uint32_t rev2 = prefs.revision();
+        prefs.reload();
+        P.eq("prefs.int.reload_unchanged_no_bump", prefs.revision(), rev2);
+    }
+    P.eq("prefs.int.damaged_is_fallback", prefs.getInt("historySpanTenths", 50, 25, 200), 50);
+    P.eq("prefs.int.empty_is_fallback", prefs.getInt("offsetDb", 3, -100, 100), 3);
+    P.eq("prefs.int.overflow_is_fallback", prefs.getInt("big", 7, INT_MIN, INT_MAX), 7);
 
     // And none of it touched the real store.
     P.eq("prefs.sandboxed", store != realStore && store.isAChildOf(parent), 1);
