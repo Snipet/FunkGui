@@ -3,6 +3,21 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.4.0 — 2026-09-23 · S3: shapes, AREA shader, SoftRaster, FrameRender CLI, glyphs
+
+Golden impact: **atlas** (`fg.font.probe` re-blessed: 10 glyphs appended via `Glyphs.def`; ASCII and HR's nine keep
+their UVs, so `fg.gallery.primitives` is unchanged) and **shader** (`fg.shader.hash`: range-classified branch chain +
+`KIND_AREA`; kinds 0–2 maths unchanged). New goldens `fg.gallery.area`, `fg.gallery.glyphs`. Card G4.
+
+- `Canvas`: `area`, `areaStrip`, `polyline`, `disc`, `dotted`, `axis` (`src/canvas/CanvasShapes.cpp`).
+- `shaders/fs_ui.sc`: `KIND_AREA = 3` with edge-stroke flags; `SoftRaster` CPU mirror in the same commit (flag decode
+  proven equal for flags 0–7; kinds 0–2 differ from HR's FrameRender maths by 0 per channel).
+- `HeadlessHost::writePng()` wired to SoftRaster. `funkgui_framerender`: `<dump> <png> [ss]`, `--fingerprint`, `--check`,
+  `--legacy-hr`.
+- Glyphs: `include/funkgui/text/Glyphs.def` (append-only) feeds `FontAtlasSdf::kExtraChars` (+10: µ − … ≤ ≥ ≈ Δ — • ←);
+  subset regenerated reproducibly by `tools/subset-font.sh` (fonttools 4.65.0), proven equal to upstream by FontProbe.
+- Test fixtures for "missing glyph" now use U+2206/U+21BA (absent upstream).
+
 ## v0.3.0 — 2026-09-23 · S2: recorder, dump v2, fingerprint, HeadlessHost, gallery
 
 Golden impact: **new** `fg.gallery.primitives` (149 rows). Card G3. Spike passed: the recorder's vertex expansion is
