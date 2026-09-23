@@ -4,6 +4,28 @@ A headless-testable SDF/bgfx GUI library for JUCE audio plug-ins, seeded from Ha
 (`/Users/seanfunk/audio/plugins/HardwareReverb`, read-only). First consumer: FCompressor. The design is FCompressor's
 `docs/design/02-funkgui-and-ui.md` (Part 1) and `docs/design/03-build-verify-process.md`.
 
+## Status: v0.0.1 (bootstrap)
+
+- `FunkGui::harness` (`include/funkgui/test/Harness.h`, namespace `funkgui::test`) is Harness v2: header-only,
+  C++20, JUCE-free (03 §3.2).
+- `FunkGui::core`, `FunkGui::gpu` and `FunkGui::presets` are **empty placeholder** INTERFACE targets, and
+  `funkgui_configure_product()`, `funkgui_compile_shaders()` and `funkgui_add_font()` only print. They let a consumer
+  write its final link lines now; v0.1.0 (task G1) gives them content.
+- The snapshot sources under `include/funkgui/{core,text,gpu,prefs}`, `src/`, `shaders/`, `fonts/` and `tools/` are
+  HR's files after mechanical renames. Nothing compiles them yet.
+- Options (02 §1.7): `FUNKGUI_WITH_BGFX` (ON), `FUNKGUI_WITH_PRESETS` (ON), `FUNKGUI_HARNESS_ONLY` (OFF),
+  `FUNKGUI_BUILD_TOOLS` (top-level). `FUNKGUI_VERSION` is a `CACHE INTERNAL` variable the consumer can read.
+
+Consume it with FetchContent at a tag (FCompressor pins tag, SHA and version):
+
+```cmake
+FetchContent_Declare(FunkGui GIT_REPOSITORY /Users/seanfunk/audio/libraries/FunkGui GIT_TAG v0.0.1)
+FetchContent_MakeAvailable(FunkGui)
+target_link_libraries(my_probe PRIVATE FunkGui::harness)
+```
+
+Agents: read `CLAUDE.md` first.
+
 ## Provenance
 
 FunkGui starts as a byte-for-byte copy of HardwareReverb's GUI files (commit 1, "Snapshot of HardwareReverb GUI";
@@ -76,4 +98,4 @@ done
 ```
 
 `include/funkgui/test/Harness.h` is replaced by Harness v2 in the "Bootstrap" commit, so from v0.0.1 on that one file
-differs by design (use `REV=<commit-2 sha>` to see the seed baseline).
+differs by design (`REV=3d1a2dd11bca`, the "Mechanical renames" commit, is the seed baseline).
