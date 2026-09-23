@@ -1,0 +1,4 @@
+ 0 MAKEUP                   10,18,124,80         value=+6.0 db
+ 1 AUTO                     94,19,38,18          unchecked
+ 0 DETECT                   138,18,124,66        value=RMS help=3 steps: PEAK, RMS, PK+RMS
+ 7 HOLD, not applicable     266,18,124,66        [ro] [off] help=NO HOLD STAGE IN THIS MODE

@@ -1,0 +1,11 @@
+ 0 MAKEUP                   10,18,124,80         value=0.0 db
+ 1 AUTO                     94,19,38,18          checked
+ 0 MAKEUP                   138,18,124,80        value=+6.0 db
+ 1 AUTO                     222,19,38,18         checked
+ 0 MAKEUP                   266,18,124,80        value=0.0 db
+ 0 MAKEUP                   394,18,124,80        value=0.0 db, fixed [ro] [off] help=OUTPUT GAIN IS FIXED IN THIS MODE
+ 1 AUTO                     478,19,38,18         unchecked [off] help=AUTO MAKEUP IS FIXED IN THIS MODE
+ 0 DETECT                   10,114,124,66        value=RMS help=3 steps: PEAK, RMS, PK+RMS
+ 1 EXT                      94,115,38,18         unchecked [off] help=NO SIDECHAIN BUS CONNECTED
+ 0 SC HPF                   138,114,124,66       value=100 help=5 steps: OFF, 50, 100, 200, 350
+ 1 LISTEN                   222,115,38,18        unchecked

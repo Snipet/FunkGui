@@ -1,0 +1,21 @@
+ 0 THRESHOLD                10,18,124,80         value=−18.0 db
+ 0 RATIO                    138,18,124,80        value=4 to 1 help=3 steps: 2, 4, 10
+ 0 KNEE                     266,18,124,80        value=6.0 db [ro] help=THE KNEE FOLLOWS THE RATIO SWITCH
+ 0 ATTACK                   394,18,124,80        value=~10 ms, fixed [ro] [off] help=THE OPTICAL CELL SETS ITS OWN ATTACK
+ 7 RANGE, not applicable    522,18,124,80        [ro] [off] help=NO RANGE CONTROL ON THIS UNIT
+ 0 ATTACK                   650,18,124,80        value=193 µs help=end steps: Off
+ 0 ATTACK                   778,18,124,80        value=Off help=end steps: Off
+ 0 INPUT                    10,114,124,80        value=30 db help=DRIVES A FIXED −12 DBFS THRESHOLD
+ 0 MIX                      138,114,124,80       value=100 %
+ 0 ATTACK                   266,114,124,80       value=20 µs
+ 0 RATIO                    394,114,124,80       value=all buttons help=5 steps: 4, 8, 12, 20, ALL
+ 0 VOICE                    522,114,124,80       value=tube help=4 steps: OFF, TUBE, DIODE, BRIGHT
+ 0 DRIVE                    650,114,124,80       value=−6 help=21 steps: −20, −19, −18, −17, −16, −15, −14, −13, −12, −11, −10, −9, −8, −7, −6, −5, −4, −3, −2, −1, 0
+ 0 MAKEUP                   778,114,124,80       value=+4.0 db
+ 0 RANGE                    10,210,124,66        value=40 db
+ 0 DETECT                   138,210,124,66       value=RMS help=3 steps: PEAK, RMS, PK+RMS
+ 0 LOOKAHEAD                266,210,124,66       value=0 ms, fixed [ro] [off] help=LOOKAHEAD BUDGET IS OFF — SET 5 MS OR 20 MS (ADDS LATENCY)
+ 7 HOLD, not applicable     394,210,124,66       [ro] [off] help=NO HOLD STAGE IN THIS MODE
+ 0 RELEASE                  522,210,124,66       value=0.3 seconds help=5 steps: .1, .3, .6, 1.2, AUTO
+ 0 S2 RELEASE               650,210,124,66       value=2.0 s [ro] help=STAGE 2 RELEASE FOLLOWS THE TIME SWITCH
+ 0 SC HPF                   778,210,124,66       value=127 hz help=end steps: Off
