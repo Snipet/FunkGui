@@ -2,5 +2,5 @@
 # key	value	tolerance
 shader.vs_ui.hash	62930e55fb1f025f	exact
 shader.vs_ui.bytes	1340	exact
-shader.fs_ui.hash	86e10f1f4ee2c25c	exact
-shader.fs_ui.bytes	2838	exact
+shader.fs_ui.hash	9a0a09976c9160dd	exact
+shader.fs_ui.bytes	4532	exact
