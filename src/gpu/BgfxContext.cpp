@@ -1,8 +1,8 @@
 #include <funkgui/gpu/BgfxContext.h>
 
-#include <funkgui/text/BundledFont.h>
+#include <funkgui/text/FontService.h>
 
-#include <cassert>
+#include <algorithm>
 #include <cstring>
 
 // Metal binaries produced by shaderc at build time.
@@ -15,6 +15,28 @@ namespace funkgui
     {
         static BgfxContext ctx;
         return ctx;
+    }
+
+    bool BgfxContext::configure(const Config& c)
+    {
+        config_ = c;
+        config_.maxWindows = std::clamp(c.maxWindows, 1, kMaxWindows);
+        return !initialised_ || activeTransientVbBytes_ == config_.transientVbBytes;
+    }
+
+    int BgfxContext::maxWindows() const noexcept
+    {
+        return std::clamp(config_.maxWindows, 1, kMaxWindows);
+    }
+
+    const FontAtlasSdf& BgfxContext::font() const
+    {
+        return FontService::get().atlas();
+    }
+
+    bool BgfxContext::usingBundledFont() const
+    {
+        return FontService::get().ok();
     }
 
     bool BgfxContext::initBackend(void* nwh, int physW, int physH)
@@ -32,9 +54,14 @@ namespace funkgui
         init.resolution.reset   = BGFX_RESET_NONE;   // no vsync: frame() must
                                                      // never block the message
                                                      // thread; a timer paces us
+        // One transient vertex buffer for every editor in the process per
+        // frame (02 §4.5): 32 MiB by default against bgfx's compiled 6 MiB, so
+        // a crossfading frame in each of 12 open editors still fits.
+        init.limits.maxTransientVbSize = config_.transientVbBytes;
         if (!bgfx::init(init))
             return false;
 
+        activeTransientVbBytes_ = config_.transientVbBytes;
         primaryW_ = physW;
         primaryH_ = physH;
         initialised_ = true;
@@ -65,30 +92,15 @@ namespace funkgui
         uViewSize_ = bgfx::createUniform("u_viewSize", bgfx::UniformType::Vec4);
         sTexColor_ = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
 
-        if (!fontBaked_)
-        {
-            // Baked from the bundled face, not the system one: the system
-            // font's metrics, shapes and glyph coverage vary by macOS version
-            // and user settings, so the panel would otherwise be laid out
-            // against type that differs machine to machine.
-            fontBaked_ = font_.bake(BundledFont::data(), BundledFont::size());
-
-            if (!fontBaked_)
-            {
-                // Unreachable in a correctly linked build — the bytes are
-                // fixed at link time — so if it ever fires, something is very
-                // wrong. Falling back keeps the plugin usable, but the panel
-                // is then laid out against whatever the host machine happens
-                // to provide, which is the exact failure bundling prevents.
-                // It is deliberate and detectable here rather than silent one
-                // layer down.
-                assert(false && "bundled typeface failed to load");
-                fontBaked_ = font_.bake();
-            }
-        }
+        // The atlas is FontService's CPU bake (02 §3.4), baked on first use
+        // from the bundled face: the recorder laid this frame's text out
+        // against exactly these pixels, headless or live. HR baked a private
+        // copy here.
+        const FontAtlasSdf& atlas = FontService::get().atlas();
+        fontBaked_ = atlas.baked();
         if (fontBaked_)
         {
-            const auto& px = font_.pixels();
+            const auto& px = atlas.pixels();
             fontTex_ = bgfx::createTexture2D(
                 FontAtlasSdf::kAtlasW, FontAtlasSdf::kAtlasH, false, 1,
                 bgfx::TextureFormat::R8,
@@ -98,7 +110,7 @@ namespace funkgui
         else
         {
             // A 1x1 texture so the sampler always has something valid bound.
-            // The canvas skips text entirely when hasFont() is false; this
+            // The recorder draws no text from an atlas that is not baked; this
             // only keeps the draw call well formed.
             static const uint8_t blank = 0;
             fontTex_ = bgfx::createTexture2D(1, 1, false, 1,
@@ -145,7 +157,7 @@ namespace funkgui
 
     bool BgfxContext::acquire(void* nwh, int physW, int physH)
     {
-        if (windowCount_ >= kMaxWindows) return false;
+        if (windowCount_ >= maxWindows()) return false;
 
         if (!initialised_)
         {
@@ -230,8 +242,18 @@ namespace funkgui
             windowCount_ = 0;
             for (int i = 0; i <= kMaxWindows; ++i) viewUsed_[i] = false;
 
-            if (initBackend(survivors[0].nwh, survivors[0].w, survivors[0].h)
-                && createResources())
+            bool rebuilt = initBackend(survivors[0].nwh, survivors[0].w, survivors[0].h);
+            if (rebuilt && !createResources())
+            {
+                // As in acquire(): a backend without its resources is torn
+                // down again, so "not initialised" below is really true and
+                // the survivors' re-attach re-initialises it (G7).
+                destroyResources();
+                bgfx::shutdown();
+                initialised_ = false;
+                rebuilt = false;
+            }
+            if (rebuilt)
             {
                 // Register survivor 0 as the new primary directly. Routing it
                 // back through acquire() took the already-initialised branch

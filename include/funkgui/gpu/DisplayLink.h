@@ -25,4 +25,9 @@ namespace funkgui
     // times a second to redraw an identical frame. Fixed-refresh displays
     // ignore it.
     void  setDisplayLinkRate(void* link, float minHz, float maxHz, float preferredHz);
+
+    // The Objective-C runtime name of the display-link target's class in this binary: FUNKGUI_OBJC_PREFIX
+    // "DisplayLinkTarget_" and a random hex suffix, registered once per binary on first use (G7; 02 §1.8, K2 #16).
+    // Diagnostics and fg.objc.names; nothing looks the class up by this name.
+    const char* displayLinkTargetClassName();
 }
