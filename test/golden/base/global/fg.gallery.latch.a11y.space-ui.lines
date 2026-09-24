@@ -1,0 +1,5 @@
+ 1 DELTA                    16,16,88,36          unchecked
+ 1 BYPASS                   112,16,96,36         checked
+ 1 CHARACTERISTICS          216,16,132,36        checked
+ 1 LISTEN                   356,16,108,36        unchecked [off] help=NO SIDECHAIN BUS CONNECTED
+ 7 LOG                      16,84,448,14         value=WRITES 0   MENUS 0   SCREEN CHARACTERISTICS [ro]
