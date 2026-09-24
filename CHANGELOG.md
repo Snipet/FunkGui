@@ -3,6 +3,21 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.7.0 — 2026-09-24 · S8: EditorHost, GPU sink, runtime ObjC names, live parity
+
+Golden impact: **none** (35/35 `fg`; `fg.gallery.live` proves a live Metal capture's geometry, text and a11y hashes equal
+the headless ones for `primitives`, `area`, `ruleslider`, a key-replay case and an overflow case). Card G7.
+
+- `EditorHost` (surface lifecycle, fallback screen, retry, backing scale, `FramePump` client, diagnostics incl. the
+  transient-buffer overflow counter; `CaptureConfig` read once from `<PREFIX>` env; fixed-dt capture; teardown order),
+  `EditorConfig` (+ `beginBatch`/`endBatch`; size 0 = the Panel's).
+- `A11yBridge` (VoiceOver tree from the Panel's a11y model) — the planned v0.7.1 split is not needed.
+- `BgfxSink::submit` over `expand()`; `BgfxContext::configure()` (atlas from `FontService`, 32 MiB transient buffer).
+- Objective-C classes registered at runtime as `juce::ObjCClass` under `<PREFIX>RenderView_…` / `<PREFIX>DisplayLinkTarget_…`
+  with randomised suffixes (`fg.objc.names`), so two consumers in one host never collide.
+- **Removed:** the snapshot `SdfCanvas` (the recorder `Canvas` + `BgfxSink` replace it).
+- `tools/GalleryApp` (plain JUCE app hosting `GalleryPanel`), `tools/capture-frame.sh <app> <out.dump> <ENV_PREFIX>`.
+
 ## v0.6.0 — 2026-09-23 · S5: cell widgets and UI utilities
 
 Golden impact: **new** `fg.gallery.{segmented,latch,theme,hint,dwell,lineedit}`; no existing golden moved
