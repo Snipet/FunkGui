@@ -1,7 +1,7 @@
 // FUNKGUI_TEST name=fg.smoke.gpu timeout=900 gpu=1
 //
 // fg.smoke.gpu: the GPU build-chain spike's consumer (SPRINTS.md S0.1, 03 §4.9.5). A console app that links
-// FunkGui::gpu, so every snapshot source under src/gpu/ (BgfxContext, FramePump, SdfCanvas, DisplayLink.mm,
+// FunkGui::gpu, so every source under src/gpu/ (BgfxContext, BgfxSink, EditorHost, FramePump, DisplayLink.mm,
 // NativeSurface.mm) compiles and links inside it against bgfx and the shaders embedded by FunkGuiShaders. At run time
 // it checks what needs no GPU and no window: the render view's Objective-C class name starts with the configured
 // FUNKGUI_OBJC_PREFIX "RenderView" (02 §1.8), the render view behaves as HR's did (click-through, flipped), a display

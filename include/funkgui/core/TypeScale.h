@@ -5,8 +5,8 @@
 // a second face. 10px is the hard floor: below that the field is more than a
 // 4.8x downsample of a 48px bake and thin stems disappear.
 //
-// The styles are text/TextStyle.h's plain struct, so the scale carries no bgfx (02 §2.2): the snapshot's
-// gpu/SdfCanvas.h names the same struct as SdfCanvas::TextStyle.
+// The styles are text/TextStyle.h's plain struct, so the scale carries no bgfx (02 §2.2). (The snapshot's
+// gpu/SdfCanvas.h, which aliased it, was removed in v0.7.0: the recorder Canvas + BgfxSink replace it.)
 
 #include <funkgui/text/TextStyle.h>
 
