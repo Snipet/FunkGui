@@ -3,13 +3,14 @@
 #
 # Self-registration (mirrors FCompressor's FCMP_PROBE, 03 §2.9). Any test/**/*.cpp or test/**/*.mm whose FIRST line is
 #
-#   // FUNKGUI_TEST name=fg.<x> timeout=<s> gpu=<0|1>[ links=<harness|core|gpu>][ exe=<tool>[ args="<text>"]][ labels=<l>[,<l>…]]
+#   // FUNKGUI_TEST name=fg.<x> timeout=<s> gpu=<0|1>[ links=<harness|core|gpu|presets>][ exe=<tool>[ args="<text>"]][ labels=<l>[,<l>…]]
 #
 # (keys in that order, single spaces) is one CTest test named fg.<x>:
 # - Without exe=, the file is compiled into its own executable, run as `<exe> fg.<x> <harness flags>`. links= picks
-#   what it links: harness (FunkGui::harness only, no JUCE), core (+ FunkGui::core; the default when gpu=0) or gpu
-#   (+ FunkGui::gpu and the shaders; the default when gpu=1). Every test executable gets ${FUNKGUI_GENERATED_DIR} on
-#   its include path and, when gpu=1, builds after FunkGuiShaders.
+#   what it links: harness (FunkGui::harness only, no JUCE), core (+ FunkGui::core; the default when gpu=0), gpu
+#   (+ FunkGui::gpu and the shaders; the default when gpu=1) or presets (core + FunkGui::presets and SQLite; G8, S11;
+#   skipped without FUNKGUI_WITH_PRESETS). Every test executable gets ${FUNKGUI_GENERATED_DIR} on its include path and,
+#   when gpu=1, builds after FunkGuiShaders.
 # - With exe=<tool target>, the file is a registration stub and is not compiled: the test runs
 #   `<tool> fg.<x> <args> <harness flags>`. With exe=<path of a script in this repository> it runs `<script> <args>`
 #   (a plain test: its exit code is its result). In args, @SOURCE_DIR@, @BINARY_DIR@ and @SANDBOX@ expand to the
@@ -85,6 +86,10 @@ function(_fg_add_test name timeout gpu links exe args labels source)
     message(STATUS "FunkGui tests: ${name} skipped (FUNKGUI_HARNESS_ONLY)")
     return()
   endif()
+  if(links STREQUAL "presets" AND NOT TARGET FunkPresets)
+    message(STATUS "FunkGui tests: ${name} skipped (FUNKGUI_WITH_PRESETS is OFF)")
+    return()
+  endif()
 
   set(_sandbox ${CMAKE_BINARY_DIR}/sandbox/${name})
   file(MAKE_DIRECTORY ${_sandbox})
@@ -117,6 +122,8 @@ function(_fg_add_test name timeout gpu links exe args labels source)
       target_link_libraries(${_target} PRIVATE FunkGui::core FunkGui::harness)
       if(links STREQUAL "gpu")
         target_link_libraries(${_target} PRIVATE FunkGui::gpu)
+      elseif(links STREQUAL "presets")
+        target_link_libraries(${_target} PRIVATE FunkGui::presets)
       endif()
       funkgui_configure_product(${_target} PRODUCT FunkGui OBJC_PREFIX FunkGui ENV_PREFIX FUNKGUI_
                                 PREFS_FOLDER FunkGui)
@@ -189,7 +196,7 @@ foreach(_f IN LISTS _fg_test_files)
   set(_exe "")
   set(_args "")
   set(_labels "")
-  if(_rest MATCHES "^ links=(harness|core|gpu)(.*)$")
+  if(_rest MATCHES "^ links=(harness|core|gpu|presets)(.*)$")
     set(_links ${CMAKE_MATCH_1})
     set(_rest "${CMAKE_MATCH_2}")
   endif()

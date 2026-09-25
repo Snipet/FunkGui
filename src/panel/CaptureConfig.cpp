@@ -20,12 +20,14 @@
 // - UI_SCALE is a backing scale in (0, 8]. UI_FIXED_DT is seconds in (0, 1] (EditorHost's live clock clamps its own dt
 //   to [1 ms, 100 ms]; a capture may ask for a coarser fixed step).
 // - GPU_LOG is on for any value but "" and "0".
+// - UI_ZOOM (G7c) is a whole percent in [25, 400]; EditorHost applies it whether or not the product lists that step.
 
 namespace funkgui
 {
     namespace
     {
         constexpr locale_t kCLocale = nullptr;           // the *_l functions take a null locale_t as the C locale
+        constexpr int kMinZoomPercent = 25, kMaxZoomPercent = 400;
 
         bool parseInt(const char* s, int lo, int hi, int& out)
         {
@@ -72,6 +74,7 @@ namespace funkgui
             c.a11yDump = v;
         if (const char* v = nonEmpty(env("GPU_LOG")))
             c.gpuLog = !(v[0] == '0' && v[1] == '\0');
+        parseInt(env("UI_ZOOM"), kMinZoomPercent, kMaxZoomPercent, c.uiZoom);
         return c;
     }
 }

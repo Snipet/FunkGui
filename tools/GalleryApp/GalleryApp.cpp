@@ -69,6 +69,8 @@ namespace
                 return nullptr;
             funkgui::EditorConfig config;
             config.fallbackTitle = "FUNKGUI GALLERY";
+            config.zoomSteps = { 100, 125, 150, 175 };   // G7c: the "zoom" section's demo (FCompressor's steps)
+            config.zoomPrefKey = "uiZoom";               // default 100: the gallery opens as before until a click
             return new funkgui::EditorHost(*this, std::move(config), std::make_unique<G::GalleryPanel>(*section_));
         }
 

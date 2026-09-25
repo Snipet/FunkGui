@@ -3,6 +3,8 @@
 // What a Panel may ask of its host (02 §3.5). EditorHost implements it over JUCE and the frame pump; HeadlessHost over
 // a simulated clock and a call log; a Panel reaches it through attach() and GestureController.
 
+#include <span>
+
 namespace juce
 {
     class Component;                                 // ownerComponent() only: this header stays JUCE-free
@@ -42,7 +44,39 @@ namespace funkgui
         // The juce::Component that owns the Panel's window, to anchor a juce::PopupMenu
         // (PopupMenu::Options::withTargetComponent) or parent a juce::FileChooser. EditorHost returns itself, valid for
         // as long as the Panel is attached. nullptr when there is no window (HeadlessHost; the default): the Panel
-        // then shows no menu and no chooser.
+        // then shows no menu and no chooser. Its coordinates are editor px (G7c): under a UI zoom, the Panel's
+        // position (x, y) is (x, y) * ownerComponent()->getWidth() / width() there. Anchoring to the component itself
+        // needs no conversion.
         virtual juce::Component* ownerComponent() { return nullptr; }
+
+        // ---- G7c additions (v0.8.0; FCompressor ADR-68 UI zoom). Not pure: defaults 100 / no-op / empty. ------------
+        //
+        // A UI zoom scales the whole window uniformly (its size, the render density, input and accessibility
+        // coordinates) while the Panel keeps its fixed logical size and draws, hit-tests and lists accessibility in
+        // its own px: nothing a Panel receives or records changes with the zoom. These calls exist for a ZOOM control.
+
+        // The zoom the window is drawn at, in percent. EditorHost: its <PREFIX>UI_ZOOM capture pin when one is set
+        // (100 under CANVAS_DUMP without one); else 100 when zoomSteps() is empty; else the machine-wide preference (a
+        // missing or unlisted value reads as EditorConfig::defaultZoomPercent) reduced to the largest step whose
+        // window fits the user area of the editor's display. Like themeIndex(), it answers a setZoomPercent() at
+        // once, and the next frame resizes the editor before it ticks the Panel. HeadlessHost: HeadlessHost::setZoom.
+        virtual int zoomPercent() const { return 100; }
+
+        // Choose a zoom step (a ZOOM cell's click). EditorHost ignores a value that is not one of zoomSteps(); it
+        // stores any other as the machine-wide preference (EditorConfig::zoomPrefKey), and every open editor in the
+        // process follows through UiPreferences::revision(), like the theme. A step that does not fit the display is
+        // kept as the preference and drawn at the largest step that fits (zoomPercent() says which).
+        virtual void setZoomPercent(int /*percent*/) {}
+
+        // The steps a ZOOM control offers, in percent, ascending; empty when the host has no zoom (the default: the
+        // window is the Panel's own size, exactly as before v0.8.0). Valid while the Panel is attached.
+        virtual std::span<const int> zoomSteps() const { return {}; }
+
+        // Whether choosing `percent` would draw at it: a listed step whose window fits the user area of the editor's
+        // display (lead, v0.8.0), so a ZOOM control can mark the steps this display cannot show instead of letting a
+        // click fall back silently. EditorHost: false for an unlisted value; true under a pin (never fitted), when no
+        // display is known, and for the smallest step (drawn when nothing fits). HeadlessHost: setZoomFitLimit.
+        // Default: true.
+        virtual bool zoomFits(int /*percent*/) const { return true; }
     };
 }

@@ -15,6 +15,7 @@
 #include <funkgui/panel/Panel.h>
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace funkgui
@@ -41,7 +42,8 @@ namespace funkgui
         bool  writeDump(const char* path) const;                     // the last draw()'s frame, dump v2
         bool  writePng (const char* path, int supersample = 2) const;   // SoftRaster: agents can look at frames
 
-        // HostServices calls, for asserts. `batches` counts beginBatch calls; `batchDepth` is the open depth.
+        // HostServices calls, for asserts. `batches` counts beginBatch calls; `batchDepth` is the open depth; `zooms`
+        // counts setZoomPercent calls, accepted or not (G7c).
         struct Log
         {
             int  menus = 0;
@@ -49,7 +51,18 @@ namespace funkgui
             int  nudges = 0;
             int  batches = 0;
             int  batchDepth = 0;
+            int  zooms = 0;
         } log;
+
+        // G7c (v0.8.0): the UI zoom a Panel's ZOOM control reads and writes, simulated. HeadlessHost stays logical:
+        // whatever the zoom, it draws, takes input and lists accessibility in the Panel's own px at the constructor's
+        // dpi, so a frame never depends on it (the zoom scales only EditorHost's window). setZoom sets what
+        // zoomSteps() (sorted, duplicates and values <= 0 dropped) and zoomPercent() answer; before any call they are
+        // empty and 100, HostServices' defaults (a zoomSteps() span is valid until the next setZoom). setZoomPercent(p)
+        // is counted in log.zooms and taken when p is a step.
+        void setZoom(std::vector<int> steps, int percent);
+        // Lead (v0.8.0): the largest step zoomFits() accepts (a simulated display); 0 (the default) = every step fits.
+        void setZoomFitLimit(int maxPercent) { zoomFitLimit_ = maxPercent; }
 
         // HostServices: records into log; nowSeconds() returns the simulated clock.
         void   setUnboundedDrag(bool on) override;
@@ -61,6 +74,11 @@ namespace funkgui
         // G7b (v0.7.1): the index of the theme draw() uses (the constructor's themeIdx, or 0 when that names no theme).
         // ownerComponent() keeps the default nullptr: there is no window to anchor a menu to.
         int    themeIndex() const override;
+        // G7c (v0.8.0): see setZoom().
+        int    zoomPercent() const override;
+        void   setZoomPercent(int percent) override;
+        std::span<const int> zoomSteps() const override;
+        bool   zoomFits(int percent) const override;   // a listed step <= setZoomFitLimit (any, when 0)
 
     private:
         // Private state: completed by the implementing card (G3); not part of the frozen API.
@@ -72,5 +90,8 @@ namespace funkgui
         double   now_ = 0.0;
         uint32_t frame_ = 0;
         float    lastDt_ = 1.0f / 60.0f;
+        std::vector<int> zoomSteps_;                 // G7c: setZoom()
+        int      zoomPercent_ = 100;
+        int      zoomFitLimit_ = 0;                  // setZoomFitLimit; 0 = every step fits
     };
 }

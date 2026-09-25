@@ -13,6 +13,23 @@
 // Standalone window lays its content out under the title bar and the "input muted" bar after the view is attached, and
 // the view then sat 27 px too high (FCompressor U7). A product needs no watcher of its own.
 //
+// Zoom (G7c, v0.8.0; FCompressor ADR-68, which revises ADR-06's "one setSize"): EditorConfig::zoomSteps turns on a
+// machine-wide UI zoom that scales the whole panel uniformly while the Panel keeps its fixed logical size W x H. At an
+// effective zoom z the editor is round(W * z) x round(H * z) px; the drawable is sized in device px at z * backing
+// scale and the frame's dpi is that product, so the sink's view transform scales the logical frame by z and every
+// pixel snap (hairlines, text) lands on device px exactly as it does for the backing scale alone. The Canvas, the
+// PrimList, dump v2 and fingerprints stay logical. Pointer, wheel, drag and file-drag positions reach the Panel
+// divided by z; showParamMenu positions are multiplied back; the A11yBridge's children are placed at z times their
+// items (A11yBridge::setScale). The effective zoom is, in order: the <PREFIX>UI_ZOOM capture pin; 100 % under
+// CANVAS_DUMP (so captures, gui-live and the legacy-hr parity are unchanged); else the preference
+// (EditorConfig::zoomPrefKey; a missing or unlisted value reads as the default) reduced to the largest step whose
+// window fits the user area of the editor's display (the display under the pointer until the editor has a peer),
+// with the preference kept. HostServices::zoomPercent() answers a change at once; the editor resizes (setSize: the
+// host resizes its window, and the render view and drawable follow in resized()) at the start of the next frame,
+// before that frame ticks, records and submits, the theme's timing. Every open editor follows a preference write
+// through UiPreferences::revision(). The fit is evaluated when the zoom is chosen or read and when the editor gets a
+// peer. With no zoomSteps (HardwareReverb) none of this runs: the editor is W x H, sized once, as in v0.7.
+//
 // Capture (02 §5.1 "Diagnostics environment"): CaptureConfig is read once from the <ENV_PREFIX> environment at
 // construction. CANVAS_DUMP pins the FramePump to its fallback clock and ignores the real pointer (HR's captureMode_:
 // a pointer resting over the new window must not hover a widget); UI_FIXED_DT ticks the Panel with a fixed dt, and
@@ -40,6 +57,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -47,12 +65,20 @@ namespace funkgui
 {
     struct EditorConfig
     {
-        int width = 0, height = 0;                   // fixed size, set once; 0 = the Panel's width()/height()
+        int width = 0, height = 0;                   // the Panel's fixed logical size; 0 = its width()/height()
         const char* fallbackTitle = nullptr;         // wordmark on the no-GPU screen; nullptr = FUNKGUI_PRODUCT_NAME
         std::function<void(bool)> setUiAttached;     // telemetry gate keyed to the editor's lifetime (B §3)
         // HostServices::beginBatch/endBatch (K2 #23; a G2 addition to HostServices): the product's batch bracket
         // (FCompressor: ProcessorFacade::beginBatch/endBatch). Empty = no-op.
         std::function<void()> beginBatch, endBatch;
+
+        // UI zoom (G7c, v0.8.0; see "Zoom" above). The defaults are no zoom: the editor is width x height, exactly as
+        // in v0.7 (HardwareReverb passes nothing). FCompressor: { 100, 125, 150, 175 }, 125, "uiZoom".
+        std::vector<int> zoomSteps;                  // percent, ascending; values outside 25..400 are dropped
+        int         defaultZoomPercent = 100;        // the step for a missing or unlisted preference (the nearest
+                                                     // step when this one is not listed)
+        const char* zoomPrefKey = nullptr;           // UiPreferences int key; nullptr = not persisted (this editor
+                                                     // only: no other editor follows its choice)
     };
 
     class EditorHost : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget,
@@ -75,6 +101,8 @@ namespace funkgui
             bool     displayLinked = false;          // the FramePump runs off a CADisplayLink (else its timer)
             float    fps = 0.0f;                     // the FramePump's measured rate
             double   scale = 0.0;                    // the backing scale the drawable is sized for (0: no surface)
+            int      zoomPercent = 100;              // G7c: the zoom the editor is sized and drawn at (after the
+                                                     // display fit and any capture pin; the preference may differ)
         };
         Diagnostics diagnostics() const;
         const CaptureConfig& capture() const noexcept { return capture_; }
@@ -115,6 +143,10 @@ namespace funkgui
         void   endBatch() override;
         int    themeIndex() const override;          // G7b: UI_THEME, else UiPreferences::theme() (HostServices.h)
         juce::Component* ownerComponent() override;  // G7b: this editor
+        int    zoomPercent() const override;         // G7c: the zoom the next frame draws at ("Zoom" above)
+        void   setZoomPercent(int percent) override; // G7c: a listed step: the preference, then the next frame
+        std::span<const int> zoomSteps() const override;   // G7c: EditorConfig::zoomSteps, cleaned
+        bool   zoomFits(int percent) const override;         // lead (v0.8.0): a listed step that fits (HostServices.h)
 
         class ParentWatcher;                         // G7b: followPlacement() on an ancestor's move (EditorHost.cpp)
 
@@ -132,6 +164,18 @@ namespace funkgui
         void   updateCursor();
         void   gpuLog(const juce::String&) const;
         PointerEvent pointer(const juce::MouseEvent&) const;
+
+        // G7c zoom ("Zoom" above).
+        void   initZoom();                           // steps, default, pin and preference -> zoomTarget_
+        bool   isZoomStep(int percent) const noexcept;
+        int    readZoomPreference() const;           // the preference as a listed step, else the default
+        void   followZoomPreference();               // a preference revision: re-read it, re-target on a change
+        void   updateZoomTarget();                   // the pin, or the chosen step fitted to the display
+        int    fitZoom(int chosen) const;            // the largest step <= chosen whose window fits the user area
+        juce::Rectangle<int> fitArea() const;        // the user area of the editor's display (empty: unknown)
+        void   refitZoom();                          // the display may have changed: re-fit, resize now if needed
+        void   applyZoom();                          // zoomApplied_ = zoomTarget_: setSize, a11y scale
+        int    zoomedSize(int logical, int percent) const noexcept;
 
         // Declared first, destroyed last: the Canvas, the bridge's children and the gestures refer to it.
         std::unique_ptr<Panel> panel_;
@@ -167,6 +211,16 @@ namespace funkgui
         bool     overflowLogged_ = false;
         bool     dumpAttempted_ = false;
         Diagnostics diag_{};
+
+        // G7c zoom. The logical size is EditorConfig's (the Panel's); zoom percents are whole.
+        int   logicalW_ = 0, logicalH_ = 0;
+        std::vector<int> zoomSteps_;                 // EditorConfig::zoomSteps in 25..400, sorted, unique
+        int   zoomDefault_ = 100;                    // a listed step (100 without steps)
+        int   zoomPin_ = 0;                          // UI_ZOOM, or 100 under CANVAS_DUMP; 0 = none
+        int   zoomChosen_ = 100;                     // the preference as a listed step (or the last setZoomPercent)
+        int   zoomTarget_ = 100;                     // what the next frame applies: HostServices::zoomPercent()
+        int   zoomApplied_ = 100;                    // what the editor is sized and drawn at: Diagnostics
+        float zoomScale_ = 1.0f;                     // zoomApplied_ / 100: editor px per logical px
 
         // Declared last, destroyed first (and reset first in ~EditorHost): it calls back into the members above.
         std::unique_ptr<ParentWatcher> parentWatcher_;

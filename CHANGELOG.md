@@ -3,6 +3,63 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.8.0 — 2026-09-24 · S11: FunkPresets (G8), UI zoom (G7c)
+
+Golden impact: **new** `fg.gallery.zoom`; no existing golden moved (every `fg` golden, `fg.gallery.live` and the
+legacy-hr parity are unchanged). New spec-only tests `fg.presets.{store,file,hooks}`. All additive (MINOR).
+
+### FunkPresets (card G8)
+
+- `FunkGui::presets` now has sources: HR's preset layer (S11.L1 snapshot, HR 34cb23b; SEED.tsv) generalised per
+  FCompressor 01 §9.2; SQLite3 from the SDK; no GUI dependency.
+- `ProductConfig{productName, fileExtension, xmlRoot, dbEnvVar}` + `isValid()`; `Attribute`, `Preset::{attributes, attr,
+  setAttr}`.
+- `PresetHooks{isPresetParameter, beginApply, applyBefore, onApplied, captureExtra, findFactory, initialPreset,
+  mixParameter}`; `PresetManager(apvts, hooks)`: begin → before → values → identity → onApplied; `<PRESET>` state
+  carries `ATTR`.
+- `PresetStore(const ProductConfig&)`: Application Support/<productName>/Presets.db or `$<dbEnvVar>`; schema v2
+  (attributes; min_reader 1); WAL, in-memory fallback, corrupt files set aside; read-only older files migrated in memory.
+- `PresetFile::{toXmlString, fromXmlString, write, read}(config, …)`: `<xmlRoot plugin=productName>` with `ATTR` + `PARAM`;
+  tags and timestamps never exported.
+- Removed: `FactoryPresets.*` (product data). `Platform.h`/`Sqlite.h` private; `FUNKGUI_WINSQLITE` replaces
+  `HRVB_WINSQLITE`.
+- Tests: `fg.presets.store`, `fg.presets.file`, `fg.presets.hooks` (new `FUNKGUI_TEST` value `links=presets`).
+
+### UI zoom (card G7c; FCompressor ADR-68, which revises ADR-06's "one `setSize`")
+
+- **UI zoom in `EditorHost`**: one machine-wide preference scales the whole panel uniformly while the Panel keeps its
+  logical size W × H and draws, hit-tests and lists accessibility in its own px. At an effective zoom z the editor is
+  round(W·z) × round(H·z); the drawable is sized at z × backing scale and the frame's `dpi` is that product, so pixel
+  snapping (hairlines, text) lands on device px at the effective scale. Canvas, PrimList, dump v2 and fingerprints stay
+  logical. Pointer, wheel, drag and file-drag positions reach the Panel divided by z; `showParamMenu` positions are
+  multiplied back; `A11yBridge` children are placed at z × their items.
+- `EditorConfig::{zoomSteps, defaultZoomPercent, zoomPrefKey}` (defaults: no steps = no zoom, 100, not persisted).
+  FCompressor passes `{100, 125, 150, 175}`, `125`, `"uiZoom"` (UF1b); HardwareReverb passes nothing.
+- `HostServices::zoomPercent()` (default 100), `setZoomPercent(int)` (default no-op), `zoomSteps()` (default empty
+  `std::span<const int>`). `EditorHost` validates the step, writes the preference (`UiPreferences::setInt`), answers at
+  once and resizes at the start of the next frame (`setSize`; the host resizes its window; the render view and
+  drawable follow before that frame is recorded and submitted); every open editor follows the preferences revision,
+  like the theme. A missing, damaged or unlisted preference reads as the default.
+- Fit: a window larger than the user area of the editor's display is drawn at the largest step that fits; the
+  preference is kept. `EditorHost::Diagnostics::zoomPercent` reports the effective zoom.
+- `HostServices::zoomFits(percent)` (lead; default true): whether choosing that step would draw at it, so a ZOOM
+  control can mark the steps the current display cannot show (EditorHost: a listed step that fits, or any step under
+  a pin; `HeadlessHost::setZoomFitLimit` simulates a display).
+- Capture: `CaptureConfig::uiZoom` (`<PREFIX>UI_ZOOM=<percent>`, 25–400) pins the zoom (not persisted, not fitted);
+  under `CANVAS_DUMP` the zoom is 100 % unless `UI_ZOOM` is set, so captures and `gui-live` are unchanged.
+- `A11yBridge::setScale/scale`; `HeadlessHost::setZoom(steps, percent)` and `Log::zooms` (HeadlessHost stays logical:
+  it only answers the three calls, for a Panel's ZOOM control).
+- Gallery: section `zoom` (ZOOM cells over the host's steps, a readout, density samples); `FunkGuiGalleryApp` now has
+  steps 100/125/150/175 (default 100, preference `uiZoom`), so the section resizes its window live.
+- Tests `fg.editorhost.zoom` (gpu), `fg.editorhost.zoom.live` (gpu, live), `fg.gallery.zoom`; new
+  `fg.editorhost.headless` rows.
+
+### Fix (lead, from the HardwareReverb migration)
+
+- `funkgui_framerender --legacy-hr`: the six count rows (`layout.static_count`, `text_count`, `rank_strokes`,
+  `segments`, `view_w`, `view_h`) declare `abs:0`, as HR's goldens hold them, instead of `exact`; `--check` against
+  HR's unedited goldens now passes. No FunkGui golden holds these rows.
+
 ## v0.7.1 — 2026-09-24 · S11: EditorHost follows ancestor moves; theme index, file drags, owner component
 
 Golden impact: **none** (no drawing changed; every existing `fg` golden and `fg.gallery.live` unchanged). Card G7b.

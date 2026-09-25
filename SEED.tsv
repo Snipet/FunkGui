@@ -32,3 +32,16 @@ Tools/AtlasDump.cpp	tools/AtlasDump.cpp	515ae4288bc25ec96698330f25f642f375948d8e
 Tools/PrefsCheck.cpp	tools/PrefsCheck.cpp	955b5341ab1d03e891b778c4dd84375134f8722ec22d6cad3a49c305dd1ed8aa	2026-09-22T21:41:48-0400
 Tools/FrameRender.cpp	tools/FrameRender.cpp	5bac8ba6fc9f2d390642c72d1f5b28ea60d402211f2f6daa1c56d744cc6fe3ea	2026-09-10T19:29:19-0400
 Scripts/capture-frame.sh	tools/capture-frame.sh	02f8a1be47dbeaaeba08dbcf71c32765605d02956bf7cc2e24ad7ae8cbf5868e	2026-09-22T22:06:50-0400
+# S11.L1 (copied 2026-09-24T21:25:39-0400): HR Source/presets/* at HR commit 34cb23b (tag pre-funkgui), byte for byte; sha256 equal to FCompressor docs/sprints/hr-presets-s3.sha256.
+Source/presets/FactoryPresets.cpp	src/presets/FactoryPresets.cpp	648d1629e62634986ce2aff1ca04c5c7d66b62677aca31f23d9fbaeb1876d1ee	2026-09-22T20:21:15-0400
+Source/presets/FactoryPresets.h	include/funkgui/presets/FactoryPresets.h	b27cd887c206071371b85deae38b7f82f3d7c73f9a22ec1ce0fba5536e31f9b7	2026-09-22T19:25:38-0400
+Source/presets/Platform.cpp	src/presets/Platform.cpp	240b03cad72301416ffbabb9c2de856ff662033840d6688c4f6316f57a227c01	2026-09-22T21:39:12-0400
+Source/presets/Platform.h	include/funkgui/presets/Platform.h	e48739a8062271c6de6c4941a09bd50ffcdbe3a2e803972cc864aac21875800d	2026-09-22T21:38:46-0400
+Source/presets/PresetFile.cpp	src/presets/PresetFile.cpp	a363015045a2f769a8de3594ad5fef0ab6910f03516012db22d10d62fcd7364a	2026-09-22T21:39:37-0400
+Source/presets/PresetFile.h	include/funkgui/presets/PresetFile.h	d0234a0068e4b1da541bab7262dc94bba9aa2fa217fc56bd57837b8ed80a3e32	2026-09-22T19:25:38-0400
+Source/presets/PresetManager.cpp	src/presets/PresetManager.cpp	3f714cdd513051b3ac07eba56caa1a8798b159a39bd8cd159da568b5c419deb7	2026-09-22T20:13:11-0400
+Source/presets/PresetManager.h	include/funkgui/presets/PresetManager.h	292780e9b709706dd4915eafa6c98f669df57fd6b1e2fa3a482ef99fcf70db54	2026-09-22T20:11:39-0400
+Source/presets/PresetStore.cpp	src/presets/PresetStore.cpp	8852921972beca80c173cfc69f38c3d4fd05397ce65252c6af2c170935eae4ba	2026-09-22T21:40:24-0400
+Source/presets/PresetStore.h	include/funkgui/presets/PresetStore.h	c3b9a87eefb32135bd7b086909096f76fe613e54ca5d9788cf4d55e0348594c0	2026-09-22T19:25:38-0400
+Source/presets/PresetTypes.h	include/funkgui/presets/PresetTypes.h	05e5f93f2e4f988ee11c68c479cf095e31cba39b60f3d89860dab4d3ae71ca3f	2026-09-22T19:25:38-0400
+Source/presets/Sqlite.h	include/funkgui/presets/Sqlite.h	c254e05f49031cf020889bf83254a8067db39e36e9d8c62b2db3b71ab900238a	2026-09-22T21:38:48-0400
