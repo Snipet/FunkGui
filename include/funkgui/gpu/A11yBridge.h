@@ -18,6 +18,10 @@
 // last sync it rebuilds every child; otherwise it updates each child in place and notifies valueChanged for a changed
 // value or checked state (titles notify through Component::setTitle). EditorHost calls it on a11yRevision() changes
 // and at <= 10 Hz for values. Message thread only. The Panel must outlive the bridge's children: clear() them first.
+//
+// Zoom (G7c, v0.8.0): items stay in the Panel's logical px (items(), and so EditorHost's A11Y_DUMP, do not change with
+// the zoom); a child's bounds are the item's rectangle times scale() (editor px per logical px, 1 by default), as the
+// smallest integer rectangle containing it, and a nested child's are relative to its parent's scaled rectangle.
 
 #include <funkgui/a11y/A11yItem.h>
 
@@ -43,6 +47,11 @@ namespace funkgui
         void sync(juce::Component& editor, const std::vector<A11yItem>& items, Panel& panel);
         void clear();                                // removes and deletes every child
 
+        // G7c: editor px per logical px (EditorHost's zoom; not finite or <= 0 reads as 1). A change re-places every
+        // child at once; the next sync() keeps the new scale.
+        void  setScale(float editorPxPerLogicalPx);
+        float scale() const noexcept { return scale_; }
+
         const std::vector<A11yItem>& items() const noexcept { return items_; }   // as last synced
         int  size() const noexcept { return static_cast<int>(children_.size()); }
         juce::Component* componentFor(uint32_t id) const noexcept;               // nullptr for an unknown id
@@ -57,5 +66,6 @@ namespace funkgui
         std::vector<A11yItem> items_;
         std::vector<std::unique_ptr<Item>> children_;   // in items_ order
         uint32_t rebuilds_ = 0;
+        float    scale_ = 1.0f;                      // G7c
     };
 }

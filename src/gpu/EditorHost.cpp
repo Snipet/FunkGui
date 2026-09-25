@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <limits>
 #include <string>
 #include <utility>
 
@@ -44,6 +46,27 @@
 //   (submitFrame step 1 applies it before step 6 ticks the Panel). ownerComponent() is this editor.
 // - File drags: enter, move and exit reach the Panel like the drop, as its plain types (paths as UTF-8, positions as
 //   float logical px), each followed by a full-rate nudge.
+//
+// G7c (v0.8.0), additive (the UI zoom, EditorHost.h "Zoom"; FCompressor ADR-68). Choices where the card is silent:
+// - Steps outside 25..400 % are dropped, the rest sorted and de-duplicated (a Debug assertion flags a config that
+//   needed it). A default that is not listed becomes the nearest listed step (the smaller on a tie).
+// - The preference is read with UiPreferences::getInt over the whole int range and taken only when it is a listed
+//   step: a missing key, a damaged value or a step the product no longer lists all read as the default.
+// - Fit: the window is the editor alone (a host's title bar is not known here), compared with the user area (menu
+//   bar and Dock excluded) of the display that holds most of the editor, or of the display under the pointer while
+//   the editor has no peer (it is being opened: the host window appears where the user clicked); no display known =
+//   no fit. The largest listed step <= the chosen one that fits wins; when none fits, the smallest step. It is
+//   evaluated when the zoom is chosen (setZoomPercent), read (construction, a preference revision) or the editor
+//   gets a peer (parentHierarchyChanged, which resizes at once, before the surface attaches); a window dragged to
+//   another display keeps its zoom until one of those happens.
+// - A pin (UI_ZOOM, or 100 under CANVAS_DUMP) is applied whatever the steps and never fitted; setZoomPercent still
+//   writes the preference under a pin (as a theme cell writes it under UI_THEME), and the pin keeps the size.
+// - Resize timing: the constructor and parentHierarchyChanged size the editor at once; every other change (a click,
+//   another editor's preference write) is applied at the start of the next frame (submitFrame step 1), so the resize,
+//   the drawable's new size and the first frame at that size happen in one pump tick, and no Panel callback is on the
+//   stack when the host resizes its window. Input between the click and that frame is converted at the old zoom (the
+//   editor's actual size).
+// - The fallback screen draws at the logical size, scaled by the zoom. GPU_LOG logs every zoom change.
 
 namespace funkgui
 {
@@ -54,6 +77,7 @@ namespace funkgui
         constexpr int    kFailuresToFallback = 5;        // HR :700-705: five consecutive failures show the fallback
         constexpr double kA11yValuePeriod = 0.1;         // values at <= 10 Hz (02 §5.6)
         constexpr int    kIdleHz = 10;                   // Panel::idle, >= 10 Hz even with the display link stopped
+        constexpr int    kMinZoomPercent = 25, kMaxZoomPercent = 400;   // G7c: CaptureConfig's UI_ZOOM range too
 
         double wallSeconds() { return juce::Time::getMillisecondCounterHiRes() * 0.001; }
 
@@ -143,13 +167,15 @@ namespace funkgui
             setInterceptsMouseClicks(false, false);
         }
 
-        // One window size, set once: nothing calls setSize() again, which also removes the path that let a preset
+        // One logical size. The editor is that size times the zoom and changes only with the zoom (G7c): without zoom
+        // steps it is set once, here, and nothing calls setSize() again, which also removes the path that let a preset
         // recall invalidate a live drag (HR :149-152).
         const int w = config_.width > 0 ? config_.width : panel_->width();
         const int h = config_.height > 0 ? config_.height : panel_->height();
         jassert(w == panel_->width() && h == panel_->height());   // the Panel lays out in exactly this space
+        logicalW_ = w;
+        logicalH_ = h;
         setResizable(false, false);
-        setSize(w, h);
 
         // The preference is machine-wide and another host may have changed it since this process first read it
         // (HR :153-156). UI_THEME overrides it without persisting.
@@ -157,6 +183,10 @@ namespace funkgui
         prefs.reload();
         prefsRevision_ = prefs.revision();
         applyTheme(capture_.uiTheme >= 0 ? capture_.uiTheme : prefs.theme());
+
+        // The zoom follows the same preference file (G7c): W x H exactly when there are no steps and no pin.
+        initZoom();
+        applyZoom();
 
         panel_->attach(*this);
         if (config_.setUiAttached)
@@ -190,6 +220,7 @@ namespace funkgui
         d.displayLinked = FramePump::get().isDisplayLinked();
         d.fps = FramePump::get().measuredFps();
         d.scale = surfaceOk_ ? attachedScale_ : 0.0;
+        d.zoomPercent = zoomApplied_;
         return d;
     }
 
@@ -324,6 +355,7 @@ namespace funkgui
             gpuLog("re-parented: re-attaching");
             detachSurface();
         }
+        refitZoom();                                 // G7c: the editor's display is known now; resize before attaching
         attachSurfaceIfPossible();
     }
 
@@ -368,21 +400,26 @@ namespace funkgui
         g.fillAll(colour(theme_.ground));
         if (!bgfxFailed_) return;
 
+        // Laid out in the logical size and scaled by the zoom (G7c); at 100 % these are the editor's own bounds.
+        if (zoomApplied_ != 100)
+            g.addTransform(juce::AffineTransform::scale(zoomScale_));
+        const juce::Rectangle<int> bounds(0, 0, logicalW_, logicalH_);
+
         const juce::String title = config_.fallbackTitle != nullptr
                                      ? juce::String::fromUTF8(config_.fallbackTitle)
                                      : juce::String::fromUTF8(config::kProductName).toUpperCase();
         g.setColour(colour(theme_.ink100));
         g.setFont(juce::Font(juce::FontOptions(13.0f)).withExtraKerningFactor(0.2f));
-        g.drawText(title, 40, 24, juce::jmax(0, getWidth() - 80), 18, juce::Justification::centredLeft);
+        g.drawText(title, 40, 24, juce::jmax(0, logicalW_ - 80), 18, juce::Justification::centredLeft);
 
         g.setColour(colour(theme_.ink52));
         g.setFont(juce::Font(juce::FontOptions(18.0f)));
-        g.drawText("GPU RENDERER UNAVAILABLE", getLocalBounds().withTrimmedBottom(40), juce::Justification::centred);
+        g.drawText("GPU RENDERER UNAVAILABLE", bounds.withTrimmedBottom(40), juce::Justification::centred);
 
         g.setColour(colour(theme_.ink32));
         g.setFont(juce::Font(juce::FontOptions(11.0f)).withExtraKerningFactor(0.14f));
         g.drawText("AUDIO IS PROCESSING NORMALLY. CONTROL THE PLUGIN FROM YOUR HOST'S GENERIC EDITOR.",
-                   getLocalBounds().withTrimmedTop(getHeight() / 2 + 16), juce::Justification::centredTop);
+                   bounds.withTrimmedTop(logicalH_ / 2 + 16), juce::Justification::centredTop);
     }
 
     //==================================================================================================================
@@ -393,16 +430,21 @@ namespace funkgui
     {
         Result result;
 
-        // 1. Follow the preference when another editor in this process changes it; skipped under the UI_THEME
-        //    override, which would otherwise be undone at once (HR :849-860).
-        if (capture_.uiTheme < 0)
+        // 1. Follow the preferences when another editor in this process changes them: the theme, skipped under the
+        //    UI_THEME override, which would otherwise be undone at once (HR :849-860); the zoom (G7c). Then apply a
+        //    zoom chosen since the last frame (here or in another editor): the editor, its render view and its
+        //    drawable take the new size before this frame ticks, records and submits.
         {
             auto& prefs = UiPreferences::get();
             if (prefs.revision() != prefsRevision_)
             {
                 prefsRevision_ = prefs.revision();
-                applyTheme(prefs.theme());
+                if (capture_.uiTheme < 0)
+                    applyTheme(prefs.theme());
+                followZoomPreference();
             }
+            if (zoomTarget_ != zoomApplied_)
+                applyZoom();
         }
 
         // 2. A minimised or hidden host window would otherwise burn a GPU frame every tick, for every open instance,
@@ -468,7 +510,9 @@ namespace funkgui
         FrameInfo info;
         info.logicalW = panel_->width();
         info.logicalH = panel_->height();
-        const int logicalH = getHeight();
+        // Device px per logical px: the backing scale times the zoom (G7c). The drawable is the zoomed editor in
+        // device px, and the logical height is the Panel's (the editor's own at 100 %).
+        const int logicalH = logicalH_;
         float dpi = logicalH > 0 ? static_cast<float>(physH_) / static_cast<float>(logicalH) : 1.0f;
         if (!(dpi > 0.05f)) dpi = 1.0f;
         info.dpi = dpi;
@@ -567,11 +611,12 @@ namespace funkgui
     // menus (A §3.2-3.7); this only converts.
     //==================================================================================================================
 
+    // Editor px -> the Panel's logical px (G7c): divided by the zoom the editor is sized at (exact at 100 %).
     PointerEvent EditorHost::pointer(const juce::MouseEvent& e) const
     {
         PointerEvent p;
-        p.x = e.position.x;
-        p.y = e.position.y;
+        p.x = e.position.x / zoomScale_;
+        p.y = e.position.y / zoomScale_;
         p.mods = modsFrom(e.mods);
         p.clicks = e.getNumberOfClicks();
         p.popup = e.mods.isPopupMenu();              // right-click or ctrl-click: the host menu, never a write
@@ -640,8 +685,8 @@ namespace funkgui
     void EditorHost::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
     {
         WheelEvent w;
-        w.x = e.position.x;
-        w.y = e.position.y;
+        w.x = e.position.x / zoomScale_;
+        w.y = e.position.y / zoomScale_;
         w.dx = wheel.deltaX;
         w.dy = wheel.deltaY;
         w.smooth = wheel.isSmooth;
@@ -771,13 +816,13 @@ namespace funkgui
     // JUCE sends these only for a drag isInterestedInFileDrag() accepted; a drop ends the drag without an exit.
     void EditorHost::fileDragEnter(const juce::StringArray& files, int x, int y)
     {
-        panel_->filesDragEnter(pathsOf(files), static_cast<float>(x), static_cast<float>(y));
+        panel_->filesDragEnter(pathsOf(files), static_cast<float>(x) / zoomScale_, static_cast<float>(y) / zoomScale_);
         nudgeFullRate();
     }
 
     void EditorHost::fileDragMove(const juce::StringArray&, int x, int y)
     {
-        panel_->filesDragMove(static_cast<float>(x), static_cast<float>(y));
+        panel_->filesDragMove(static_cast<float>(x) / zoomScale_, static_cast<float>(y) / zoomScale_);
         nudgeFullRate();
     }
 
@@ -817,8 +862,9 @@ namespace funkgui
         auto* host = getHostContext();
         auto* param = static_cast<juce::RangedAudioParameter*>(port.native());
         if (host == nullptr || param == nullptr) return;
+        // The Panel's logical px back to the editor's (G7c): the menu opens where the pointer is.
         if (auto menu = host->getContextMenuForParameter(param))
-            menu->showNativeMenu({ juce::roundToInt(x), juce::roundToInt(y) });
+            menu->showNativeMenu({ juce::roundToInt(x * zoomScale_), juce::roundToInt(y * zoomScale_) });
     }
 
     void EditorHost::nudgeFullRate()
@@ -853,5 +899,151 @@ namespace funkgui
     juce::Component* EditorHost::ownerComponent()
     {
         return this;
+    }
+
+    //==================================================================================================================
+    // Zoom (G7c; EditorHost.h "Zoom", HostServices.h)
+    //==================================================================================================================
+
+    int EditorHost::zoomPercent() const
+    {
+        return zoomTarget_;
+    }
+
+    std::span<const int> EditorHost::zoomSteps() const
+    {
+        return zoomSteps_;
+    }
+
+    void EditorHost::setZoomPercent(int percent)
+    {
+        if (!isZoomStep(percent))
+            return;                                  // not a step this product offers: nothing written, nothing moves
+        if (config_.zoomPrefKey != nullptr && config_.zoomPrefKey[0] != '\0')
+            UiPreferences::get().setInt(config_.zoomPrefKey, percent);   // every editor follows its revision
+        zoomChosen_ = percent;
+        updateZoomTarget();
+        nudgeFullRate();                             // the next frame, soon, applies it
+    }
+
+    bool EditorHost::isZoomStep(int percent) const noexcept
+    {
+        return std::binary_search(zoomSteps_.begin(), zoomSteps_.end(), percent);
+    }
+
+    void EditorHost::initZoom()
+    {
+        for (const int s : config_.zoomSteps)
+            if (s >= kMinZoomPercent && s <= kMaxZoomPercent)
+                zoomSteps_.push_back(s);
+        std::sort(zoomSteps_.begin(), zoomSteps_.end());
+        zoomSteps_.erase(std::unique(zoomSteps_.begin(), zoomSteps_.end()), zoomSteps_.end());
+        // Steps are percent in 25..400, ascending, each once, and the default is one of them.
+        jassert(zoomSteps_ == config_.zoomSteps);
+
+        if (!zoomSteps_.empty())
+        {
+            const int want = config_.defaultZoomPercent;
+            zoomDefault_ = zoomSteps_.front();
+            for (const int s : zoomSteps_)           // ascending: a tie keeps the smaller step
+                if (std::abs(s - want) < std::abs(zoomDefault_ - want))
+                    zoomDefault_ = s;
+            jassert(zoomDefault_ == want);
+        }
+
+        zoomPin_ = capture_.uiZoom > 0 ? capture_.uiZoom : (captureMode_ ? 100 : 0);
+        zoomChosen_ = readZoomPreference();
+        updateZoomTarget();
+    }
+
+    int EditorHost::readZoomPreference() const
+    {
+        if (zoomSteps_.empty())
+            return 100;
+        if (config_.zoomPrefKey == nullptr || config_.zoomPrefKey[0] == '\0')
+            return zoomDefault_;                     // not persisted: every editor opens at the default
+        const int v = UiPreferences::get().getInt(config_.zoomPrefKey, zoomDefault_, std::numeric_limits<int>::min(),
+                                                  std::numeric_limits<int>::max());
+        return isZoomStep(v) ? v : zoomDefault_;
+    }
+
+    void EditorHost::followZoomPreference()
+    {
+        if (zoomSteps_.empty() || config_.zoomPrefKey == nullptr || config_.zoomPrefKey[0] == '\0')
+            return;
+        const int chosen = readZoomPreference();
+        if (chosen == zoomChosen_)
+            return;
+        zoomChosen_ = chosen;
+        updateZoomTarget();
+    }
+
+    void EditorHost::updateZoomTarget()
+    {
+        if (zoomPin_ > 0)
+            zoomTarget_ = zoomPin_;
+        else if (zoomSteps_.empty())
+            zoomTarget_ = 100;
+        else
+            zoomTarget_ = fitZoom(zoomChosen_);
+    }
+
+    // round(W * z), halves away from zero (std::lround; juce::roundToInt would round 1312.5 to even).
+    int EditorHost::zoomedSize(int logical, int percent) const noexcept
+    {
+        return percent == 100 ? logical : static_cast<int>(std::lround(static_cast<double>(logical) * percent / 100.0));
+    }
+
+    juce::Rectangle<int> EditorHost::fitArea() const
+    {
+        const auto& displays = juce::Desktop::getInstance().getDisplays();
+        const juce::Displays::Display* d = getPeer() != nullptr
+                                             ? displays.getDisplayForRect(getScreenBounds())
+                                             : displays.getDisplayForPoint(juce::Desktop::getMousePosition());
+        if (d == nullptr)
+            d = displays.getPrimaryDisplay();
+        return d != nullptr ? d->userArea : juce::Rectangle<int>();
+    }
+
+    int EditorHost::fitZoom(int chosen) const
+    {
+        const auto area = fitArea();
+        if (area.isEmpty())
+            return chosen;                           // no display known: nothing to fit
+        int best = 0;
+        for (const int s : zoomSteps_)               // ascending
+        {
+            if (s > chosen)
+                break;
+            if (zoomedSize(logicalW_, s) <= area.getWidth() && zoomedSize(logicalH_, s) <= area.getHeight())
+                best = s;
+        }
+        return best > 0 ? best : zoomSteps_.front();
+    }
+
+    void EditorHost::refitZoom()
+    {
+        if (zoomPin_ > 0 || zoomSteps_.empty())
+            return;
+        updateZoomTarget();
+        if (zoomTarget_ != zoomApplied_)
+            applyZoom();
+    }
+
+    void EditorHost::applyZoom()
+    {
+        const int before = zoomApplied_;
+        zoomApplied_ = zoomTarget_;
+        zoomScale_ = static_cast<float>(zoomApplied_) / 100.0f;
+        a11y_.setScale(zoomScale_);
+        const int w = zoomedSize(logicalW_, zoomApplied_);
+        const int h = zoomedSize(logicalH_, zoomApplied_);
+        if (w == getWidth() && h == getHeight())
+            return;
+        // resized() moves the render view and resizes the drawable at once; the host follows the editor's size.
+        setSize(w, h);
+        if (before != zoomApplied_)
+            gpuLog("zoom: " + juce::String(zoomApplied_) + " % (" + juce::String(w) + " x " + juce::String(h)
+                   + "), chosen " + juce::String(zoomChosen_) + " %" + (zoomPin_ > 0 ? ", pinned" : ""));
     }
 }

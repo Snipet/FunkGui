@@ -4,10 +4,12 @@
 #include <funkgui/text/FontService.h>
 #include <funkgui/text/TextFit.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <string>
 #include <string_view>
+#include <utility>
 
 // A Panel in a console process (02 §3.6): a simulated clock, synthesised input, frames recorded into an owned Canvas
 // over FontService's CPU-baked atlas, and a log of the HostServices calls. Choices where 02 §3.6 is silent (G3):
@@ -36,6 +38,7 @@
 //   or the file cannot be written; `funkgui_framerender <dump> <png> [ss]` gives the same picture from the dump.
 // - The destructor calls Panel::closeGestures() (EditorHost's rule when the host closes the editor mid-gesture), so
 //   the Panel must outlive its host.
+// - Zoom (G7c): simulated for a Panel's ZOOM control only; nothing drawn, hit-tested or listed depends on it.
 
 namespace funkgui
 {
@@ -323,4 +326,24 @@ namespace funkgui
     {
         return themeIdx_ >= 0 && themeIdx_ < Theme::kCount ? themeIdx_ : 0;
     }
+
+    void HeadlessHost::setZoom(std::vector<int> steps, int percent)
+    {
+        steps.erase(std::remove_if(steps.begin(), steps.end(), [](int s) { return s <= 0; }), steps.end());
+        std::sort(steps.begin(), steps.end());
+        steps.erase(std::unique(steps.begin(), steps.end()), steps.end());
+        zoomSteps_ = std::move(steps);
+        zoomPercent_ = percent;
+    }
+
+    int HeadlessHost::zoomPercent() const { return zoomPercent_; }
+
+    void HeadlessHost::setZoomPercent(int percent)
+    {
+        ++log.zooms;
+        if (std::find(zoomSteps_.begin(), zoomSteps_.end(), percent) != zoomSteps_.end())
+            zoomPercent_ = percent;
+    }
+
+    std::span<const int> HeadlessHost::zoomSteps() const { return zoomSteps_; }
 }
