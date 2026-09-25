@@ -1,28 +1,32 @@
-#include "PresetFile.h"
+#include <funkgui/presets/PresetFile.h>
+
 #include "Platform.h"
 
 #include <charconv>
 #include <cmath>
 #include <cstdlib>
 
-// The shape, written by this build:
+// The shape, written by this build (<Root> = ProductConfig::xmlRoot, <Product> = its productName):
 //
 //   <?xml version="1.0" encoding="UTF-8"?>
-//   <HardwareReverbPreset format="1" plugin="HardwareReverb" uuid="..." name="..."
-//                         category="..." author="..." notes="...">
+//   <Root format="1" plugin="Product" uuid="..." name="..." category="..." author="..." notes="...">
+//     <ATTR key="modeId" value="fet-76"/>
+//     ...
 //     <PARAM id="size" value="0.7"/>
 //     ...
-//   </HardwareReverbPreset>
+//   </Root>
 //
-// Tested by Tools/PresetProbe.cpp (round trip, every refusal below).
+// Tested by fg.presets.file (round trip, every refusal below); HardwareReverb's PresetProbe held the same rows.
+// (HardwareReverb Source/presets/PresetFile.cpp; G8: ProductConfig, ATTR.)
 
-namespace hrvb::presets::PresetFile
+namespace funkgui::presets::PresetFile
 {
     namespace
     {
-        constexpr const char* kRootTag   = "HardwareReverbPreset";
-        constexpr const char* kPluginId  = "HardwareReverb";
+        using detail::strtofC;
+
         constexpr const char* kParamTag  = "PARAM";
+        constexpr const char* kAttrTag   = "ATTR";
 
         // A preset with every parameter is under 1 KB; notes are the only
         // free-length field. 256 KB leaves room for a novel in the notes and
@@ -66,18 +70,39 @@ namespace hrvb::presets::PresetFile
         {
             if (error != nullptr) *error = what;
         }
+
+        // "not a FCompressor preset (...)": every refusal names the product the file was expected to be for.
+        juce::String notA(const ProductConfig& c, const juce::String& why = {})
+        {
+            return "not a " + c.productName + " preset" + (why.isNotEmpty() ? " (" + why + ")" : juce::String());
+        }
+
+        constexpr const char* kBadConfig = "invalid preset product configuration";
     }
 
-    juce::String toXmlString(const Preset& p)
+    juce::String toXmlString(const ProductConfig& config, const Preset& p)
     {
-        juce::XmlElement root(kRootTag);
+        if (!config.isValid()) return {};
+
+        juce::XmlElement root(config.xmlRoot);
         root.setAttribute("format", p.format);
-        root.setAttribute("plugin", kPluginId);
+        root.setAttribute("plugin", config.productName);
         root.setAttribute("uuid", p.uuid);
         root.setAttribute("name", p.name);
         root.setAttribute("category", p.category);
         root.setAttribute("author", p.author);
         root.setAttribute("notes", p.notes);
+
+        // The attributes first (01 §9.2's shape), first occurrence of a key only, empty keys never.
+        juce::StringArray seenKeys;
+        for (const auto& a : p.attributes)
+        {
+            if (a.key.isEmpty() || seenKeys.contains(a.key)) continue;
+            seenKeys.add(a.key);
+            auto* e = root.createNewChildElement(kAttrTag);
+            e->setAttribute("key", a.key);
+            e->setAttribute("value", a.value);
+        }
 
         // First occurrence of an id wins (what Preset::find returns); a
         // non-finite value has no text form a reader would accept, so it is
@@ -94,11 +119,16 @@ namespace hrvb::presets::PresetFile
         return root.toString();
     }
 
-    std::optional<Preset> fromXmlString(const juce::String& text, juce::String* error)
+    std::optional<Preset> fromXmlString(const ProductConfig& config, const juce::String& text, juce::String* error)
     {
+        if (!config.isValid())
+        {
+            setError(error, kBadConfig);
+            return std::nullopt;
+        }
         if ((juce::int64) text.getNumBytesAsUTF8() > kMaxBytes)
         {
-            setError(error, "too large to be a HardwareReverb preset");
+            setError(error, "too large to be a " + config.productName + " preset");
             return std::nullopt;
         }
 
@@ -108,7 +138,7 @@ namespace hrvb::presets::PresetFile
         // the host's process. This format never declares one.
         if (text.containsIgnoreCase("<!DOCTYPE") || text.containsIgnoreCase("<!ENTITY"))
         {
-            setError(error, "not a HardwareReverb preset (it declares a DTD)");
+            setError(error, notA(config, "it declares a DTD"));
             return std::nullopt;
         }
 
@@ -116,21 +146,20 @@ namespace hrvb::presets::PresetFile
         const auto x = doc.getDocumentElement();
         if (x == nullptr)
         {
-            setError(error, "not a HardwareReverb preset (" + (doc.getLastParseError().isNotEmpty()
-                                                                    ? doc.getLastParseError()
-                                                                    : juce::String("not XML")) + ")");
+            setError(error, notA(config, doc.getLastParseError().isNotEmpty() ? doc.getLastParseError()
+                                                                              : juce::String("not XML")));
             return std::nullopt;
         }
-        if (!x->hasTagName(kRootTag))
+        if (!x->hasTagName(config.xmlRoot))
         {
-            setError(error, "not a HardwareReverb preset (<" + x->getTagName() + ">)");
+            setError(error, notA(config, "<" + x->getTagName() + ">"));
             return std::nullopt;
         }
         // Absent is accepted (a hand-written file); present and different is
         // another product's file that happens to share the root tag.
-        if (x->hasAttribute("plugin") && x->getStringAttribute("plugin") != kPluginId)
+        if (x->hasAttribute("plugin") && x->getStringAttribute("plugin") != config.productName)
         {
-            setError(error, "a preset for " + x->getStringAttribute("plugin") + ", not HardwareReverb");
+            setError(error, "a preset for " + x->getStringAttribute("plugin") + ", not " + config.productName);
             return std::nullopt;
         }
 
@@ -140,7 +169,7 @@ namespace hrvb::presets::PresetFile
         const auto fmt = x->getStringAttribute("format").trim();
         if (fmt.isEmpty() || !fmt.containsOnly("0123456789") || fmt.length() > 6 || fmt.getIntValue() < 1)
         {
-            setError(error, "not a HardwareReverb preset (no format)");
+            setError(error, notA(config, "no format"));
             return std::nullopt;
         }
 
@@ -158,6 +187,25 @@ namespace hrvb::presets::PresetFile
         {
             setError(error, "the preset has no name");
             return std::nullopt;
+        }
+
+        // Attributes: a key is required and so is the value attribute (the empty string is a value); the first of a
+        // repeated key wins, as for parameters. Unknown keys are kept: they are the product's, not ours.
+        for (auto* e : x->getChildWithTagNameIterator(kAttrTag))
+        {
+            const auto key = e->getStringAttribute("key").trim();
+            if (key.isEmpty())
+            {
+                setError(error, "an attribute has no key");
+                return std::nullopt;
+            }
+            if (!e->hasAttribute("value"))
+            {
+                setError(error, "attribute \"" + key + "\" has no value");
+                return std::nullopt;
+            }
+            if (p.attr(key) == nullptr)
+                p.attributes.push_back({ key, e->getStringAttribute("value") });
         }
 
         // Unknown ids are KEPT: they are parameters of a newer build, and
@@ -179,8 +227,13 @@ namespace hrvb::presets::PresetFile
         return p;
     }
 
-    bool write(const Preset& p, const juce::File& f, juce::String* error)
+    bool write(const ProductConfig& config, const Preset& p, const juce::File& f, juce::String* error)
     {
+        if (!config.isValid())
+        {
+            setError(error, kBadConfig);
+            return false;
+        }
         // The name only, not isValid(): a uuid is optional in a file (the
         // importing store assigns one), so a preset that has none yet can
         // still be exported.
@@ -203,7 +256,7 @@ namespace hrvb::presets::PresetFile
         // replaceWithText writes a temporary sibling and renames it over the
         // target, so an interrupted export never leaves half a file under
         // the name the user chose.
-        if (!f.replaceWithText(toXmlString(p), false, false, "\n"))
+        if (!f.replaceWithText(toXmlString(config, p), false, false, "\n"))
         {
             setError(error, "cannot write " + f.getFullPathName());
             return false;
@@ -211,8 +264,13 @@ namespace hrvb::presets::PresetFile
         return true;
     }
 
-    std::optional<Preset> read(const juce::File& f, juce::String* error)
+    std::optional<Preset> read(const ProductConfig& config, const juce::File& f, juce::String* error)
     {
+        if (!config.isValid())
+        {
+            setError(error, kBadConfig);
+            return std::nullopt;
+        }
         if (!f.existsAsFile())
         {
             setError(error, "no such file: " + f.getFullPathName());
@@ -222,10 +280,10 @@ namespace hrvb::presets::PresetFile
         // loaded whole.
         if (f.getSize() > kMaxBytes)
         {
-            setError(error, f.getFileName() + " is too large to be a HardwareReverb preset");
+            setError(error, f.getFileName() + " is too large to be a " + config.productName + " preset");
             return std::nullopt;
         }
-        return fromXmlString(f.loadFileAsString(), error);
+        return fromXmlString(config, f.loadFileAsString(), error);
     }
 
     juce::String safeFileName(const juce::String& presetName)

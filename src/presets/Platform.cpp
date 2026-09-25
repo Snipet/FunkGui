@@ -1,5 +1,7 @@
 #include "Platform.h"
 
+// FunkPresets-private (HardwareReverb Source/presets/Platform.cpp; G8: namespace, strtofC moved here from the header).
+//
 // Why the folded *_key columns exist rather than COLLATE NOCASE and LIKE:
 // SQLite's NOCASE and LIKE fold ASCII only, so "Äther" and "äther" would be
 // two different names to the unique index while the UI calls them the same.
@@ -19,6 +21,7 @@
 #if defined(__APPLE__)
   #include <CoreFoundation/CoreFoundation.h>
   #include <cstring>
+  #include <xlocale.h>
 #elif defined(_WIN32)
   #ifndef NOMINMAX
     #define NOMINMAX
@@ -27,12 +30,28 @@
     #define WIN32_LEAN_AND_MEAN
   #endif
   #include <windows.h>
+  #include <locale.h>
+  #include <stdlib.h>
   #include <string>
   #include <vector>
+#else
+  #include <locale.h>
+  #include <stdlib.h>
 #endif
 
-namespace hrvb::presets
+namespace funkgui::presets::detail
 {
+    float strtofC(const char* s, char** end)
+    {
+       #if defined(_WIN32)
+        static const _locale_t loc = _create_locale(LC_ALL, "C");
+        return _strtof_l(s, end, loc);
+       #else
+        static const locale_t loc = newlocale(LC_ALL_MASK, "C", nullptr);
+        return strtof_l(s, end, loc);
+       #endif
+    }
+
 #if defined(__APPLE__)
 
     // CFStringFold with a NULL locale is the Unicode case fold,

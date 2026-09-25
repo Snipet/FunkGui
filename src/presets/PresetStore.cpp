@@ -1,21 +1,31 @@
-#include "PresetStore.h"
+#include <funkgui/presets/PresetStore.h>
+
 #include "Platform.h"
 #include "Sqlite.h"
 
 #include <charconv>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <map>
 #include <string>
 #include <vector>
 
-// Measured with Tools/PresetProbe.cpp, which is the gate for everything here
-// (schema, every mutation, search, import, two processes, recovery, cost).
+// HardwareReverb Source/presets/PresetStore.cpp, generalised by G8: the product (database location, the environment
+// override, messages) comes from ProductConfig, and schema v2 stores each preset's attributes. Measured with HR's
+// Tools/PresetProbe.cpp, which was the gate for everything here (schema, every mutation, search, import, two
+// processes, recovery, cost); fg.presets.store holds the store to the same rules in FunkGui.
 
-namespace hrvb::presets
+namespace funkgui::presets
 {
     namespace
     {
+        using detail::foldText;
+        using detail::strtofC;
+        using detail::foldCase;
+        using detail::foldDiacritics;
+        using detail::foldWidth;
+
         // ---- schema -------------------------------------------------------
         //
         // PRAGMA user_version is the schema version; kLadder below is every
@@ -25,7 +35,7 @@ namespace hrvb::presets
         // same time cannot both migrate it — the second waits on the write
         // lock (busy timeout), re-reads the version inside its transaction
         // and finds nothing left to do.
-        constexpr int kSchemaVersion = 1;
+        constexpr int kSchemaVersion = 2;
 
         // Forward compatibility. A database a NEWER build has migrated past
         // kSchemaVersion is used as it is, unmigrated, when that build wrote
@@ -35,7 +45,9 @@ namespace hrvb::presets
         // min_reader, and an older build then runs in memory (factory bank
         // only) rather than write rows the newer one would misread. Without
         // this key every schema bump would lock a user who went back one
-        // version out of their own presets.
+        // version out of their own presets. v2 (the attributes column) only
+        // adds, so a v1 reader still reads and writes a v2 file correctly: its
+        // INSERTs take the column's default and its UPDATEs leave it alone.
         constexpr int kMinReaderWritten = 1;
 
         // Long enough that other processes' transactions always finish inside
@@ -137,6 +149,26 @@ namespace hrvb::presets
                 appendJsonString(out, p.id);
                 out += ':';
                 appendFloat(out, p.value);
+            }
+            out += '}';
+            return out;
+        }
+
+        // The attributes, as a JSON object of strings {key: value} (schema v2).
+        // Duplicate keys keep the FIRST value (Preset::attr), empty keys are
+        // dropped, and an empty set is "{}" — the column's default.
+        std::string attributesToJson(const std::vector<Attribute>& attributes)
+        {
+            std::string out = "{";
+            juce::StringArray seen;
+            for (const auto& a : attributes)
+            {
+                if (a.key.isEmpty() || seen.contains(a.key)) continue;
+                seen.add(a.key);
+                if (out.size() > 1) out += ',';
+                appendJsonString(out, a.key);
+                out += ':';
+                appendJsonString(out, a.value);
             }
             out += '}';
             return out;
@@ -250,6 +282,51 @@ namespace hrvb::presets
             return out;
         }
 
+        // The reader for attributesToJson, as tolerant as paramsFromJson: an
+        // entry that is not a string is skipped, a damaged column reads as no
+        // attributes rather than failing the row.
+        std::vector<Attribute> attributesFromJson(const char* text, int bytes)
+        {
+            std::vector<Attribute> out;
+            if (text == nullptr) return out;
+            JsonReader r { text, text + bytes };
+            if (!r.eat('{')) return out;
+            if (r.eat('}')) return out;
+            do
+            {
+                std::string key;
+                if (!r.string(key) || !r.eat(':')) break;
+                const char* before = r.p;
+                std::string value;
+                if (r.string(value))
+                {
+                    const auto k = juce::String::fromUTF8(key.c_str(), (int) key.size());
+                    bool dup = false;
+                    for (const auto& e : out) if (e.key == k) { dup = true; break; }
+                    if (!dup && k.isNotEmpty())
+                        out.push_back({ k, juce::String::fromUTF8(value.c_str(), (int) value.size()) });
+                }
+                else
+                {
+                    r.p = before;
+                    r.skipValue();
+                }
+            } while (r.eat(','));
+            return out;
+        }
+
+        bool attributesEqual(const std::vector<Attribute>& a, const std::vector<Attribute>& b)
+        {
+            // As maps, after the writer's first-wins dedupe: order is not identity.
+            auto norm = [](const std::vector<Attribute>& v)
+            {
+                std::map<juce::String, juce::String> m;
+                for (const auto& e : v) if (e.key.isNotEmpty() && m.count(e.key) == 0) m[e.key] = e.value;
+                return m;
+            };
+            return norm(a) == norm(b);
+        }
+
         bool paramsEqual(const std::vector<ParamValue>& a, const std::vector<ParamValue>& b)
         {
             // As sets: the file and the row may list ids in different orders.
@@ -289,7 +366,8 @@ namespace hrvb::presets
         constexpr const char* kRowColumns =
             "p.uuid, p.name, p.category, p.author, p.notes, p.is_factory, p.format, p.params, "
             "p.created_ms, p.modified_ms, p.last_used_ms, "
-            "(SELECT COALESCE(SUM(1 << t.color), 0) FROM tag t WHERE t.preset_uuid = p.uuid)";
+            "(SELECT COALESCE(SUM(1 << t.color), 0) FROM tag t WHERE t.preset_uuid = p.uuid), "
+            "p.attributes";
 
         enum class OpenResult { ok, readOnly, corrupt, unavailable, tooNew };
 
@@ -308,6 +386,9 @@ namespace hrvb::presets
 
     struct PresetStore::Impl
     {
+        explicit Impl(const ProductConfig& c) : config(c) {}
+
+        ProductConfig config;
         sqlite3* db = nullptr;
         juce::File path;
         bool persistent = false;
@@ -432,15 +513,18 @@ namespace hrvb::presets
                 const auto minReader = pragmaInt("SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'schema_min_reader'");
                 if (minReader < 0 || minReader > kSchemaVersion)
                 {
-                    error = "the preset database was made by a newer version of HardwareReverb";
+                    error = "the preset database was made by a newer version of " + config.productName;
                     return OpenResult::tooNew;
                 }
             }
 
+            // A file this process cannot write is copied into memory and, if it
+            // is older than kSchemaVersion, migrated there (open()): the user
+            // still sees their presets, and the file itself is never touched.
             if (sqlite3_db_readonly(db, "main") == 1)
             {
                 error = f.getFullPathName() + " is read-only";
-                return version >= kSchemaVersion ? OpenResult::readOnly : OpenResult::unavailable;
+                return OpenResult::readOnly;
             }
 
             if (!exec("PRAGMA synchronous=NORMAL") || !exec("PRAGMA foreign_keys=ON"))
@@ -577,8 +661,14 @@ namespace hrvb::presets
             const auto why = error;
             if (r == OpenResult::readOnly && copyIntoMemory())
             {
-                error = why + "; changes will not be saved";
-                return;
+                // An older file's copy is brought up to this schema in memory;
+                // one that cannot be (a v0 file holding someone else's table)
+                // falls through to the empty in-memory store below.
+                if (migrate())
+                {
+                    error = why + "; changes will not be saved";
+                    return;
+                }
             }
             close();
             persistent = false;
@@ -638,13 +728,22 @@ namespace hrvb::presets
             return I.exec(minReader.c_str()) || I.failSql("schema v1");
         }
 
+        // v2 (G8): each preset's product-defined attributes (01 §9.2:
+        // FCompressor's modeId and modeRev), a JSON object of strings. Only a
+        // column is added, so kMinReaderWritten stays 1 (see above).
+        static bool toV2(Impl& I)
+        {
+            return I.exec("ALTER TABLE preset ADD COLUMN attributes TEXT NOT NULL DEFAULT '{}'") || I.failSql("schema v2");
+        }
+
         struct Step { int to; bool (*apply)(Impl&); };
 
         bool migrate()
         {
             static const Step kLadder[] = {
                 { 1, &toV1 },
-                // { 2, &toV2 },   next: one function, one row, kSchemaVersion = 2
+                { 2, &toV2 },
+                // { 3, &toV3 },   next: one function, one row, kSchemaVersion = 3
             };
             static_assert(sizeof(kLadder) / sizeof(kLadder[0]) == kSchemaVersion,
                           "one ladder step per schema version");
@@ -697,6 +796,7 @@ namespace hrvb::presets
             p.modifiedMs = sqlite3_column_int64(s, 9);
             p.lastUsedMs = sqlite3_column_int64(s, 10);
             p.tags       = static_cast<TagMask>(sqlite3_column_int(s, 11) & kAllTags);
+            p.attributes = attributesFromJson((const char*) sqlite3_column_text(s, 12), sqlite3_column_bytes(s, 12));
             return p;
         }
 
@@ -726,11 +826,11 @@ namespace hrvb::presets
         {
             auto* s = prepare(insert
                 ? "INSERT INTO preset (name, name_key, category, category_key, author, notes, search_key,"
-                  " format, params, created_ms, modified_ms, last_used_ms, uuid, sort_key, is_factory)"
-                  " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0)"
+                  " format, params, created_ms, modified_ms, last_used_ms, uuid, sort_key, attributes, is_factory)"
+                  " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 0)"
                 : "UPDATE preset SET name = ?1, name_key = ?2, category = ?3, category_key = ?4, author = ?5,"
                   " notes = ?6, search_key = ?7, format = ?8, params = ?9, created_ms = ?10, modified_ms = ?11,"
-                  " last_used_ms = ?12, sort_key = ?14 WHERE uuid = ?13 AND is_factory = 0");
+                  " last_used_ms = ?12, sort_key = ?14, attributes = ?15 WHERE uuid = ?13 AND is_factory = 0");
             if (s == nullptr) return failSql("save");
             bindText(s, 1, p.name);
             bindText(s, 2, fold(p.name));
@@ -747,6 +847,8 @@ namespace hrvb::presets
             sqlite3_bind_int64(s, 12, p.lastUsedMs);
             bindText(s, 13, p.uuid);
             bindText(s, 14, sortKey(p.name));
+            const auto attrs = attributesToJson(p.attributes);
+            sqlite3_bind_text(s, 15, attrs.c_str(), (int) attrs.size(), SQLITE_TRANSIENT);
             const int rc = sqlite3_step(s);
             sqlite3_reset(s);
             sqlite3_clear_bindings(s);
@@ -879,20 +981,38 @@ namespace hrvb::presets
 
     // =======================================================================
 
-    PresetStore::PresetStore() : impl_(std::make_unique<Impl>())
+    PresetStore::PresetStore(const ProductConfig& config) : impl_(std::make_unique<Impl>(config))
     {
-        impl_->open(defaultLocation());
+        auto& I = *impl_;
+        if (config.isValid())
+        {
+            I.open(defaultLocation(config));
+            return;
+        }
+        // Nothing to name a file after: a product bug, not the user's problem. The store still works, in memory.
+        jassertfalse;
+        I.persistent = false;
+        I.error = I.openMemory() ? juce::String("invalid preset product configuration; presets will not be saved")
+                                 : juce::String("invalid preset product configuration; and no in-memory database either");
     }
 
     PresetStore::~PresetStore() = default;
 
-    juce::File PresetStore::defaultLocation()
+    juce::File PresetStore::defaultLocation(const ProductConfig& config)
     {
-        if (const char* p = std::getenv("HRVB_PRESETS_DB"); p != nullptr && *p != 0)
-            return juce::File(juce::String::fromUTF8(p));
+        if (!config.isValid()) return {};
+        // The one environment read of FunkPresets. std::getenv rather than funkgui::env(): FunkPresets does not
+        // depend on FunkGui::core (02 §1.2), the variable's FULL name is the product's (ProductConfig::dbEnvVar,
+        // 01 §9.2), and it is read afresh for every store, as HardwareReverb's store read it, so a harness can point
+        // successive stores at successive files. A relative path resolves against the working directory.
+        if (config.dbEnvVar.isNotEmpty())
+            if (const char* p = std::getenv(config.dbEnvVar.toRawUTF8()); p != nullptr && *p != 0)
+                return juce::File::getCurrentWorkingDirectory().getChildFile(juce::String::fromUTF8(p));
         return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-                   .getChildFile("Application Support/HardwareReverb/Presets.db");
+                   .getChildFile("Application Support").getChildFile(config.productName).getChildFile("Presets.db");
     }
+
+    const ProductConfig& PresetStore::config() const { return impl_->config; }
 
     bool PresetStore::isOpen() const              { return impl_->db != nullptr; }
     bool PresetStore::isPersistent() const        { return impl_->db != nullptr && impl_->persistent; }
@@ -939,18 +1059,18 @@ namespace hrvb::presets
         // somehow holds a factory uuid.
         auto* up = I.prepare(
             "INSERT INTO preset (uuid, name, name_key, category, category_key, author, notes, search_key,"
-            " format, params, sort_key, is_factory, created_ms, modified_ms, last_used_ms)"
-            " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, 0, 0, 0)"
+            " format, params, sort_key, attributes, is_factory, created_ms, modified_ms, last_used_ms)"
+            " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, 0, 0, 0)"
             " ON CONFLICT(uuid) DO UPDATE SET name = excluded.name, name_key = excluded.name_key,"
             " sort_key = excluded.sort_key,"
             " category = excluded.category, category_key = excluded.category_key, author = excluded.author,"
             " notes = excluded.notes, search_key = excluded.search_key, format = excluded.format,"
-            " params = excluded.params"
+            " params = excluded.params, attributes = excluded.attributes"
             " WHERE preset.is_factory = 1 AND (preset.name IS NOT excluded.name"
             " OR preset.category IS NOT excluded.category OR preset.author IS NOT excluded.author"
             " OR preset.notes IS NOT excluded.notes OR preset.format IS NOT excluded.format"
             " OR preset.params IS NOT excluded.params OR preset.search_key IS NOT excluded.search_key"
-            " OR preset.sort_key IS NOT excluded.sort_key)");
+            " OR preset.sort_key IS NOT excluded.sort_key OR preset.attributes IS NOT excluded.attributes)");
         if (up == nullptr) { I.failSql("factory sync"); return; }
 
         std::vector<juce::String> keep;
@@ -972,6 +1092,8 @@ namespace hrvb::presets
             const auto json = paramsToJson(p.params);
             sqlite3_bind_text(up, 10, json.c_str(), (int) json.size(), SQLITE_TRANSIENT);
             Impl::bindText(up, 11, sortKey(p.name));
+            const auto attrs = attributesToJson(p.attributes);
+            sqlite3_bind_text(up, 12, attrs.c_str(), (int) attrs.size(), SQLITE_TRANSIENT);
             const int rc = sqlite3_step(up);
             sqlite3_reset(up);
             sqlite3_clear_bindings(up);
@@ -1292,8 +1414,9 @@ namespace hrvb::presets
         auto refuse = [&](const juce::String& why) { r.error = why; I.error = why; return r; };
 
         if (I.db == nullptr)       return refuse("no database");
-        if (p.format > kFormat)    return refuse("\"" + p.name.trim() + "\" was made by a newer version of HardwareReverb");
-        if (p.format < 1)          return refuse("not a HardwareReverb preset (format " + juce::String(p.format) + ")");
+        const auto& product = I.config.productName;
+        if (p.format > kFormat)    return refuse("\"" + p.name.trim() + "\" was made by a newer version of " + product);
+        if (p.format < 1)          return refuse("not a " + product + " preset (format " + juce::String(p.format) + ")");
         p.name = p.name.trim();
         if (p.name.isEmpty())      return refuse("the preset has no name");
         if (const auto bad = validateParams(p.params); bad.isNotEmpty()) return refuse(bad);
@@ -1301,7 +1424,7 @@ namespace hrvb::presets
         Impl::Txn t(I);
         if (!t.active) return refuse(I.error);
 
-        // Identical = same uuid, same name, same values: importing a file
+        // Identical = same uuid, same name, same values, same attributes: importing a file
         // twice, or re-importing an export, is a no-op that says so. Any
         // difference keeps both, the newcomer under a fresh uuid, because
         // silently replacing the user's version with a file's is the one
@@ -1312,7 +1435,8 @@ namespace hrvb::presets
         {
             if (const auto existing = I.load(uuid))
             {
-                if (existing->name == p.name && paramsEqual(existing->params, p.params))
+                if (existing->name == p.name && paramsEqual(existing->params, p.params)
+                    && attributesEqual(existing->attributes, p.attributes))
                 {
                     r.ok = true;
                     r.duplicate = true;
