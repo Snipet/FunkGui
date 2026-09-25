@@ -3,6 +3,24 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.7.1 — 2026-09-24 · S11: EditorHost follows ancestor moves; theme index, file drags, owner component
+
+Golden impact: **none** (no drawing changed; every existing `fg` golden and `fg.gallery.live` unchanged). Card G7b.
+All additive: every new virtual has a default, so a Panel or host written against v0.7.0 compiles and behaves as before.
+
+- **Fix:** `EditorHost` keeps its render view on the editor when an *ancestor* moves inside the same window (a
+  `juce::ComponentMovementWatcher` on the editor). JUCE's Standalone lays its content out under the title bar after the
+  view attaches, which left the Metal view 27 px too high. Products can delete their own watchers (FCompressor U7's
+  `Editor::AncestorWatcher`). Test `fg.editorhost.follow` (label `live`).
+- `HostServices::themeIndex()` (default 0): the index of the Theme the next `draw()` receives — `EditorHost`: the
+  `UI_THEME` override, else `UiPreferences::theme()`, so a theme cell's click reads the new index at once and the next
+  frame ticks and draws with it; `HeadlessHost`: its constructor's index. Replaces matching the Theme's colours.
+- `HostServices::ownerComponent()` (default `nullptr`): the `juce::Component` to anchor a `PopupMenu` or parent a
+  `FileChooser` — `EditorHost` returns itself, `HeadlessHost` `nullptr`. Replaces product-side `setOwner()`.
+- `Panel::filesDragEnter(paths, x, y)`, `filesDragMove(x, y)`, `filesDragExit()` (defaults ignore them): `EditorHost`
+  now overrides JUCE's `fileDragEnter/Move/Exit` and forwards them like the drop (no exit follows a drop).
+- Tests `fg.editorhost.headless` (core), `fg.editorhost.api` (gpu), `fg.editorhost.follow` (gpu, live).
+
 ## v0.7.0 — 2026-09-24 · S8: EditorHost, GPU sink, runtime ObjC names, live parity
 
 Golden impact: **none** (35/35 `fg`; `fg.gallery.live` proves a live Metal capture's geometry, text and a11y hashes equal
