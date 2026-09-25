@@ -3,11 +3,29 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
-## v0.8.0 — S11: UI zoom (G7c; the lead merges G8's FunkPresets text here)
+## v0.8.0 — 2026-09-24 · S11: FunkPresets (G8), UI zoom (G7c)
 
-Golden impact (G7c): **new** `fg.gallery.zoom`; no existing golden moved (every `fg` golden, `fg.gallery.live` and the
-legacy-hr parity are unchanged: with no zoom steps, and under `CANVAS_DUMP` without `UI_ZOOM`, the editor is exactly
-v0.7.1's). Card G7c (FCompressor ADR-68, which revises ADR-06's "one `setSize`"). All additive.
+Golden impact: **new** `fg.gallery.zoom`; no existing golden moved (every `fg` golden, `fg.gallery.live` and the
+legacy-hr parity are unchanged). New spec-only tests `fg.presets.{store,file,hooks}`. All additive (MINOR).
+
+### FunkPresets (card G8)
+
+- `FunkGui::presets` now has sources: HR's preset layer (S11.L1 snapshot, HR 34cb23b; SEED.tsv) generalised per
+  FCompressor 01 §9.2; SQLite3 from the SDK; no GUI dependency.
+- `ProductConfig{productName, fileExtension, xmlRoot, dbEnvVar}` + `isValid()`; `Attribute`, `Preset::{attributes, attr,
+  setAttr}`.
+- `PresetHooks{isPresetParameter, beginApply, applyBefore, onApplied, captureExtra, findFactory, initialPreset,
+  mixParameter}`; `PresetManager(apvts, hooks)`: begin → before → values → identity → onApplied; `<PRESET>` state
+  carries `ATTR`.
+- `PresetStore(const ProductConfig&)`: Application Support/<productName>/Presets.db or `$<dbEnvVar>`; schema v2
+  (attributes; min_reader 1); WAL, in-memory fallback, corrupt files set aside; read-only older files migrated in memory.
+- `PresetFile::{toXmlString, fromXmlString, write, read}(config, …)`: `<xmlRoot plugin=productName>` with `ATTR` + `PARAM`;
+  tags and timestamps never exported.
+- Removed: `FactoryPresets.*` (product data). `Platform.h`/`Sqlite.h` private; `FUNKGUI_WINSQLITE` replaces
+  `HRVB_WINSQLITE`.
+- Tests: `fg.presets.store`, `fg.presets.file`, `fg.presets.hooks` (new `FUNKGUI_TEST` value `links=presets`).
+
+### UI zoom (card G7c; FCompressor ADR-68, which revises ADR-06's "one `setSize`")
 
 - **UI zoom in `EditorHost`**: one machine-wide preference scales the whole panel uniformly while the Panel keeps its
   logical size W × H and draws, hit-tests and lists accessibility in its own px. At an effective zoom z the editor is
@@ -32,6 +50,12 @@ v0.7.1's). Card G7c (FCompressor ADR-68, which revises ADR-06's "one `setSize`")
   steps 100/125/150/175 (default 100, preference `uiZoom`), so the section resizes its window live.
 - Tests `fg.editorhost.zoom` (gpu), `fg.editorhost.zoom.live` (gpu, live), `fg.gallery.zoom`; new
   `fg.editorhost.headless` rows.
+
+### Fix (lead, from the HardwareReverb migration)
+
+- `funkgui_framerender --legacy-hr`: the six count rows (`layout.static_count`, `text_count`, `rank_strokes`,
+  `segments`, `view_w`, `view_h`) declare `abs:0`, as HR's goldens hold them, instead of `exact`; `--check` against
+  HR's unedited goldens now passes. No FunkGui golden holds these rows.
 
 ## v0.7.1 — 2026-09-24 · S11: EditorHost follows ancestor moves; theme index, file drags, owner component
 

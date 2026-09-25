@@ -172,12 +172,12 @@ namespace
         if (legacy)
         {
             P.hash("layout.geometry", fp.geometry);
-            P.num("layout.static_count", fp.statics, T::Tol::exact());
-            P.num("layout.text_count", fp.texts, T::Tol::exact());
-            P.num("layout.rank_strokes", rank, T::Tol::exact());
-            P.num("layout.segments", fp.segments, T::Tol::exact());
-            P.num("layout.view_w", l.info.logicalW, T::Tol::exact());
-            P.num("layout.view_h", l.info.logicalH, T::Tol::exact());
+            P.num("layout.static_count", fp.statics, T::Tol::abs(0));
+            P.num("layout.text_count", fp.texts, T::Tol::abs(0));
+            P.num("layout.rank_strokes", rank, T::Tol::abs(0));
+            P.num("layout.segments", fp.segments, T::Tol::abs(0));
+            P.num("layout.view_w", l.info.logicalW, T::Tol::abs(0));
+            P.num("layout.view_h", l.info.logicalH, T::Tol::abs(0));
             P.num("layout.max_x", static_cast<double>(fp.maxX), T::Tol::abs(0.01));
             P.num("layout.max_y", static_cast<double>(fp.maxY), T::Tol::abs(0.01));
             std::printf("geometry %016llx  static %d (text %d, rank strokes %d)  live caps excluded %d  "

@@ -8,11 +8,11 @@ A headless-testable SDF/bgfx GUI library for JUCE audio plug-ins, seeded from Ha
 
 - `FunkGui::harness` (`include/funkgui/test/Harness.h`, namespace `funkgui::test`) is Harness v2: header-only,
   C++20, JUCE-free (03 §3.2).
-- `FunkGui::core`, `FunkGui::gpu` and `FunkGui::presets` are **empty placeholder** INTERFACE targets, and
-  `funkgui_configure_product()`, `funkgui_compile_shaders()` and `funkgui_add_font()` only print. They let a consumer
-  write its final link lines now; v0.1.0 (task G1) gives them content.
-- The snapshot sources under `include/funkgui/{core,text,gpu,prefs}`, `src/`, `shaders/`, `fonts/` and `tools/` are
-  HR's files after mechanical renames. Nothing compiles them yet.
+- `FunkGui::core` (canvas, text, widgets, panel, prefs, a11y, JUCE glue), `FunkGui::gpu` (bgfx/Metal: `EditorHost`,
+  `BgfxSink`, `FramePump`, shaders) and `FunkGui::presets` (FunkPresets: SQLite preset store, manager, file format; v0.8.0)
+  are INTERFACE targets carrying their sources; `funkgui_configure_product()`, `funkgui_compile_shaders()` and
+  `funkgui_add_font()` wire a product to them.
+- `SEED.tsv` records the provenance of every file first copied from HardwareReverb (byte for byte, with sha256).
 - Options (02 §1.7): `FUNKGUI_WITH_BGFX` (ON), `FUNKGUI_WITH_PRESETS` (ON), `FUNKGUI_HARNESS_ONLY` (OFF),
   `FUNKGUI_BUILD_TOOLS` (top-level). `FUNKGUI_VERSION` is a `CACHE INTERNAL` variable the consumer can read.
 
