@@ -50,10 +50,12 @@ namespace funkgui
             return std::bit_cast<uint64_t>(a) == std::bit_cast<uint64_t>(b);
         }
 
-        // Logical-px bounds as the smallest integer rectangle that contains them (a child never shrinks its item).
-        juce::Rectangle<int> intBounds(const Rect& r) noexcept
+        // Logical-px bounds in editor px (times the zoom, G7c) as the smallest integer rectangle that contains them (a
+        // child never shrinks its item). At scale 1 every product is exact: the v0.7 bounds, bit for bit.
+        juce::Rectangle<int> intBounds(const Rect& r, float scale) noexcept
         {
-            return juce::Rectangle<float>(r.x, r.y, std::max(r.w, 0.0f), std::max(r.h, 0.0f))
+            return juce::Rectangle<float>(r.x * scale, r.y * scale, std::max(r.w, 0.0f) * scale,
+                                          std::max(r.h, 0.0f) * scale)
                 .getSmallestIntegerContainer();
         }
     }
@@ -99,13 +101,13 @@ namespace funkgui
             }
         }
 
-        // The item's bounds in its parent component: the editor's (logical px, the Panel's space) or, when nested,
-        // relative to the parent item's.
-        void place(const Item* parentItem)
+        // The item's bounds in its parent component: the editor's (the Panel's logical px times the zoom) or, when
+        // nested, relative to the parent item's.
+        void place(const Item* parentItem, float scale)
         {
-            auto b = intBounds(item_.bounds);
+            auto b = intBounds(item_.bounds, scale);
             if (parentItem != nullptr)
-                b = b - intBounds(parentItem->item_.bounds).getPosition();
+                b = b - intBounds(parentItem->item_.bounds, scale).getPosition();
             if (b != getBounds())
                 setBounds(b);
         }
@@ -283,7 +285,7 @@ namespace funkgui
                     if (c->item().id == it.parent)
                         parentItem = c.get();
             juce::Component& parent = parentItem != nullptr ? static_cast<juce::Component&>(*parentItem) : editor;
-            child->place(parentItem);
+            child->place(parentItem, scale_);
             parent.addChildComponent(*child);    // visibility is the item's (applyFields)
             children_.push_back(std::move(child));
         }
@@ -302,8 +304,21 @@ namespace funkgui
         {
             Item& child = *children_[i];
             child.update(items[i]);
-            child.place(dynamic_cast<const Item*>(child.getParentComponent()));
+            child.place(dynamic_cast<const Item*>(child.getParentComponent()), scale_);
         }
         items_ = items;
+    }
+
+    void A11yBridge::setScale(float editorPxPerLogicalPx)
+    {
+        const float s =
+            std::isfinite(editorPxPerLogicalPx) && editorPxPerLogicalPx > 0.0f ? editorPxPerLogicalPx : 1.0f;
+        if (std::bit_cast<uint32_t>(s) == std::bit_cast<uint32_t>(scale_))
+            return;                                  // the same scale (compared as bits: no float ==)
+        scale_ = s;
+        // Parents are listed before their children, so each parent is placed before the children nested in it (their
+        // bounds are relative to it either way).
+        for (const auto& c : children_)
+            c->place(dynamic_cast<const Item*>(c->getParentComponent()), scale_);
     }
 }

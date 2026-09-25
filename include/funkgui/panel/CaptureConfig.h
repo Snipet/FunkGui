@@ -11,6 +11,8 @@
 //   UI_FIXED_DT=sec                         the Panel ticks with this dt, so a live capture equals a headless frame
 //   A11Y_DUMP=path                          a11y dump after the first frame (a11yDumpLine format, 02 §5.6)
 //   GPU_LOG=1                               log attach, retry, owns, scale and overflow events
+//   UI_ZOOM=percent                         pins the UI zoom (G7c, v0.8.0; not persisted, no display fit). Without it
+//                                           a CANVAS_DUMP capture runs at 100 %, so captures and parity are unchanged
 //
 // Declared in G2 (v0.2.0, frozen at FZ1); fromEnv() is implemented with EditorHost (G7).
 
@@ -29,6 +31,7 @@ namespace funkgui
         float       fixedDt = 0.0f;              // 0 = the frame clock's dt
         std::string a11yDump;                    // empty = no dump
         bool        gpuLog = false;
+        int         uiZoom = 0;                  // G7c (v0.8.0): UI_ZOOM percent, 25..400; 0 = no pin
 
         // Every field from the environment; unset or unparsable variables keep the defaults above.
         static CaptureConfig fromEnv();

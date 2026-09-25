@@ -3,6 +3,36 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.8.0 — S11: UI zoom (G7c; the lead merges G8's FunkPresets text here)
+
+Golden impact (G7c): **new** `fg.gallery.zoom`; no existing golden moved (every `fg` golden, `fg.gallery.live` and the
+legacy-hr parity are unchanged: with no zoom steps, and under `CANVAS_DUMP` without `UI_ZOOM`, the editor is exactly
+v0.7.1's). Card G7c (FCompressor ADR-68, which revises ADR-06's "one `setSize`"). All additive.
+
+- **UI zoom in `EditorHost`**: one machine-wide preference scales the whole panel uniformly while the Panel keeps its
+  logical size W × H and draws, hit-tests and lists accessibility in its own px. At an effective zoom z the editor is
+  round(W·z) × round(H·z); the drawable is sized at z × backing scale and the frame's `dpi` is that product, so pixel
+  snapping (hairlines, text) lands on device px at the effective scale. Canvas, PrimList, dump v2 and fingerprints stay
+  logical. Pointer, wheel, drag and file-drag positions reach the Panel divided by z; `showParamMenu` positions are
+  multiplied back; `A11yBridge` children are placed at z × their items.
+- `EditorConfig::{zoomSteps, defaultZoomPercent, zoomPrefKey}` (defaults: no steps = no zoom, 100, not persisted).
+  FCompressor passes `{100, 125, 150, 175}`, `125`, `"uiZoom"` (UF1b); HardwareReverb passes nothing.
+- `HostServices::zoomPercent()` (default 100), `setZoomPercent(int)` (default no-op), `zoomSteps()` (default empty
+  `std::span<const int>`). `EditorHost` validates the step, writes the preference (`UiPreferences::setInt`), answers at
+  once and resizes at the start of the next frame (`setSize`; the host resizes its window; the render view and
+  drawable follow before that frame is recorded and submitted); every open editor follows the preferences revision,
+  like the theme. A missing, damaged or unlisted preference reads as the default.
+- Fit: a window larger than the user area of the editor's display is drawn at the largest step that fits; the
+  preference is kept. `EditorHost::Diagnostics::zoomPercent` reports the effective zoom.
+- Capture: `CaptureConfig::uiZoom` (`<PREFIX>UI_ZOOM=<percent>`, 25–400) pins the zoom (not persisted, not fitted);
+  under `CANVAS_DUMP` the zoom is 100 % unless `UI_ZOOM` is set, so captures and `gui-live` are unchanged.
+- `A11yBridge::setScale/scale`; `HeadlessHost::setZoom(steps, percent)` and `Log::zooms` (HeadlessHost stays logical:
+  it only answers the three calls, for a Panel's ZOOM control).
+- Gallery: section `zoom` (ZOOM cells over the host's steps, a readout, density samples); `FunkGuiGalleryApp` now has
+  steps 100/125/150/175 (default 100, preference `uiZoom`), so the section resizes its window live.
+- Tests `fg.editorhost.zoom` (gpu), `fg.editorhost.zoom.live` (gpu, live), `fg.gallery.zoom`; new
+  `fg.editorhost.headless` rows.
+
 ## v0.7.1 — 2026-09-24 · S11: EditorHost follows ancestor moves; theme index, file drags, owner component
 
 Golden impact: **none** (no drawing changed; every existing `fg` golden and `fg.gallery.live` unchanged). Card G7b.
