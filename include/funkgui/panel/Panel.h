@@ -47,5 +47,14 @@ namespace funkgui
         virtual void  closeGestures() = 0;               // host closes the editor mid-gesture (HR dtor rule)
         virtual bool  filesInterest(const std::vector<std::string>&) const { return false; }
         virtual void  filesDropped(const std::vector<std::string>&) {}
+
+        // A file drag over the window (G7b additions, v0.7.1; defaults ignore it). Only a drag whose files
+        // filesInterest() accepted arrives: filesDragEnter once, filesDragMove while it moves, then either
+        // filesDragExit (it left, or was cancelled) or filesDropped (no exit follows a drop; the last move's position
+        // is the drop position). Positions are the Panel's logical px. EditorHost nudges the frame pump to full rate
+        // after each, so a drop-zone highlight eases at once.
+        virtual void  filesDragEnter(const std::vector<std::string>&, float /*x*/, float /*y*/) {}
+        virtual void  filesDragMove(float /*x*/, float /*y*/) {}
+        virtual void  filesDragExit() {}
     };
 }

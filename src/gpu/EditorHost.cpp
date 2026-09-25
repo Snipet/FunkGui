@@ -34,6 +34,16 @@
 //   for the same state after the same tick.
 // - Overflow (02 §4.5): Diagnostics::overflows, one GPU_LOG line, jassertfalse (Debug), and the next dump's
 //   "overflow N"; the frame still counts as submitted, since its view was cleared and touched.
+//
+// G7b (v0.7.1), additive:
+// - Ancestor moves: a ParentWatcher (juce::ComponentMovementWatcher on the editor) calls followPlacement(), moved()'s
+//   own body, whenever the editor's position in its top-level component changes; a resize still reaches resized(), a
+//   new peer still parentHierarchyChanged(). A move of the whole window changes nothing inside its peer and is not
+//   reported. The watcher is made last in the constructor and reset first in the destructor.
+// - HostServices::themeIndex() is the index the next frame draws with: the UI_THEME override, else the preference
+//   (submitFrame step 1 applies it before step 6 ticks the Panel). ownerComponent() is this editor.
+// - File drags: enter, move and exit reach the Panel like the drop, as its plain types (paths as UTF-8, positions as
+//   float logical px), each followed by a full-rate nudge.
 
 namespace funkgui
 {
@@ -75,7 +85,40 @@ namespace funkgui
             std::remove(tmp.c_str());
             return false;
         }
+
+        std::vector<std::string> pathsOf(const juce::StringArray& files)
+        {
+            std::vector<std::string> paths;
+            paths.reserve(static_cast<size_t>(files.size()));
+            for (const auto& f : files)
+                paths.emplace_back(f.toStdString());
+            return paths;
+        }
     }
+
+    // JUCE reports a component's own moves (moved()) and a new peer (parentHierarchyChanged()), but not an ancestor
+    // that moves inside the same peer, which moves the editor's area of that peer all the same. This listens to the
+    // editor and to every ancestor (JUCE re-registers it when the hierarchy changes) and reports a change of the
+    // editor's position relative to its top-level component, as WebBrowserComponent keeps its native view placed.
+    class EditorHost::ParentWatcher final : public juce::ComponentMovementWatcher
+    {
+    public:
+        explicit ParentWatcher(EditorHost& host) : juce::ComponentMovementWatcher(&host), host_(host) {}
+
+        using juce::ComponentMovementWatcher::componentMovedOrResized;      // the ComponentListener overloads stay
+        using juce::ComponentMovementWatcher::componentVisibilityChanged;
+
+        void componentMovedOrResized(bool wasMoved, bool /*wasResized*/) override
+        {
+            if (wasMoved)
+                host_.followPlacement();             // a resize of the editor itself reaches resized()
+        }
+        void componentPeerChanged() override {}      // parentHierarchyChanged() re-attaches to a new peer
+        void componentVisibilityChanged() override {}   // submitFrame() gates every frame on isShowing()
+
+    private:
+        EditorHost& host_;
+    };
 
     //==================================================================================================================
     // Lifetime
@@ -120,11 +163,13 @@ namespace funkgui
             config_.setUiAttached(true);
         FramePump::get().add(this);
         startTimerHz(kIdleHz);
+        parentWatcher_ = std::make_unique<ParentWatcher>(*this);
         gpuLog("editor opened (" + juce::String(w) + " x " + juce::String(h) + ")");
     }
 
     EditorHost::~EditorHost()
     {
+        parentWatcher_.reset();                      // no placement callback while the surface goes away
         stopTimer();
         // A host can close the editor with the mouse still down, in which case mouseUp never arrives; leaving the
         // gesture open strands the host's automation write (HR :168-173).
@@ -283,6 +328,13 @@ namespace funkgui
     }
 
     void EditorHost::moved()
+    {
+        followPlacement();
+    }
+
+    // The editor's area of its peer moved: its own move (moved()) or an ancestor's (ParentWatcher). The view goes
+    // where the editor now is; the drawable keeps its size.
+    void EditorHost::followPlacement()
     {
         if (!surfaceOk_) return;
         if (auto* peer = getPeer())
@@ -707,20 +759,31 @@ namespace funkgui
 
     bool EditorHost::isInterestedInFileDrag(const juce::StringArray& files)
     {
-        std::vector<std::string> paths;
-        paths.reserve(static_cast<size_t>(files.size()));
-        for (const auto& f : files)
-            paths.emplace_back(f.toStdString());
-        return panel_->filesInterest(paths);
+        return panel_->filesInterest(pathsOf(files));
     }
 
     void EditorHost::filesDropped(const juce::StringArray& files, int, int)
     {
-        std::vector<std::string> paths;
-        paths.reserve(static_cast<size_t>(files.size()));
-        for (const auto& f : files)
-            paths.emplace_back(f.toStdString());
-        panel_->filesDropped(paths);
+        panel_->filesDropped(pathsOf(files));
+        nudgeFullRate();
+    }
+
+    // JUCE sends these only for a drag isInterestedInFileDrag() accepted; a drop ends the drag without an exit.
+    void EditorHost::fileDragEnter(const juce::StringArray& files, int x, int y)
+    {
+        panel_->filesDragEnter(pathsOf(files), static_cast<float>(x), static_cast<float>(y));
+        nudgeFullRate();
+    }
+
+    void EditorHost::fileDragMove(const juce::StringArray&, int x, int y)
+    {
+        panel_->filesDragMove(static_cast<float>(x), static_cast<float>(y));
+        nudgeFullRate();
+    }
+
+    void EditorHost::fileDragExit(const juce::StringArray&)
+    {
+        panel_->filesDragExit();
         nudgeFullRate();
     }
 
@@ -778,5 +841,17 @@ namespace funkgui
     {
         if (config_.endBatch)
             config_.endBatch();
+    }
+
+    // What the next frame draws with. Without the override, submitFrame's step 1 sets themeIdx_ to the preference
+    // before the Panel is ticked, so a preference written since the last frame is already the answer here.
+    int EditorHost::themeIndex() const
+    {
+        return capture_.uiTheme >= 0 ? themeIdx_ : UiPreferences::get().theme();
+    }
+
+    juce::Component* EditorHost::ownerComponent()
+    {
+        return this;
     }
 }

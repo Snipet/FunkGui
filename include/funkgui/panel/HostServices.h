@@ -3,6 +3,11 @@
 // What a Panel may ask of its host (02 §3.5). EditorHost implements it over JUCE and the frame pump; HeadlessHost over
 // a simulated clock and a call log; a Panel reaches it through attach() and GestureController.
 
+namespace juce
+{
+    class Component;                                 // ownerComponent() only: this header stays JUCE-free
+}
+
 namespace funkgui
 {
     class ParamPort;
@@ -23,5 +28,21 @@ namespace funkgui
         // Calls nest, and every beginBatch is matched by one endBatch.
         virtual void   beginBatch() = 0;
         virtual void   endBatch() = 0;
+
+        // ---- G7b additions (v0.7.1). Not pure: a host written before them keeps compiling and gets the defaults. ----
+
+        // The index of the Theme the Panel's next draw() receives (Theme::byIndex; 0 .. Theme::kCount - 1). Valid from
+        // attach() on and at any time: in tick(), in draw(), in an input handler. EditorHost: its <PREFIX>UI_THEME
+        // capture override when one is set, else UiPreferences::theme(), which the next frame applies before it ticks
+        // the Panel; so a theme cell that writes the preference reads the new index at once, and the frame after the
+        // click ticks and draws with it (no matching the Theme's colours, no frame of lag). HeadlessHost: its
+        // constructor's themeIdx (0 when that names no theme, as Theme::byIndex draws). Default: 0.
+        virtual int themeIndex() const { return 0; }
+
+        // The juce::Component that owns the Panel's window, to anchor a juce::PopupMenu
+        // (PopupMenu::Options::withTargetComponent) or parent a juce::FileChooser. EditorHost returns itself, valid for
+        // as long as the Panel is attached. nullptr when there is no window (HeadlessHost; the default): the Panel
+        // then shows no menu and no chooser.
+        virtual juce::Component* ownerComponent() { return nullptr; }
     };
 }
