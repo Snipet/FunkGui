@@ -926,6 +926,13 @@ namespace funkgui
         nudgeFullRate();                             // the next frame, soon, applies it
     }
 
+    bool EditorHost::zoomFits(int percent) const
+    {
+        if (!isZoomStep(percent))
+            return false;
+        return zoomPin_ > 0 || fitZoom(percent) == percent;   // fitZoom: the largest step <= percent that fits
+    }
+
     bool EditorHost::isZoomStep(int percent) const noexcept
     {
         return std::binary_search(zoomSteps_.begin(), zoomSteps_.end(), percent);

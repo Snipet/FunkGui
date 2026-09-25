@@ -61,6 +61,8 @@ namespace funkgui
         // empty and 100, HostServices' defaults (a zoomSteps() span is valid until the next setZoom). setZoomPercent(p)
         // is counted in log.zooms and taken when p is a step.
         void setZoom(std::vector<int> steps, int percent);
+        // Lead (v0.8.0): the largest step zoomFits() accepts (a simulated display); 0 (the default) = every step fits.
+        void setZoomFitLimit(int maxPercent) { zoomFitLimit_ = maxPercent; }
 
         // HostServices: records into log; nowSeconds() returns the simulated clock.
         void   setUnboundedDrag(bool on) override;
@@ -76,6 +78,7 @@ namespace funkgui
         int    zoomPercent() const override;
         void   setZoomPercent(int percent) override;
         std::span<const int> zoomSteps() const override;
+        bool   zoomFits(int percent) const override;   // a listed step <= setZoomFitLimit (any, when 0)
 
     private:
         // Private state: completed by the implementing card (G3); not part of the frozen API.
@@ -89,5 +92,6 @@ namespace funkgui
         float    lastDt_ = 1.0f / 60.0f;
         std::vector<int> zoomSteps_;                 // G7c: setZoom()
         int      zoomPercent_ = 100;
+        int      zoomFitLimit_ = 0;                  // setZoomFitLimit; 0 = every step fits
     };
 }

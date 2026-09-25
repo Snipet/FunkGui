@@ -42,6 +42,9 @@ legacy-hr parity are unchanged). New spec-only tests `fg.presets.{store,file,hoo
   like the theme. A missing, damaged or unlisted preference reads as the default.
 - Fit: a window larger than the user area of the editor's display is drawn at the largest step that fits; the
   preference is kept. `EditorHost::Diagnostics::zoomPercent` reports the effective zoom.
+- `HostServices::zoomFits(percent)` (lead; default true): whether choosing that step would draw at it, so a ZOOM
+  control can mark the steps the current display cannot show (EditorHost: a listed step that fits, or any step under
+  a pin; `HeadlessHost::setZoomFitLimit` simulates a display).
 - Capture: `CaptureConfig::uiZoom` (`<PREFIX>UI_ZOOM=<percent>`, 25–400) pins the zoom (not persisted, not fitted);
   under `CANVAS_DUMP` the zoom is 100 % unless `UI_ZOOM` is set, so captures and `gui-live` are unchanged.
 - `A11yBridge::setScale/scale`; `HeadlessHost::setZoom(steps, percent)` and `Log::zooms` (HeadlessHost stays logical:

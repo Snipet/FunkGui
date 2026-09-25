@@ -71,5 +71,12 @@ namespace funkgui
         // The steps a ZOOM control offers, in percent, ascending; empty when the host has no zoom (the default: the
         // window is the Panel's own size, exactly as before v0.8.0). Valid while the Panel is attached.
         virtual std::span<const int> zoomSteps() const { return {}; }
+
+        // Whether choosing `percent` would draw at it: a listed step whose window fits the user area of the editor's
+        // display (lead, v0.8.0), so a ZOOM control can mark the steps this display cannot show instead of letting a
+        // click fall back silently. EditorHost: false for an unlisted value; true under a pin (never fitted), when no
+        // display is known, and for the smallest step (drawn when nothing fits). HeadlessHost: setZoomFitLimit.
+        // Default: true.
+        virtual bool zoomFits(int /*percent*/) const { return true; }
     };
 }

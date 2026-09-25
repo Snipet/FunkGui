@@ -346,4 +346,10 @@ namespace funkgui
     }
 
     std::span<const int> HeadlessHost::zoomSteps() const { return zoomSteps_; }
+
+    bool HeadlessHost::zoomFits(int percent) const
+    {
+        return std::find(zoomSteps_.begin(), zoomSteps_.end(), percent) != zoomSteps_.end()
+               && (zoomFitLimit_ <= 0 || percent <= zoomFitLimit_);
+    }
 }

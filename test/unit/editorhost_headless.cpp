@@ -106,6 +106,7 @@ int main(int argc, char** argv)
         P.eq("plain_host.zoom_steps_empty", h.zoomSteps().empty(), 1);
         h.setZoomPercent(150);
         P.eq("plain_host.zoom_set_ignored", h.zoomPercent(), 100);
+        P.eq("plain_host.zoom_fits_default", h.zoomFits(150), 1);
     }
 
     // ---- HeadlessHost's zoom (G7c): simulated for a ZOOM control, never drawn ---------------------------------------
@@ -131,6 +132,13 @@ int main(int argc, char** argv)
         h.setZoomPercent(130);
         P.eq("headless_zoom.unlisted_ignored", h.zoomPercent(), 150);
         P.eq("headless_zoom.counted", host.log.zooms, 3);
+        // zoomFits (lead, v0.8.0): every listed step fits until a limit is set; unlisted values never do.
+        P.eq("headless_zoom.fits_all", h.zoomFits(100) && h.zoomFits(175), 1);
+        P.eq("headless_zoom.fits_unlisted", h.zoomFits(130), 0);
+        host.setZoomFitLimit(125);
+        P.eq("headless_zoom.fits_limited", h.zoomFits(125) && !h.zoomFits(150) && !h.zoomFits(175), 1);
+        host.setZoomFitLimit(0);
+        P.eq("headless_zoom.fits_reset", h.zoomFits(175), 1);
         // HeadlessHost stays logical: the frame is the same whatever the zoom.
         host.tick(1);
         const funkgui::PrimList& after = host.draw();

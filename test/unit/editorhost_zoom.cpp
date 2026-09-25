@@ -452,6 +452,11 @@ int main(int argc, char** argv)
             {
                 Rig r(processor, w, h, zoomConfig());
                 sizeRows(P, "fit.open", r, w, h, 125);
+                // zoomFits (lead, v0.8.0): the steps this display can show, and nothing unlisted.
+                const funkgui::HostServices& hs = r.host();
+                P.eq("fit.fits_small", hs.zoomFits(100) && hs.zoomFits(125), 1);
+                P.eq("fit.fits_large", hs.zoomFits(150) || hs.zoomFits(175), 0);
+                P.eq("fit.fits_unlisted", hs.zoomFits(110), 0);
                 P.eq("fit.pref_kept", fileValue(kKey) == "175", 1);
                 r.host().setZoomPercent(150);        // chosen, kept, and still fitted
                 pumpFrame();
@@ -504,6 +509,7 @@ int main(int argc, char** argv)
             const int w = d != nullptr ? d->userArea.getWidth() : 2000;
             Rig r(processor, w, 100, zoomConfig());
             sizeRows(P, "pin.ui_zoom_unfitted", r, w, 100, 150);
+            P.eq("pin.zoom_fits", r.host().zoomFits(175), 1);   // a pin is never fitted
         }
         const std::string dump = (juce::File::getCurrentWorkingDirectory().getChildFile("zoom-never.dump"))
                                      .getFullPathName()

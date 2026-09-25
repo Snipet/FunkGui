@@ -146,6 +146,7 @@ namespace funkgui
         int    zoomPercent() const override;         // G7c: the zoom the next frame draws at ("Zoom" above)
         void   setZoomPercent(int percent) override; // G7c: a listed step: the preference, then the next frame
         std::span<const int> zoomSteps() const override;   // G7c: EditorConfig::zoomSteps, cleaned
+        bool   zoomFits(int percent) const override;         // lead (v0.8.0): a listed step that fits (HostServices.h)
 
         class ParentWatcher;                         // G7b: followPlacement() on an ancestor's move (EditorHost.cpp)
 
