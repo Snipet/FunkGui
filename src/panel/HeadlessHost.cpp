@@ -317,4 +317,10 @@ namespace funkgui
     {
         --log.batchDepth;
     }
+
+    // Theme::byIndex draws graphite (0) for an index that names no theme, so 0 is the index of what draw() uses then.
+    int HeadlessHost::themeIndex() const
+    {
+        return themeIdx_ >= 0 && themeIdx_ < Theme::kCount ? themeIdx_ : 0;
+    }
 }

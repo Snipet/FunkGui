@@ -58,6 +58,9 @@ namespace funkgui
         double nowSeconds() const override;
         void   beginBatch() override;
         void   endBatch() override;
+        // G7b (v0.7.1): the index of the theme draw() uses (the constructor's themeIdx, or 0 when that names no theme).
+        // ownerComponent() keeps the default nullptr: there is no window to anchor a menu to.
+        int    themeIndex() const override;
 
     private:
         // Private state: completed by the implementing card (G3); not part of the frozen API.

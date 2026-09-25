@@ -4,8 +4,14 @@
 // that runs one Panel on the GPU. It owns the surface lifecycle (render view, BgfxContext registration, fallback screen
 // and retry, re-parenting, backing scale), is a FramePump client (one bgfx::frame() per vsync for every editor in the
 // process), records each frame with a member Canvas and submits it through BgfxSink, converts JUCE's mouse, wheel,
-// key and file-drop events into the Panel's plain input structs, mirrors the Panel's A11yItems through A11yBridge, and
+// key and file-drag events into the Panel's plain input structs, mirrors the Panel's A11yItems through A11yBridge, and
 // implements HostServices for the Panel. Every HR lifecycle fix listed in 02 §5.1 "Ported behaviours" lives here.
+//
+// Placement (G7b, v0.7.1): the render view covers the editor's area of its peer. It follows the editor's own moves and
+// resizes (moved(), resized()), a new peer (parentHierarchyChanged()) and, through a juce::ComponentMovementWatcher on
+// the editor, every move of an ANCESTOR inside the same peer, which JUCE reports to no method of the editor: JUCE's
+// Standalone window lays its content out under the title bar and the "input muted" bar after the view is attached, and
+// the view then sat 27 px too high (FCompressor U7). A product needs no watcher of its own.
 //
 // Capture (02 §5.1 "Diagnostics environment"): CaptureConfig is read once from the <ENV_PREFIX> environment at
 // construction. CANVAS_DUMP pins the FramePump to its fallback clock and ignores the real pointer (HR's captureMode_:
@@ -89,6 +95,10 @@ namespace funkgui
         bool keyPressed(const juce::KeyPress&) override;   // Panel::key's result: true keeps Logic/Live from eating keys
         bool isInterestedInFileDrag(const juce::StringArray&) override;
         void filesDropped(const juce::StringArray&, int, int) override;
+        // G7b (v0.7.1): Panel::filesDragEnter / filesDragMove / filesDragExit, each followed by a full-rate nudge.
+        void fileDragEnter(const juce::StringArray&, int, int) override;
+        void fileDragMove(const juce::StringArray&, int, int) override;
+        void fileDragExit(const juce::StringArray&) override;
 
     private:
         // FrameClient
@@ -103,9 +113,14 @@ namespace funkgui
         double nowSeconds() const override;
         void   beginBatch() override;
         void   endBatch() override;
+        int    themeIndex() const override;          // G7b: UI_THEME, else UiPreferences::theme() (HostServices.h)
+        juce::Component* ownerComponent() override;  // G7b: this editor
+
+        class ParentWatcher;                         // G7b: followPlacement() on an ancestor's move (EditorHost.cpp)
 
         void   attachSurfaceIfPossible();
         void   detachSurface();
+        void   followPlacement();                    // the view onto the editor's area of its peer, then the scale
         void   refreshDrawableScale();
         double backingScaleFor(void* view) const;    // honours UI_SCALE / UI_SCALE_AFTER
         void   applyTheme(int idx);
@@ -152,6 +167,9 @@ namespace funkgui
         bool     overflowLogged_ = false;
         bool     dumpAttempted_ = false;
         Diagnostics diag_{};
+
+        // Declared last, destroyed first (and reset first in ~EditorHost): it calls back into the members above.
+        std::unique_ptr<ParentWatcher> parentWatcher_;
 
         JUCE_LEAK_DETECTOR(EditorHost)
     };
