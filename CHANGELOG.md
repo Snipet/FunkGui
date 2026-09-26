@@ -3,6 +3,17 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.8.1 — 2026-09-25 · PATCH: golden.py lines-only probes; FunkPresets on Windows
+
+Golden impact: **none** (tooling and Windows link only; no source a product compiles on macOS changed).
+
+- **Fix:** `tools/golden.py` attributed the `.lines` sidecars of a probe that has no `.txt` by the file name's last
+  dot, so a key holding dots (FCompressor `ui.a11y.chars.colour`) created a phantom probe and `adopt` refused the
+  real one as stale. The probe's name now comes from the build's results. Self-test rows `discover.lines_only_dotted`
+  and `adopt.lines_only_dotted` catch the old behaviour.
+- FunkPresets links Windows' own SQLite (`winsqlite3`, `Normaliz`, `FUNKGUI_WINSQLITE=1`) instead of
+  `find_package(SQLite3)` on Windows, as HR's preset layer did (from HR's migration phase 2). Untested on Windows here.
+
 ## v0.8.0 — 2026-09-24 · S11: FunkPresets (G8), UI zoom (G7c)
 
 Golden impact: **new** `fg.gallery.zoom`; no existing golden moved (every `fg` golden, `fg.gallery.live` and the
