@@ -268,7 +268,10 @@ def discover(build: Path, arch: str | None = None) -> list[Candidate]:
             elif p.suffix == ".diff":
                 c = found.setdefault((a, scope, p.stem), Candidate(a, scope, p.stem, None))
                 c.diff = p
-    # sidecars: <probe>.<key>.lines, attributed to the longest matching probe name in the same directory
+    # sidecars: <probe>.<key>.lines, attributed to the longest matching probe name in the same directory. A probe with
+    # lines only and no rows has no .txt to name it, and its keys may hold dots (FCompressor ui.a11y: "chars.colour"),
+    # so its name comes from the build's results (v0.8.1), not from the file name's last dot.
+    known = {r["probe"] for r in load_results(build).values() if isinstance(r.get("probe"), str)}
     for a in ARCHES:
         adir = root / a
         if not adir.is_dir() or (arch is not None and a != arch):
@@ -280,7 +283,8 @@ def discover(build: Path, arch: str | None = None) -> list[Candidate]:
             if owners:
                 owner = max(owners, key=lambda c: len(c.probe))
             else:                                               # a probe with lines only and no rows
-                probe, _, _ = stem.rpartition(".")
+                named = [k for k in known if stem.startswith(k + ".")]
+                probe = max(named, key=len) if named else stem.rpartition(".")[0]
                 owner = found.setdefault((a, scope, probe), Candidate(a, scope, probe, None))
             owner.sidecars[stem[len(owner.probe) + 1:]] = p
     return sorted(found.values(), key=lambda c: (c.arch, c.scope, c.probe))
@@ -831,6 +835,26 @@ def cmd_selftest(_: argparse.Namespace) -> int:
             "# funkgui-golden 2  probe=p  scope=global\n"))
         sh("git", "add", "-A")
         sh("git", "commit", "-q", "-m", "adopt 1")
+
+        # lines only, dotted keys (v0.8.1): every sidecar belongs to the probe its results name
+        lo = t / "linesonly"
+        lo_dir = lo / "golden-candidates" / "arm64" / "modes" / "clean"
+        for k in ("chars.colour", "chars.sidechain", "panel"):
+            write_atomic(lo_dir / ("ui.a11y.%s.lines" % k), "%s\n" % k)
+        write_atomic(lo / "probe-results" / "ui.a11y.clean.json",
+                     json.dumps({"probe": "ui.a11y", "mode": "clean", "arch": "arm64", "status": "golden_missing",
+                                 "spec_pass": 1, "spec_fail": 0, "golden_rows": 3, "golden_fail": 0,
+                                 "golden_new": 3, "golden_missing_rows": 0, "ms": 1}))
+        registry(lo, [])
+        lo_c = [c for c in discover(lo) if c.scope == "modes/clean"]
+        check("discover.lines_only_dotted", [(c.probe, sorted(c.sidecars)) for c in lo_c] ==
+              [("ui.a11y", ["chars.colour", "chars.sidechain", "panel"])])
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = adopt(ns(lo, only=("modes/clean/ui.*",)), env)
+        check("adopt.lines_only_dotted", rc == 0 and
+              (root / "base" / "modes" / "clean" / "ui.a11y.chars.colour.lines").read_text() == "chars.colour\n")
+        sh("git", "add", "-A")
+        sh("git", "commit", "-q", "-m", "adopt lines only")
 
         # --x86: equal / within tolerance -> base; differing -> both overlays; xarch. differing -> abort
         a2 = build("arm2", "arm64", "a\t1\texact\nb\t3\tabs:0.1\nc\t5\texact\nh\tff\texact\n")
