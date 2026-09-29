@@ -13,8 +13,12 @@
 #include <funkgui/canvas/Prim.h>
 #include <funkgui/canvas/PrimList.h>
 #include <funkgui/core/Col.h>
+#include <funkgui/core/Geometry.h>
 #include <funkgui/text/FontAtlasSdf.h>
 #include <funkgui/text/TextStyle.h>
+
+#include <array>
+#include <cstddef>
 
 namespace funkgui
 {
@@ -70,6 +74,31 @@ namespace funkgui
             bool    l;                                 // the live flag to restore
         };
 
+        // ---- v0.9.0 addition: clipping (FCompressor's smooth-scrolling lists) ------------------------------------------
+        // Every primitive recorded from pushClip() to its popClip() is cropped to the rectangle, intersected with the
+        // clips around it. A primitive's quad is cut at the rectangle's edges and its local coordinates (a glyph's
+        // atlas uvs) are interpolated to the new corners, so each sample inside draws as the uncropped primitive's did;
+        // a primitive wholly outside is dropped, and one wholly inside is left bit for bit. It happens on the CPU, at
+        // popClip(): the PrimList, the dump, the fingerprints, SoftRaster and BgfxSink see ordinary primitives, and no
+        // shader or vertex changes. The cut is a hard edge: put it on a device px (whole logical px at dpi 1 and 2).
+        // Clips nest kMaxClips deep; a push beyond that is ignored, and so is its pop. begin() drops the clips left
+        // open and end() closes them. Axis records are never clipped.
+        static constexpr int kMaxClips = 8;
+        void pushClip(const Rect&);
+        void popClip();
+        int  clipDepth() const noexcept;               // pushes not yet popped (those beyond kMaxClips included)
+
+        // pushClip for a scope, popClip on exit.
+        struct ClipScope
+        {
+            ClipScope(Canvas&, const Rect&);
+            ~ClipScope();
+            ClipScope(const ClipScope&) = delete;
+            ClipScope& operator=(const ClipScope&) = delete;
+
+            Canvas& c;
+        };
+
         float dpi() const;
         int   missingGlyphs() const;                   // this frame's codepoints not in the atlas
 
@@ -84,5 +113,15 @@ namespace funkgui
         PrimList list_;
         Tag      tag_ = 0;
         bool     live_ = false;
+
+        // v0.9.0: the open clips, innermost last (each already intersected with the one before), and where each one's
+        // primitives start in list_.prims. No allocation: a fixed stack.
+        struct Clip
+        {
+            Rect        r{};
+            std::size_t first = 0;
+        };
+        std::array<Clip, kMaxClips> clips_{};
+        int clipDepth_ = 0;
     };
 }

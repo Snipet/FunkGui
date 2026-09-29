@@ -3,6 +3,24 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.9.0 — 2026-09-28 · MINOR: Canvas clipping
+
+Golden impact: **none** (additive API; nothing records a clip unless it asks for one, and every `fg` golden is
+unchanged). New spec-only test `fg.canvas.clip`.
+
+- `Canvas::pushClip(const Rect&)` / `popClip()`, `Canvas::ClipScope` and `clipDepth()`: every primitive recorded
+  between a push and its pop is cropped to the rectangle (intersected with the enclosing clips). The quad is cut at
+  the rectangle and its local coordinates (a glyph's atlas uvs) are interpolated to the new corners, so each sample
+  inside draws as the uncropped primitive's did; a primitive wholly outside is dropped, one wholly inside is kept bit
+  for bit. It is done on the CPU at `popClip()`: `PrimList`, the dump, fingerprints, `SoftRaster` and `BgfxSink` see
+  ordinary primitives, and no shader, vertex layout or dump format changes. Nested up to `Canvas::kMaxClips` (8);
+  deeper pushes are ignored with their pops; `begin()` drops clips left open and `end()` closes them. Axis records
+  are never clipped. The cut is a hard edge, so a caller puts it on a device px. (FCompressor ADR-84: smooth,
+  pixel-exact scrolling of the preset browser.)
+- `fg.canvas.clip`: a scene of every kind rasterised with and without a clip through all of it at dpi 1 and 2,
+  supersample 1 and 2, is identical inside the clip and the clear colour outside; kept, dropped and cut primitives;
+  nesting; the depth rules; `ClipScope`.
+
 ## v0.8.1 — 2026-09-25 · PATCH: golden.py lines-only probes; FunkPresets on Windows
 
 Golden impact: **none** (tooling and Windows link only; no source a product compiles on macOS changed).
