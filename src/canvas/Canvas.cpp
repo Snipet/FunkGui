@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <vector>
 
 // The CPU recorder's HR half (02 §3.3): begin/end, the tag and live state, and HR's primitives with SdfCanvas.cpp's
 // arithmetic kept expression for expression (the snapshot's gpu/SdfCanvas.cpp:95-260), so the six vertices
@@ -54,6 +55,7 @@ namespace funkgui
     {
         list_.clear();
         list_.info = info;
+        clipDepth_ = 0;                                  // a clip left open by the last frame is dropped
         // HR begin(): a scale that is not a usable positive number draws at 1x instead of dividing by ~0.
         if (!(list_.info.dpi > 0.05f))
             list_.info.dpi = 1.0f;
@@ -61,8 +63,90 @@ namespace funkgui
 
     const PrimList& Canvas::end()
     {
+        while (clipDepth_ > 0)
+            popClip();                                   // clips still open close here
         return list_;
     }
+
+    // ---- v0.9.0: clipping -------------------------------------------------------------------------------------------
+
+    void Canvas::pushClip(const Rect& r)
+    {
+        if (clipDepth_ >= kMaxClips)
+        {
+            ++clipDepth_;                                // ignored, and so is its pop
+            return;
+        }
+        Rect c = r;
+        if (clipDepth_ > 0)
+        {
+            // Intersect with the enclosing clip, so a pop never has to look outwards.
+            const Rect& o = clips_[static_cast<std::size_t>(clipDepth_ - 1)].r;
+            const float x0 = std::max(c.x, o.x), y0 = std::max(c.y, o.y);
+            const float x1 = std::min(c.right(), o.right()), y1 = std::min(c.bottom(), o.bottom());
+            c = { x0, y0, std::max(0.0f, x1 - x0), std::max(0.0f, y1 - y0) };
+        }
+        clips_[static_cast<std::size_t>(clipDepth_)] = { c, list_.prims.size() };
+        ++clipDepth_;
+    }
+
+    void Canvas::popClip()
+    {
+        if (clipDepth_ <= 0)
+            return;                                      // unmatched: nothing to close
+        --clipDepth_;
+        if (clipDepth_ >= kMaxClips)
+            return;                                      // the matching push was ignored
+        const Clip& clip = clips_[static_cast<std::size_t>(clipDepth_)];
+        const double cx0 = clip.r.x, cy0 = clip.r.y;
+        const double cx1 = static_cast<double>(clip.r.x) + static_cast<double>(clip.r.w);
+        const double cy1 = static_cast<double>(clip.r.y) + static_cast<double>(clip.r.h);
+
+        // One local coordinate at a quad position q between the quad's edges q0 and q1, where it runs from l0 to l1: the
+        // interpolation the rasterisers do per sample, in double so the new corner is the nearest float to it.
+        const auto lerpAt = [](double q, float q0, float q1, float l0, float l1) noexcept {
+            const double t = (q - static_cast<double>(q0)) / (static_cast<double>(q1) - static_cast<double>(q0));
+            return static_cast<float>(static_cast<double>(l0) + (static_cast<double>(l1) - static_cast<double>(l0)) * t);
+        };
+
+        std::vector<Prim>& prims = list_.prims;
+        std::size_t keep = clip.first;
+        for (std::size_t i = clip.first; i < prims.size(); ++i)
+        {
+            Prim p = prims[i];
+            const bool outside = !(p.x1 > cx0) || !(p.x0 < cx1) || !(p.y1 > cy0) || !(p.y0 < cy1);
+            if (outside || clip.r.isEmpty())
+                continue;                                // wholly outside (or not finite): dropped
+            if (p.x0 < cx0)
+            {
+                p.d0[0] = lerpAt(cx0, p.x0, p.x1, p.d0[0], p.e0[0]);
+                p.x0 = static_cast<float>(cx0);
+            }
+            if (p.x1 > cx1)
+            {
+                p.e0[0] = lerpAt(cx1, prims[i].x0, p.x1, prims[i].d0[0], p.e0[0]);
+                p.x1 = static_cast<float>(cx1);
+            }
+            if (p.y0 < cy0)
+            {
+                p.d0[1] = lerpAt(cy0, p.y0, p.y1, p.d0[1], p.e0[1]);
+                p.y0 = static_cast<float>(cy0);
+            }
+            if (p.y1 > cy1)
+            {
+                p.e0[1] = lerpAt(cy1, prims[i].y0, p.y1, prims[i].d0[1], p.e0[1]);
+                p.y1 = static_cast<float>(cy1);
+            }
+            prims[keep++] = p;
+        }
+        prims.resize(keep);                              // shrinking keeps the capacity
+    }
+
+    int Canvas::clipDepth() const noexcept { return clipDepth_; }
+
+    Canvas::ClipScope::ClipScope(Canvas& canvas, const Rect& r) : c(canvas) { c.pushClip(r); }
+
+    Canvas::ClipScope::~ClipScope() { c.popClip(); }
 
     Prim& Canvas::emit(PrimKind kind)
     {
