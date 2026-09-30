@@ -1,7 +1,7 @@
 #pragma once
 
-// Number formatting and parsing in the C locale, whatever setlocale() the host made (v0.11.0). A dump, a fingerprint or a
-// capture setting written under de_DE must still read "0.15", never "0,15".
+// Number formatting and parsing in the C locale, whatever setlocale() the host made (v0.11.0). A dump, a fingerprint or
+// a capture setting written under de_DE must still read "0.15", never "0,15".
 //
 // Until v0.10.0 FunkGui called macOS's xlocale(3) functions directly, with a null locale_t as the C locale. That is
 // Apple's: glibc has strtof_l and strtol_l but needs a real locale_t, and has no printf-family *_l at all. These wrap

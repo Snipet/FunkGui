@@ -1,6 +1,6 @@
 # FunkGui platform support (v0.11.0: Linux beside macOS). Included by the top-level CMakeLists.txt for FunkGui's own
-# builds; a consumer applies the same workaround in its own scope (FCompressor: cmake/FcmpPlatform.cmake), because JUCE's
-# module sources compile inside the consumer's targets.
+# builds; a consumer applies the same workaround in its own scope (FCompressor: cmake/FcmpPlatform.cmake), because
+# JUCE's module sources compile inside the consumer's targets.
 #
 #   funkgui_juce_compile_workarounds()   compile options JUCE 8.0.4 needs on this compiler, for every target created
 #                                        after the call in this directory and below; FUNKGUI_JUCE804_WORKAROUND (the

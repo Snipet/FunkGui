@@ -110,7 +110,8 @@ namespace
         P.eq("surface.scaled_height_device_px", haveScaled ? c.height : -1, juce::roundToInt(32 * 2.0 * s));
         P.near("surface.backing_scale_is_peers", funkgui::getBackingScale(view), s, 0.0);
         P.near("surface.backing_scale_of_peer", funkgui::getBackingScale(peer->getNativeHandle()), s, 0.0);
-        P.eq("display_link.refuses_view", funkgui::createDisplayLink(view, [](void*, double) {}, nullptr) == nullptr, 1);
+        P.eq("display_link.refuses_view",
+             funkgui::createDisplayLink(view, [](void*, double) {}, nullptr) == nullptr, 1);
 
         funkgui::destroyRenderView(view);
         const auto after = childrenOf(d, parentWindow);

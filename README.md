@@ -6,11 +6,11 @@
 [![Licence: GPL-3.0](https://img.shields.io/badge/licence-GPL--3.0-555)](LICENSE)
 
 A GPU user-interface library for JUCE audio plugins on macOS and Linux. A plugin's interface is a `Panel` that draws
-into a `Canvas`. The canvas records primitives on the CPU (rounded rectangles, lines, filled areas, signed-distance-field
-text), and bgfx draws the recorded frame in one draw call, on Metal on macOS and on Vulkan on Linux. The same Panel also runs headless, in a console
-process with a fixed clock and synthetic input, so a test can check its layout, text and accessibility against golden
-files and render any frame to a PNG without a GPU. FunkGui also has a small widget set, a preset store and the test
-harness itself.
+into a `Canvas`. The canvas records primitives on the CPU (rounded rectangles, lines, filled areas,
+signed-distance-field text), and bgfx draws the recorded frame in one draw call, on Metal on macOS and on Vulkan on
+Linux. The same Panel also runs headless, in a console process with a fixed clock and synthetic input, so a test can
+check its layout, text and accessibility against golden files and render any frame to a PNG without a GPU. FunkGui also
+has a small widget set, a preset store and the test harness itself.
 
 FunkGui is the GUI of [FCompressor](https://github.com/Snipet/FCompressor). HardwareReverb, a private plugin whose GUI
 code FunkGui grew from, has moved onto it too. FunkGui is at 0.x, and its API may change between minor versions.
@@ -64,8 +64,8 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
   `DwellSelector`. Widgets render models the product implements and write only through `GestureController`.
 - **a11y**: the accessibility items a Panel lists, and their one-line text form for tests.
 - **prefs**, **live**, **juce**: machine-wide UI preferences (theme, zoom, integer keys) in
-  `~/Library/Application Support/<product>/` (Linux: `~/.config/<product>/`); `LiveFeed`, which tells a live telemetry stream from a stale one;
-  `MenuLook`, the theme applied to JUCE popup menus.
+  `~/Library/Application Support/<product>/` (Linux: `~/.config/<product>/`); `LiveFeed`, which tells a live telemetry
+  stream from a stale one; `MenuLook`, the theme applied to JUCE popup menus.
 - **gpu**: `EditorHost`, a `juce::AudioProcessorEditor` that runs one Panel on bgfx: Metal on a click-through NSView
   on macOS, Vulkan on an X11 child window of JUCE's peer on Linux (which is XWayland on a Wayland desktop). It handles
   the surface lifecycle with a no-GPU fallback screen, converts JUCE input, mirrors the accessibility items for the
