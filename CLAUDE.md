@@ -16,7 +16,8 @@ paths you may change.
   group in your handoff instead.
 - **Git:** no `commit`, `push`, `rebase`, `tag`, `worktree add/remove/prune` or `gc`. Change no ref except your own
   branch. The lead commits, merges, tags and bumps `project(FunkGui VERSION …)` and `CHANGELOG.md`.
-- **Never edit `SEED.tsv`** or the Provenance section of `README.md` (they are HR's migration baseline).
+- **Never edit `SEED.tsv`** or `docs/PROVENANCE.md` (moved verbatim from the README's Provenance section at v0.10.0;
+  they are HR's migration baseline).
 
 ## Worktrees (03 §4.4, §4.5)
 
