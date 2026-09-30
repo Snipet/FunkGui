@@ -10,7 +10,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS")
 endif()
 
-project(FunkGui VERSION 0.9.0 LANGUAGES C CXX)       # VERSION changes only in tagging commits (02 §1.10)
+project(FunkGui VERSION 0.10.0 LANGUAGES C CXX)       # VERSION changes only in tagging commits (02 §1.10)
 
 # project() variables do not reach the parent scope; the consumer reads this (02 §1.7).
 set(FUNKGUI_VERSION ${PROJECT_VERSION} CACHE INTERNAL "FunkGui version")

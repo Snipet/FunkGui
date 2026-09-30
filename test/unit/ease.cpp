@@ -5,6 +5,8 @@
 // exactly on its target in a finite number of ticks, the same run twice giving the same bits, and every degenerate
 // input defined. Col::fade / premix (core/Col.h), which crossfades and bead-free curves use, and the theme's `signal`
 // token (renamed from HR's `ice`, 02 §2.3) with HR's values unchanged. Header-only: links FunkGui::harness alone.
+// v0.10.0: the animation speed (ease::setTimeScale): 0 lands in one step, 2 takes twice the ticks, 1 is bit for bit the
+// unscaled run, hover / shown / DwellSelector follow it, and anything outside 0 … 8 is 1.
 
 #include <funkgui/core/Col.h>
 #include <funkgui/core/Ease.h>
@@ -132,6 +134,35 @@ int main(int argc, char** argv)
         const int n = run(0.36f, 0.5f, 1000, trace, [](float s) { return ease::shown(s, 0.5f, kDt60); });
         P.in("shown.lands_ticks", n, 1, 90);
         P.eq("shown.monotone", monotoneNoOvershoot(0.36f, 0.5f, trace), 1);
+    }
+
+    // ---- v0.10.0: the animation speed -------------------------------------------------------------------------------
+    {
+        std::vector<float> trace, base;
+        P.eq("scale.default_is_1", ease::timeScale() == 1.0f ? 1 : 0, 1);
+        const auto step = [](float x) { return ease::toward(x, 1.0f, kDt60, 0.12f); };
+        const int n1 = run(0.0f, 1.0f, 1000, base, step);
+        ease::setTimeScale(1.0f);
+        const int n1b = run(0.0f, 1.0f, 1000, trace, step);
+        P.eq("scale.one_is_unscaled", n1 == n1b && trace == base ? 1 : 0, 1);
+        ease::setTimeScale(0.0f);
+        P.eq("scale.zero.toward_one_step", run(0.0f, 1.0f, 1000, trace, step), 1);
+        P.eq("scale.zero.hover_one_step", ease::hover(0.0f, true, kDt60) == 1.0f ? 1 : 0, 1);
+        P.eq("scale.zero.shown_one_step", ease::shown(0.40f, 0.5f, kDt60) == 0.5f ? 1 : 0, 1);
+        P.eq("scale.zero.dt0_still_jumps", ease::toward(0.0f, 1.0f, 0.0f, 0.12f) == 1.0f ? 1 : 0, 1);
+        ease::setTimeScale(2.0f);
+        const int n2 = run(0.0f, 1.0f, 1000, trace, step);
+        P.in("scale.two.ticks_ratio", static_cast<double>(n2) / static_cast<double>(n1), 1.8, 2.2);
+        P.eq("scale.two.monotone", monotoneNoOvershoot(0.0f, 1.0f, trace), 1);
+        ease::setTimeScale(std::numeric_limits<float>::quiet_NaN());
+        P.eq("scale.nan_is_1", ease::timeScale() == 1.0f ? 1 : 0, 1);
+        ease::setTimeScale(-1.0f);
+        P.eq("scale.negative_is_1", ease::timeScale() == 1.0f ? 1 : 0, 1);
+        ease::setTimeScale(9.0f);
+        P.eq("scale.over_8_is_1", ease::timeScale() == 1.0f ? 1 : 0, 1);
+        ease::setTimeScale(8.0f);
+        P.eq("scale.eight_kept", ease::timeScale() == 8.0f ? 1 : 0, 1);
+        ease::setTimeScale(1.0f);
     }
 
     // ---- Col::fade: HR's arithmetic (round half away from zero, clamp) ----------------------------------------------
