@@ -3,6 +3,18 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.10.0 — 2026-09-30 · MINOR: the animation speed
+
+Golden impact: **none** (the default scale is 1, which is bit for bit the eases as they were; every `fg` golden is
+unchanged). `fg.ease` gains 12 spec rows.
+
+- `ease::setTimeScale(float)` / `ease::timeScale()`: every tau that `ease::toward`, `hover` and `shown` take (and so
+  every widget and `DwellSelector` / `ScreenFader`, which ease through them) is multiplied by it. 0 is no animation:
+  each ease lands on its target in one call, as tau <= 0 always did. 2 is twice as slow. One value for the process,
+  set on the message thread by the product from a machine-wide preference; values outside 0 … 8 (a NaN, a negative)
+  are taken as 1. Only these eases read it, so meters, clocks and dwells keep their own time. (FCompressor ADR-90: an
+  ANIMATION slider in the settings screen, whose fastest setting is none.)
+
 ## v0.9.0 — 2026-09-28 · MINOR: Canvas clipping
 
 Golden impact: **none** (additive API; nothing records a clip unless it asks for one, and every `fg` golden is

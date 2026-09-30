@@ -8,6 +8,12 @@
 //
 // Degenerate inputs are defined, never NaN-propagating: dt <= 0 (or NaN) moves nothing (the snap still applies),
 // tau <= 0 (or NaN) jumps to the target, a NaN current value jumps to the target, and a NaN target leaves x as it is.
+//
+// v0.10.0, the animation speed: every tau these functions take is multiplied by timeScale(), 1 by default. 0 is no
+// animation: every ease lands on its target in one call, as tau <= 0 does. 2 is twice as slow. It is one value for the
+// whole process, a machine-wide preference that the product sets on the message thread (FCompressor's settings
+// screen), and only these eases read it: meters, clocks and dwells keep their own time. setTimeScale takes 0 … 8 and
+// makes anything else (a NaN, a negative) 1.
 
 #include <bit>
 #include <cmath>
@@ -15,6 +21,15 @@
 
 namespace funkgui::ease
 {
+    namespace detail
+    {
+        inline float timeScale = 1.0f;                   // constant-initialised; message thread (see the top)
+    }
+
+    inline float timeScale() noexcept { return detail::timeScale; }
+
+    inline void setTimeScale(float s) noexcept { detail::timeScale = s >= 0.0f && s <= 8.0f ? s : 1.0f; }
+
     // Exact comparison stated as a bit compare (HR BgfxEditor.cpp:118-122): "has this value moved by any amount at
     // all". +0 and -0 differ; a NaN equals the same NaN. Used for write-only-on-change and view-cache keys.
     constexpr bool sameBits(float a, float b) noexcept
@@ -27,6 +42,7 @@ namespace funkgui::ease
     {
         if (std::isnan(target))
             return x;
+        tau *= detail::timeScale;                        // v0.10.0: the animation speed (0: none)
         if (std::isnan(x) || !(tau > 0.0f))
             return target;
         if (dt > 0.0f)
