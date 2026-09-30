@@ -3,7 +3,10 @@
 # docs/design/03-build-verify-process.md §4.7 item 2, lead revision 1 of docs/sprints/s0.md).
 #
 #   check-headers.sh --cxx <compiler> --flags <file> --root <FunkGui source dir> [--bgfx] [--sdk <path>]
-#                    [--min-macos <version>]
+#                    [--min-macos <version>] [--extra-flag <flag>]...
+#
+# --extra-flag adds a compiler flag to every header's compile: cmake/FunkGuiPlatform.cmake's JUCE 8.0.4 workaround where
+# the compiler needs one (upstream Clang; v0.11.0).
 #
 # <file> holds a consumer's include directories and definitions, one per line as "I <dir>" and "D <definition>"
 # (test/CMakeLists.txt generates it from a target that links FunkGui::core, ::harness and, with bgfx, ::gpu, and calls
@@ -16,7 +19,7 @@
 # check: core/Config.h without the product seams must fail with its "call funkgui_configure_product()" #error.
 set -uo pipefail
 
-cxx="" flags="" root="" bgfx=0 sdk="" minos=""
+cxx="" flags="" root="" bgfx=0 sdk="" minos="" extra=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --cxx) cxx="${2:-}"; shift 2 ;;
@@ -25,12 +28,13 @@ while [ $# -gt 0 ]; do
     --sdk) sdk="${2:-}"; shift 2 ;;
     --min-macos) minos="${2:-}"; shift 2 ;;
     --bgfx) bgfx=1; shift ;;
+    --extra-flag) extra+=("${2:-}"); shift 2 ;;
     *) echo "check-headers.sh: unknown argument $1" >&2; exit 2 ;;
   esac
 done
 if [ -z "$cxx" ] || [ ! -f "$flags" ] || [ ! -d "$root/include/funkgui" ]; then
   echo "usage: check-headers.sh --cxx <compiler> --flags <file> --root <FunkGui source dir> [--bgfx] [--sdk <path>]" \
-       "[--min-macos <version>]" >&2
+       "[--min-macos <version>] [--extra-flag <flag>]..." >&2
   exit 2
 fi
 root="$(cd "$root" && pwd)"
@@ -43,6 +47,9 @@ while IFS= read -r line || [ -n "$line" ]; do
       dir="${line#I }"
       case "$dir" in
         "$root"/*|"$build"/*) includes+=(-I "$dir") ;;
+        # The compiler's own directories (Linux: a pkg-config or Find module reports /usr/include): passing them again
+        # reorders the search, and libstdc++'s #include_next <stdlib.h> then fails (v0.11.0).
+        /usr/include|/usr/local/include) ;;
         *) includes+=(-isystem "$dir") ;;
       esac ;;
     "D "?*)
@@ -57,6 +64,7 @@ done < "$flags"
 common=(-std=c++20 -fsyntax-only -Wall -Wextra -Wshadow -Wpedantic -Werror -ffp-contract=off)
 [ -n "$sdk" ] && common+=(-isysroot "$sdk")
 [ -n "$minos" ] && common+=("-mmacosx-version-min=$minos")
+common+=(${extra[@]+"${extra[@]}"})
 
 # Snapshot headers that cannot be standalone yet and whose fix belongs to a later card. Each entry is
 # "<header>|<include it still has>|<reason>": skipped (and reported) only while the header still has that include.

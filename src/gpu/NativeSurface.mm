@@ -54,6 +54,16 @@ namespace funkgui
         return w != nil ? [w backingScaleFactor] : 1.0;
     }
 
+    void setRenderViewScale(void*, double)
+    {
+        // The CAMetalLayer scales any drawable into the view's points (v0.11.0; NativeSurface.h).
+    }
+
+    void* nativeDisplay()
+    {
+        return nullptr;                              // Metal needs no display connection (v0.11.0)
+    }
+
     const char* renderViewClassName()
     {
         return class_getName(objc::renderViewClass().cls);

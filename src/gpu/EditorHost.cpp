@@ -267,6 +267,7 @@ namespace funkgui
             gpuLog("attach: no render view (failure " + juce::String(retryCount_) + ")");
             return;
         }
+        setRenderViewScale(renderView_, s);          // v0.11.0: on Linux the view's device size is the drawable's
 
         physW_ = juce::roundToInt(area.getWidth() * s);
         physH_ = juce::roundToInt(area.getHeight() * s);
@@ -310,6 +311,7 @@ namespace funkgui
         physW_ = juce::roundToInt(area.getWidth() * scl);
         physH_ = juce::roundToInt(area.getHeight() * scl);
         attachedScale_ = scl;
+        setRenderViewScale(renderView_, scl);        // v0.11.0: Linux resizes the X window with the drawable
         BgfxContext::get().resizeWindow(renderView_, physW_, physH_);
         gpuLog("scale: " + juce::String(scl) + " (" + juce::String(physW_) + " x " + juce::String(physH_) + " px)");
     }
@@ -387,6 +389,7 @@ namespace funkgui
         const double s = scl > 0.0 ? scl : 1.0;     // guarded: an unguarded read halved the drawable during a
                                                      // transient detach (HR :804-806)
         setRenderViewFrame(renderView_, area.getX(), area.getY(), area.getWidth(), area.getHeight());
+        setRenderViewScale(renderView_, s);
         physW_ = juce::roundToInt(area.getWidth() * s);
         physH_ = juce::roundToInt(area.getHeight() * s);
         attachedScale_ = s;

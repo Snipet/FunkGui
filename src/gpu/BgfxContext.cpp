@@ -1,16 +1,47 @@
 #include <funkgui/gpu/BgfxContext.h>
 
+#include <funkgui/gpu/NativeSurface.h>
 #include <funkgui/text/FontService.h>
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 
-// Metal binaries produced by shaderc at build time.
-#include <funkgui/shaders/vs_ui.mtl.h>
-#include <funkgui/shaders/fs_ui.mtl.h>
+// Shader binaries produced by shaderc at build time (FunkGuiShaders compiles every profile on every host), for this
+// platform's renderer: Metal on macOS, SPIR-V for Vulkan on Linux (v0.11.0).
+#if defined(__APPLE__)
+  #include <funkgui/shaders/vs_ui.mtl.h>
+  #include <funkgui/shaders/fs_ui.mtl.h>
+#else
+  #include <funkgui/shaders/vs_ui.spv.h>
+  #include <funkgui/shaders/fs_ui.spv.h>
+#endif
 
 namespace funkgui
 {
+    namespace
+    {
+        struct ShaderPair
+        {
+            const uint8_t* vs;
+            std::size_t    vsBytes;
+            const uint8_t* fs;
+            std::size_t    fsBytes;
+        };
+
+#if defined(__APPLE__)
+        constexpr bgfx::RendererType::Enum kRenderer = bgfx::RendererType::Metal;
+        constexpr ShaderPair kShaders{ vs_ui_mtl, sizeof vs_ui_mtl, fs_ui_mtl, sizeof fs_ui_mtl };
+#else
+        // Vulkan only. bgfx's OpenGL path on Linux (EGL) aborts the process on any initialisation failure
+        // (BGFX_FATAL: no EGL, no config, no surface, no context), which in a host takes the whole session down; its
+        // Vulkan path fails softly, so a machine without Vulkan gets EditorHost's fallback screen and nothing worse.
+        constexpr bgfx::RendererType::Enum kRenderer = bgfx::RendererType::Vulkan;
+        constexpr ShaderPair kShaders{ vs_ui_spv, sizeof vs_ui_spv, fs_ui_spv, sizeof fs_ui_spv };
+#endif
+    }
+
     BgfxContext& BgfxContext::get()
     {
         static BgfxContext ctx;
@@ -47,8 +78,16 @@ namespace funkgui
         bgfx::renderFrame();
 
         bgfx::Init init;
-        init.type = bgfx::RendererType::Metal;   // project is Apple-only
+        init.type = kRenderer;
         init.platformData.nwh   = nwh;
+#if !defined(__APPLE__)
+        // Linux: nwh is the render view's X11 window, created on JUCE's display connection, which bgfx's Xlib (or
+        // XCB) Vulkan surface needs as well. No display, no surface.
+        init.platformData.ndt  = nativeDisplay();
+        init.platformData.type = bgfx::NativeWindowHandleType::Default;
+        if (init.platformData.ndt == nullptr)
+            return false;
+#endif
         init.resolution.width   = static_cast<uint32_t>(physW);
         init.resolution.height  = static_cast<uint32_t>(physH);
         init.resolution.reset   = BGFX_RESET_NONE;   // no vsync: frame() must
@@ -85,8 +124,8 @@ namespace funkgui
         {
             return bgfx::createShader(bgfx::copy(bin, static_cast<uint32_t>(len)));
         };
-        vsUi_ = shader(vs_ui_mtl, sizeof(vs_ui_mtl));
-        fsUi_ = shader(fs_ui_mtl, sizeof(fs_ui_mtl));
+        vsUi_ = shader(kShaders.vs, kShaders.vsBytes);
+        fsUi_ = shader(kShaders.fs, kShaders.fsBytes);
         progUi_ = bgfx::createProgram(vsUi_, fsUi_, false);
 
         uViewSize_ = bgfx::createUniform("u_viewSize", bgfx::UniformType::Vec4);

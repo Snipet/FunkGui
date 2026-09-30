@@ -48,7 +48,7 @@
 #include <string_view>
 #include <vector>
 
-#include <xlocale.h>                                     // after <cstdio>/<cstdlib>: snprintf_l, strtof_l (macOS)
+#include <funkgui/core/CLocale.h>                        // snprintfC, strtofC: the C locale on macOS and Linux
 
 namespace T = funkgui::test;
 
@@ -75,10 +75,9 @@ namespace
     // A float as HR's v1 dump held it: printed with "%g" and read back (Fingerprint.cpp's legacy rule, C locale).
     float throughG(float v)
     {
-        constexpr locale_t kCLocale = nullptr;
         char buf[64];
-        snprintf_l(buf, sizeof buf, kCLocale, "%g", static_cast<double>(v));
-        return strtof_l(buf, nullptr, kCLocale);
+        funkgui::snprintfC(buf, sizeof buf, "%g", static_cast<double>(v));
+        return funkgui::strtofC(buf, nullptr);
     }
 
     // HR's rank_strokes (FrameRender.cpp:118-128): non-text, non-segment primitives inside the Rank band y 165..295

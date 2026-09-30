@@ -13,10 +13,11 @@
 // them (PresetStore.cpp, the ladder).
 //
 // Keys only ever meet keys computed on the same operating system: the
-// database is per user, per machine. The two implementations below agree on
-// what the UI needs (case, NFC, diacritics and full-width forms for sorting)
-// and may differ at the edges of Unicode case folding (CoreFoundation folds
-// "ß" to "ss"; LCMapStringEx lower-cases it to itself).
+// database is per user, per machine. The implementations below (macOS,
+// Windows and, from v0.11.0, Linux) agree on what the UI needs (case, NFC,
+// diacritics and full-width forms for sorting) and may differ at the edges of
+// Unicode case folding (CoreFoundation and GLib fold "ß" to "ss";
+// LCMapStringEx lower-cases it to itself).
 
 #if defined(__APPLE__)
   #include <CoreFoundation/CoreFoundation.h>
@@ -34,6 +35,13 @@
   #include <stdlib.h>
   #include <string>
   #include <vector>
+#elif defined(__linux__)
+  #include <glib.h>
+  #include <cstddef>
+  #include <locale.h>
+  #include <memory>
+  #include <stdlib.h>
+  #include <string>
 #else
   #include <locale.h>
   #include <stdlib.h>
@@ -162,9 +170,77 @@ namespace funkgui::presets::detail
         return juce::String(w.c_str());
     }
 
+#elif defined(__linux__)
+
+    // GLib's Unicode tables (v0.11.0): g_utf8_casefold is the full Unicode
+    // case fold, locale-independent, like CFStringFold's ("ß" folds to "ss"
+    // here too); diacritics go as on Windows, by decomposing and dropping the
+    // nonspacing marks; the full-width forms map as on Windows; NFC last.
+    namespace
+    {
+        struct GFree
+        {
+            void operator()(gchar* p) const noexcept { g_free(p); }
+        };
+        using GText = std::unique_ptr<gchar, GFree>;
+
+        void appendChar(std::string& out, gunichar c)
+        {
+            gchar buf[6];
+            out.append(buf, static_cast<std::size_t>(g_unichar_to_utf8(c, buf)));
+        }
+
+        // Full-width ASCII (U+FF01..U+FF5E) and the ideographic space, as the
+        // Windows branch maps them.
+        std::string narrow(const gchar* s)
+        {
+            std::string out;
+            for (const gchar* p = s; *p != 0; p = g_utf8_next_char(p))
+            {
+                gunichar c = g_utf8_get_char(p);
+                if (c >= 0xFF01 && c <= 0xFF5E) c -= 0xFEE0;
+                else if (c == 0x3000)           c = ' ';
+                appendChar(out, c);
+            }
+            return out;
+        }
+
+        // Decompose, then drop the nonspacing marks: "Ä" -> "A" + U+0308 -> "A".
+        std::string stripDiacritics(const gchar* s)
+        {
+            const GText d(g_utf8_normalize(s, -1, G_NORMALIZE_NFD));
+            if (d == nullptr) return s;
+            std::string out;
+            for (const gchar* p = d.get(); *p != 0; p = g_utf8_next_char(p))
+            {
+                const gunichar c = g_utf8_get_char(p);
+                if (g_unichar_type(c) != G_UNICODE_NON_SPACING_MARK)
+                    appendChar(out, c);
+            }
+            return out;
+        }
+    }
+
+    juce::String foldText(const juce::String& s, int flags)
+    {
+        if (s.isEmpty()) return {};
+        std::string t = s.toStdString();
+        if (!g_utf8_validate(t.c_str(), -1, nullptr))
+            return (flags & foldCase) != 0 ? s.toLowerCase() : s;
+        if ((flags & foldCase) != 0)
+        {
+            const GText f(g_utf8_casefold(t.c_str(), -1));
+            if (f != nullptr) t = f.get();
+        }
+        if ((flags & foldDiacritics) != 0) t = stripDiacritics(t.c_str());
+        if ((flags & foldWidth) != 0)      t = narrow(t.c_str());
+        const GText nfc(g_utf8_normalize(t.c_str(), -1, G_NORMALIZE_NFC));
+        return juce::String::fromUTF8(nfc != nullptr ? nfc.get() : t.c_str());
+    }
+
 #else
 
-    // No platform fold (neither target builds this): ASCII only, which keeps
+    // No platform fold (no target builds this): ASCII only, which keeps
     // the store usable and makes the limitation obvious.
     juce::String foldText(const juce::String& s, int flags)
     {

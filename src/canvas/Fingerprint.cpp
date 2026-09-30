@@ -17,7 +17,7 @@
 #include <cstring>
 #include <string>
 
-#include <xlocale.h>                                     // after <cstdio>/<cstdlib>: snprintf_l, strtof_l (macOS)
+#include <funkgui/core/CLocale.h>                        // snprintfC, strtofC: the C locale on macOS and Linux
 
 // Frame fingerprints (02 §3.9). Choices where 02 §3.9 is silent (G3):
 // - A primitive's kind is classified by range, as the shader and SoftRaster do (d2[2] < 0.5 rrect, < 1.5 text, < 2.5
@@ -94,14 +94,12 @@ namespace funkgui
                 counts.insert(it, { t, 1 });
         }
 
-        // A float as HR's dump held it: printed with "%g", read back with sscanf("%f"). A null locale_t is the C
-        // locale for the *_l functions (xlocale(3)).
+        // A float as HR's dump held it: printed with "%g", read back with sscanf("%f"), both in the C locale.
         float throughG(float v)
         {
-            constexpr locale_t kCLocale = nullptr;
             char buf[64];
-            snprintf_l(buf, sizeof buf, kCLocale, "%g", static_cast<double>(v));
-            return strtof_l(buf, nullptr, kCLocale);
+            snprintfC(buf, sizeof buf, "%g", static_cast<double>(v));
+            return strtofC(buf, nullptr);
         }
 
         Fingerprint legacy(const PrimList& list)

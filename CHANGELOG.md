@@ -3,6 +3,39 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.11.0 — 2026-09-30 · MINOR: Linux
+
+Golden impact: **none on macOS** (no macOS row moves; `fg.shader.hash` gains four SPIR-V rows, the same on every host).
+New: `fg.font.probe-linux` and `fg.smoke.gpu` (Linux), each on Linux only. Linux x86-64 runs every other `fg` test
+against the same goldens as macOS. (FCompressor ADR-91.)
+
+- **The GPU layer on Linux:** bgfx on **Vulkan** into an X11 child window of JUCE's peer (`src/gpu/linux/`). The view
+  is created on JUCE's display connection through JUCE's own dynamically loaded Xlib, selects no events (every event
+  reaches JUCE's peer, as with JUCE's OpenGL child window), and is placed and sized in device pixels at the drawable's
+  scale. JUCE's peers are X11 windows, so a Wayland desktop runs the editor through XWayland, like every JUCE plug-in.
+  Vulkan only: bgfx's OpenGL path (EGL) aborts the process on any initialisation failure, its Vulkan path fails softly
+  into `EditorHost`'s fallback screen. There is no display link on Linux: `FramePump` runs on its timer.
+- **API (additive):** `nativeDisplay()` (bgfx's `PlatformData::ndt`: JUCE's X11 `Display*` on Linux, nullptr on macOS)
+  and `setRenderViewScale(view, scale)` (the scale `EditorHost` sizes the drawable at, so on Linux the X window, the
+  swapchain and the drawable agree even under a `UI_SCALE` override; nothing on macOS) in `gpu/NativeSurface.h`;
+  `funkgui/core/CLocale.h` (`strtofC`, `strtolC`, `snprintfC`, `fprintfC`: C-locale number text on macOS and Linux,
+  replacing direct calls to xlocale's `*_l` functions with a null `locale_t`, which is Apple's alone).
+- **Shaders:** `FunkGuiShaders` compiles every profile on every host (`<name>.mtl.h` and `<name>.spv.h`). shaderc's
+  output depends on the pinned bgfx only: the Metal pair compiled on Linux is the macOS golden byte for byte.
+- **Storage on Linux:** `UiPreferences` in `~/.config/<PREFS_FOLDER>/preferences.settings` and `PresetStore` in
+  `~/.config/<product>/Presets.db` (`XDG_CONFIG_HOME` honoured), not JUCE's defaults (`~/<folder>/` and
+  `~/.config/Application Support/`). The preset keys' fold uses GLib (full Unicode case fold, diacritics, width, NFC),
+  the counterpart of CoreFoundation's, instead of the ASCII-only fallback.
+- **Build:** configure accepts `FUNKGUI_WITH_BGFX` on Linux; bgfx is fetched without its Wayland backend (no
+  `libwayland-egl` dependency) and compiled with `-w` there. Top-level builds default to Clang on Linux, turn off C++20
+  module scanning, and apply `cmake/FunkGuiPlatform.cmake`: upstream Clang rejects the layout constructor template in
+  JUCE 8.0.4's `juce_AudioPluginInstance.h`, so where it does, `-fdelayed-template-parsing` (and the silencing of its
+  C++20 deprecation warning). `funkgui_add_font` copies the licences into the VST3 bundle's `Contents/Resources` and
+  beside other executables at PRE_LINK on Linux. Tests: `*.mm` and `*_apple.cpp` register on Apple only, `*_linux.cpp`
+  on Linux only; `fg.headers` skips the compiler's own include directories and takes `--extra-flag`.
+- **Tools:** the gallery app puts its Section menu in the window on Linux; `PrefsCheck`, `fg.presets.store` and
+  `fg.font.probe` know each platform's paths and atlas.
+
 ## v0.10.0 — 2026-09-30 · MINOR: the animation speed
 
 Golden impact: **none** (the default scale is 1, which is bit for bit the eases as they were; every `fg` golden is

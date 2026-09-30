@@ -4,3 +4,7 @@ shader.vs_ui.hash	62930e55fb1f025f	exact
 shader.vs_ui.bytes	1340	exact
 shader.fs_ui.hash	9a0a09976c9160dd	exact
 shader.fs_ui.bytes	4532	exact
+shader.vs_ui.spv.hash	fcba322bbc8d13d7	exact
+shader.vs_ui.spv.bytes	1835	exact
+shader.fs_ui.spv.hash	a2497061bea8dba2	exact
+shader.fs_ui.spv.bytes	6248	exact

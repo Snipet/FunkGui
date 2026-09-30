@@ -4,3 +4,7 @@
 // tools/FontProbe.cpp (FCompressor docs/design/02-funkgui-and-ui.md §3.11): the bundled face's atlas hash and metrics as
 // golden rows; as spec rows, no glyph of the baked set missing, and the committed subset interchangeable with the
 // upstream face it was cut from (same advances, bit-identical distance field).
+//
+// macOS only (v0.11.0): FontAtlasSdf rasterises each glyph with juce::Graphics into a native Image, which is
+// CoreGraphics here and JUCE's software renderer on Linux, so the distance field, and with it font.atlas, differs by
+// platform while every metric row agrees. Linux runs the same tool as fg.font.probe-linux (font_probe_linux.cpp).
