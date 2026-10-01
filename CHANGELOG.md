@@ -3,11 +3,16 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
-## Unreleased — for v0.12.0 · MINOR: FunkGui::core without JUCE
+## v0.12.0 — 2026-10-01 · MINOR: FunkGui without JUCE, host services, a WebGL2 sink
 
-Golden impact: **none** (no row moves on macOS or Linux with JUCE; the JUCE-free configurations run the same rows
-against the same goldens). New tests: `fg.font.blob`, `fg.font.baked` (macOS), `fg.prefs.backend`. Not tagged yet: the
-tag follows the WebGL2 sink and the host services (FCompressor ADR-93, web Sprint B).
+Golden impact: **none** on existing rows (no row moves on macOS or Linux with JUCE; the JUCE-free configurations run
+the same rows against the same goldens). New rows: `fg.shader.web` (4) and `fg.gallery.services` (275, and 11 a11y
+line files). New tests: `fg.font.blob`, `fg.font.baked` (macOS), `fg.prefs.backend`, `fg.host.services` (JUCE-free:
+also `nojuce` and wasm32), `fg.host.services.editor` (gpu), `fg.host.services.live` (live), `fg.shader.web`,
+`fg.gallery.services`, and `fg.web.page` (the `web` preset, live: a browser). All additive: a consumer that changes
+nothing builds and behaves as with v0.11.1. (FCompressor ADR-93, web Sprints A and B.)
+
+**The core without JUCE**
 
 - **`FUNKGUI_WITH_JUCE`** (CMake option, default ON: nothing changes). OFF gives a `FunkGui::core` with no JUCE under
   it, for a host that is not a JUCE plug-in (the browser). `FunkGui::gpu` and `FunkGui::presets` need JUCE and are not
@@ -24,6 +29,41 @@ tag follows the WebGL2 sink and the host services (FCompressor ADR-93, web Sprin
 - **Emscripten:** `CLocale` has a branch for it, the Harness knows `--arch wasm32`, and FunkGui's own `web` preset
   builds the JUCE-free tests as wasm32 and runs them under node. The `nojuce` preset is the same core natively, so the
   option stays honest on every gate.
+
+**Host services**
+
+- **`HostServices`** gains a popup menu, a file chooser and the clipboard as plain calls, so a Panel needs no JUCE and
+  no `ownerComponent()` for them: `services()` (a mask of `hostservice::menus | fileChooser | clipboard`),
+  `showMenu(MenuRequest, MenuCallback)`, `dismissMenus()`, `chooseFiles(FileRequest, FilesCallback)`, `copyText(utf8)`
+  and `commandKeyIsMeta()`. Not pure: a host written before them compiles and refuses. A callback runs on the message
+  thread, at most once, never inside the call that took it, and never after `dismissMenus()`, after the host has let
+  go of the Panel or after the host is destroyed; a second request replaces the first of its kind. A menu is flat
+  (items, ticks, separators); a request with no item that is not a separator is refused. A Panel must not call a
+  service from its destructor.
+- **`EditorHost`** serves all three over JUCE: a `juce::PopupMenu` in a `MenuLook` of the request's Theme, anchored
+  under the UI zoom; a native `juce::FileChooser` on the editor, starting in Documents; `juce::SystemClipboard`. A
+  save's path ends in the pattern's extension. `ownerComponent()` stays.
+- **`HeadlessHost`** reports every service, logs each call (`log.menuRequests`, `menuDismissals`, `fileRequests`,
+  `copies`, `lastMenu`, `lastFiles`, `lastCopy`) and holds a menu or chooser pending until the test answers it:
+  `pendingMenu()`, `pendingFiles()`, `chooseMenuItem(id | label)`, `cancelMenu()`, `returnFiles(paths)`,
+  `cancelFiles()`, `setCommandKeyIsMeta()`. A Panel that calls no service draws, ticks and logs as before.
+- The gallery app has a `services` section to try the JUCE side by hand.
+
+**`FunkGui::web`: a WebGL2 sink**
+
+- **`WebGlSink`** (`funkgui/web/WebGlSink.h`, Emscripten only): `BgfxSink`'s contract on WebGL2. One draw call from
+  `funkgui::expand`, one program, the R8 atlas, its own context on a canvas named by a selector (no alpha, antialias,
+  depth or stencil). It reports failure instead of aborting, rebuilds its program, buffer and texture after a context
+  loss, and refuses a canvas that already has a sink (a replacement is constructed after the old sink is destroyed).
+- **The shader text.** `FunkGuiShaderText` generates `<funkgui/shaders/ui.es300.h>` (GLSL ES 3.00) from `shaders/*.sc`
+  with CMake alone, in every configuration; `fg.shader.web` pins it, the same on every host.
+- **Clips and the fill rule.** A hard edge that passes through device pixel centres in y is filled one row further down
+  by WebGL than by SoftRaster and the native sinks. Put clip edges on device pixels with `Canvas::snapX`/`snapY`
+  (`Canvas::pushClip`'s comment says so now): whole logical px are not enough once dpi is physical height over logical
+  height.
+- **The browser check:** `test/web` and `tools/web/check-page.mjs` (CTest `fg.web.page`). Against SoftRaster in Chrome
+  154 on this Mac: ANGLE Metal differs by at most 1 per channel; SwiftShader by at most 8, with at most 5.1 ‰ of a
+  frame's samples over 2. A forced context loss and restore gives the same frames byte for byte.
 
 ## v0.11.1 — 2026-10-01 · PATCH: the SQLite target name under CMake before 4.3
 
