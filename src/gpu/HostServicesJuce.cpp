@@ -45,14 +45,21 @@ namespace funkgui
             return ext.find_first_of("*?;, ") == std::string_view::npos ? fromUtf8(ext) : juce::String();
         }
 
+        // HostServices' rule: an item that is not a separator, and an id > 0 on each. JUCE opens no window for a menu
+        // of separators alone (PopupMenu drops them, and deletes the callback of an empty menu unrun), so taking one
+        // would leave Pending waiting for a callback that never comes.
         bool menuIsValid(const MenuRequest& request)
         {
-            if (request.items.empty())
-                return false;
+            bool anyItem = false;
             for (const MenuItem& it : request.items)
-                if (!it.separator && it.id <= 0)
+            {
+                if (it.separator)
+                    continue;
+                if (it.id <= 0)
                     return false;
-            return true;
+                anyItem = true;
+            }
+            return anyItem;
         }
     }
 

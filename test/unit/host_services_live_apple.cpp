@@ -13,13 +13,18 @@
 // "services" section.
 //   show.*       taken; not run inside the call; a user's dismissal runs it once, with 0, and destroys it
 //   choose.*     the second item chosen with the keys: the callback runs once, with that item's id, from the run loop
-//   dismiss.*    dismissMenus(): never run, destroyed at once
-//   replace.*    a second showMenu: the first never runs; a refused second closes the first too
+//   dismiss.*    dismissMenus(): the menu is closed and its callback destroyed unrun, both at once
+//   replace.*    a second showMenu after the user chose from the first, before JUCE delivered the choice: the first
+//                menu's result arrives while the second is open and must not reach the second's callback (the serial
+//                of HostServicesJuce.cpp); a refused second closes the first too
 //   again.*      a callback that asks for the next menu: taken, and not run inside that call either
-//   window.*     the editor is taken out of its window with a menu and a chooser pending: neither runs
-//   destroy.*    the editor is destroyed with a menu and a chooser pending: neither runs, then or later
+//   window.*     the editor is taken out of its window with a menu and a chooser pending: both are closed, neither runs
+//   destroy.*    the editor is destroyed with a menu and a chooser pending: both are closed, neither runs
 //   chooser.*    a second chooseFiles replaces the first (asked back to back, so no dialog gets to open)
-// Spec rows only.
+// A callback that was dropped is checked where it is dropped (its token has expired, so it can never run after that);
+// the run loop still turns afterwards, so JUCE's own late callback of each closed menu arrives and must find nothing.
+// "Open" and "closed" are JUCE's count of modal components, read with no run-loop turn: a menu's window and a chooser
+// are each modal from the call that opens them until they are dismissed. Spec rows only.
 
 #include <funkgui/a11y/A11yItem.h>
 #include <funkgui/canvas/Canvas.h>
@@ -119,6 +124,9 @@ namespace
         bool ranOnceWithZero() const { return runs == 1 && id == 0 && alive.expired(); }
     };
 
+    // How many menus and choosers are open, as JUCE sees it.
+    int modalCount() { return juce::ModalComponentManager::getInstance()->getNumModalComponents(); }
+
     funkgui::MenuRequest sampleMenu()
     {
         funkgui::MenuRequest m;
@@ -214,28 +222,32 @@ int main(int argc, char** argv)
 
         Call b;
         h.showMenu(sampleMenu(), b.menu());
+        P.eq("dismiss.menu_open", modalCount(), 1);
         h.dismissMenus();
         P.eq("dismiss.dropped_at_once", b.dropped(), 1);
+        P.eq("dismiss.menu_closed_at_once", modalCount(), 0);
         spin(0.25);                                  // JUCE's own callback of the closed menu arrives: nothing to run
-        P.eq("dismiss.never_run", b.dropped(), 1);
         h.dismissMenus();                            // nothing showing
 
+        // The user chooses the first menu's second item; before the run loop turns, a second menu replaces the first.
+        // JUCE delivers the first menu's 2 while the second is open: it is not the second's to receive.
         Call c, d;
         h.showMenu(sampleMenu(), c.menu());
+        P.eq("replace.keys_reached_the_first", userChoosesSecondItem(), 1);
         const bool second = h.showMenu(sampleMenu(), d.menu());
         P.eq("replace.second_taken", second, 1);
         P.eq("replace.first_dropped_at_once", c.dropped() && d.pending(), 1);
-        spin(0.25);
+        spin(0.25);                                  // the first menu's result arrives
+        // The second is still open, or was closed by JUCE itself (with 0): it never saw the first one's 2.
+        P.eq("replace.stale_choice_not_delivered", d.pending() || d.ranOnceWithZero(), 1);
         userDismisses();
-        P.eq("replace.first_never_run", c.dropped(), 1);
         P.eq("replace.second_ran_once_with_zero", d.ranOnceWithZero(), 1);
 
         Call e, f;
         h.showMenu(sampleMenu(), e.menu());
         const bool refused = !h.showMenu(funkgui::MenuRequest{}, f.menu());
-        P.eq("replace.refused_second_closes_the_first", refused && e.dropped() && f.dropped(), 1);
+        P.eq("replace.refused_second_closes_the_first", refused && e.dropped() && f.dropped() && modalCount() == 0, 1);
         spin(0.25);
-        P.eq("replace.refused_nothing_runs", e.dropped() && f.dropped(), 1);
 
         // A callback that asks for the next menu.
         Call follow;
@@ -263,12 +275,13 @@ int main(int argc, char** argv)
         // ---- destruction with a menu and that chooser pending ----------------------------------------------------
         Call m;
         h.showMenu(sampleMenu(), m.menu());
+        P.eq("destroy.both_open", modalCount(), 2);
         r.editor.reset();
         P.eq("destroy.menu_dropped", m.dropped(), 1);
         P.eq("destroy.chooser_dropped", i.dropped(), 1);
+        P.eq("destroy.both_closed", modalCount(), 0);
         spin(0.3);                                   // whatever JUCE still had queued finds nothing to call
         userDismisses();
-        P.eq("destroy.never_run", m.dropped() && i.dropped() && g.dropped(), 1);
     }
 
     // ---- an editor in a window, taken out of it ---------------------------------------------------------------------
@@ -289,11 +302,12 @@ int main(int argc, char** argv)
         h.showMenu(sampleMenu(), menu.menu());
         h.chooseFiles(sampleChooser(), files.files());
         P.eq("window.both_pending", menu.pending() && files.pending(), 1);
+        P.eq("window.both_open", modalCount(), 2);
         top.removeChildComponent(r.editor.get());    // parentHierarchyChanged() with no peer: the host lets go
         P.eq("window.dropped_on_leaving", menu.dropped() && files.dropped(), 1);
+        P.eq("window.closed_on_leaving", modalCount(), 0);
         spin(0.3);
         userDismisses();
-        P.eq("window.never_run", menu.dropped() && files.dropped(), 1);
 
         // Back in a window, the services serve again.
         top.addAndMakeVisible(*r.editor);

@@ -151,9 +151,10 @@ namespace funkgui
         //   each other.
         // A callback that does not run is destroyed without being called, when it is dropped (a refused one: when the
         // call returns), so what it captured is released. One that runs may call showMenu or chooseFiles again. A
-        // sub-view that can go before its Panel still guards what its callbacks touch, as with any deferred call; it
-        // needs no dismissMenus() in a destructor that runs with the Panel's, since the host has dropped the callbacks
-        // by then (and may itself be gone).
+        // sub-view that can go before its Panel still guards what its callbacks touch, as with any deferred call.
+        // A Panel must not call a service from its destructor, nor a sub-view from a destructor that runs with the
+        // Panel's: the host may be partly or wholly gone by then (as for every other call of HostServices), and it
+        // has dropped the callbacks already, so nothing is left to dismiss.
 
         // What this host serves: a mask of hostservice bits, so a view can disable a cell its host cannot serve. A
         // call for a service that is not reported refuses, as the defaults below do. EditorHost and HeadlessHost: all
@@ -162,7 +163,9 @@ namespace funkgui
 
         // Opens the menu beside request.anchor in request.theme's colours and returns true; `done` then runs once
         // with the chosen id, or with 0 when the user dismisses the menu. Returns false, and drops `done` unrun, when
-        // the host shows no menus, the request has no items, or an item that is not a separator has an id <= 0.
+        // the host shows no menus, the request has no item that is not a separator (no items at all, or separators
+        // alone: nothing could be chosen, and no host opens such a menu), or an item that is not a separator has an
+        // id <= 0.
         // EditorHost: a juce::PopupMenu with a funkgui::MenuLook of the theme, anchored to the rectangle on screen
         // under the UI zoom (the rectangle times the editor's width over the Panel's, to the nearest editor px).
         // HeadlessHost: nothing is shown; the request is logged and stays pending until the test answers it

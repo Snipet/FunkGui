@@ -41,8 +41,10 @@
 // - Zoom (G7c): simulated for a Panel's ZOOM control only; nothing drawn, hit-tested or listed depends on it.
 // - Services (Web Sprint B, v0.12.0): every call is counted and its request kept in `log` before it is judged, so a
 //   refused request can be read too. A request replaces the pending one of its kind, whose callback is destroyed
-//   unrun, whether or not it is taken itself (pendingMenu() is always log.lastMenu or nothing). An answer first takes
-//   the callback out of the host and clears the pending state, then calls it:
+//   unrun, whether or not it is taken itself (pendingMenu() is always log.lastMenu or nothing). A menu is refused by
+//   HostServices::showMenu's rule, as EditorHost refuses it (no item that is not a separator, or one with an id <= 0),
+//   so a probe cannot pass on a menu the live host would not open. An answer first takes the callback out of the host
+//   and clears the pending state, then calls it:
 //   the callback may ask for the next menu or chooser, which is then pending when the answering call returns. An
 //   empty callback is taken like any other (the request is pending, the answer returns true and calls nothing). The
 //   destructor destroys the pending callbacks, then closes the Panel's gestures, so nothing a Panel does while its
@@ -421,11 +423,17 @@ namespace funkgui
         log.lastMenu = request;
         menuPending_ = false;                            // the menu still pending is replaced, its callback unrun,
         menuDone_ = nullptr;                             // even when this request is refused
-        if (request.items.empty())
-            return false;
+        bool anyItem = false;                            // refused: an item with no id, or nothing but separators
         for (const MenuItem& it : request.items)
-            if (!it.separator && it.id <= 0)
+        {
+            if (it.separator)
+                continue;
+            if (it.id <= 0)
                 return false;
+            anyItem = true;
+        }
+        if (!anyItem)
+            return false;
         menuDone_ = std::move(done);
         menuPending_ = true;
         return true;

@@ -300,7 +300,7 @@ int main(int argc, char** argv)
         ServicePanel panel;
         HeadlessHost host(panel);
         HostServices& h = host;
-        Call empty, badId, first, second;
+        Call empty, badId, separators, first, second, third, fourth;
         P.eq("menu_refused.no_items", h.showMenu(MenuRequest{}, empty.menu()), 0);
         P.eq("menu_refused.no_items_dropped", empty.dropped() && host.pendingMenu() == nullptr, 1);
         MenuRequest bad = sampleMenu();
@@ -311,15 +311,29 @@ int main(int argc, char** argv)
         MenuRequest negative = sampleMenu();
         negative.items[0].id = -4;
         P.eq("menu_refused.negative_id", h.showMenu(negative, {}), 0);
+        // Separators alone: nothing could be chosen, and the live host has no menu to open for it.
         MenuRequest onlySeparators;
         onlySeparators.items.push_back({ .separator = true });
-        P.eq("menu_refused.separators_alone_are_taken", h.showMenu(onlySeparators, first.menu()), 1);
-        P.eq("menu_refused.separator_cannot_be_chosen", !host.chooseMenuItem(0) && !host.chooseMenuItem(""), 1);
+        onlySeparators.items.push_back({ .separator = true });
+        P.eq("menu_refused.separators_alone", h.showMenu(onlySeparators, separators.menu()), 0);
+        P.eq("menu_refused.separators_alone_dropped", separators.dropped() && host.pendingMenu() == nullptr, 1);
+        P.eq("menu_refused.separators_alone_counted_and_logged",
+             host.log.menuRequests == 4 && sameMenu(host.log.lastMenu, onlySeparators), 1);
+        P.eq("menu_refused.no_answer_to_a_refused_menu", !host.chooseMenuItem(1) && !host.cancelMenu(), 1);
+        // The separator of a menu that is pending cannot be chosen, by its id (0) or by its label (none).
+        const bool firstTaken = h.showMenu(sampleMenu(), first.menu());
+        P.eq("menu_refused.separator_cannot_be_chosen",
+             firstTaken && !host.chooseMenuItem(0) && !host.chooseMenuItem("") && first.pending()
+                 && host.pendingMenu() != nullptr, 1);
         // A refused request still replaces the menu that was showing. (Its own callback is the call's argument: it
         // goes when the statement that made the call ends.)
         const bool refused = !h.showMenu(MenuRequest{}, second.menu());
         P.eq("menu_refused.replaces_the_pending", refused && first.dropped() && second.dropped()
                                                       && host.pendingMenu() == nullptr, 1);
+        const bool thirdTaken = h.showMenu(sampleMenu(), third.menu());
+        const bool refusedToo = !h.showMenu(onlySeparators, fourth.menu());
+        P.eq("menu_refused.separators_alone_replace_the_pending",
+             thirdTaken && refusedToo && third.dropped() && fourth.dropped() && host.pendingMenu() == nullptr, 1);
         // An empty callback is taken like any other: the answer has nothing to call.
         P.eq("menu.empty_callback", h.showMenu(sampleMenu(), {}) && host.pendingMenu() != nullptr
                                         && host.chooseMenuItem(1) && host.pendingMenu() == nullptr, 1);

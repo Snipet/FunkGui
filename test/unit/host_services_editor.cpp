@@ -4,8 +4,13 @@
 // needs neither a window nor the user's clipboard. An EditorHost that was never put on screen:
 // - reports all three services, and its commandKeyIsMeta() is JUCE's own rule (ModifierKeys::commandModifier is Cmd
 //   on macOS and Ctrl elsewhere);
-// - refuses a menu with no items and one whose item has no id: false, and the callback destroyed unrun;
-// - takes dismissMenus() with no menu showing, and its destructor with nothing pending, as no-ops;
+// - refuses a menu with no items, one whose item has no id and one of separators alone (JUCE would open no window for
+//   it and call nothing back): false, and the callback destroyed unrun;
+// - leaves JUCE's other menus alone while it shows no menu of its own: a refused request, dismissMenus() and its
+//   destructor each leave a juce::PopupMenu that is not the host's in its modal state (JUCE can only dismiss every menu
+//   of the process, and HardwareReverb opens its own on ownerComponent()). That menu is shown inside a component that
+//   is on no desktop, so it needs a display and no window; the last row dismisses it as the host must not, to show
+//   that the rows before it would have seen it;
 // - still answers ownerComponent() with itself (HardwareReverb anchors its own menus there).
 // A menu that shows, its dismissal, replacement and the editor leaving its window are fg.host.services.live (a window
 // server); the chooser and the clipboard are tried by hand in the gallery app's "services" section. Spec rows only.
@@ -89,6 +94,29 @@ namespace
 
         bool dropped() const { return runs == 0 && alive.expired(); }
     };
+
+    // A popup menu of JUCE's that is not the host's. Its window is a child of `parent`, which is on no desktop: JUCE
+    // makes it the modal component inside showMenuAsync, and PopupMenu::dismissAllActiveMenus() ends that at once. The
+    // run loop never turns in this test, so the menu's own end is never delivered: its window goes when JUCE shuts
+    // down.
+    struct JuceMenu
+    {
+        juce::Component parent;
+
+        JuceMenu()
+        {
+            parent.setSize(240, 160);
+            juce::PopupMenu m;
+            m.addItem(1, "Not the host's");
+            m.showMenuAsync(juce::PopupMenu::Options().withParentComponent(&parent), [](int) {});
+        }
+
+        bool open() const
+        {
+            const juce::Component* modal = juce::Component::getCurrentlyModalComponent();
+            return modal != nullptr && modal->getParentComponent() == &parent;
+        }
+    };
 }
 
 int main(int argc, char** argv)
@@ -97,6 +125,7 @@ int main(int argc, char** argv)
     T::Probe P("fg.host.services.editor", "", argc, argv);
     namespace hs = funkgui::hostservice;
     NoOpProcessor processor;
+    std::unique_ptr<JuceMenu> juceMenu;
 
     {
         auto owned = std::make_unique<PlainPanel>();
@@ -114,7 +143,15 @@ int main(int argc, char** argv)
         const bool juceMeta = juce::ModifierKeys::commandModifier != juce::ModifierKeys::ctrlModifier;
         P.eq("command_key.is_juces_rule", host.commandKeyIsMeta(), juceMeta);
 
-        Call empty, noId;
+        // JUCE places a menu on a display, with or without a window.
+        const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay();
+        if (P.eq("juce_menu.display_known", display != nullptr, 1))
+        {
+            juceMenu = std::make_unique<JuceMenu>();
+            P.eq("juce_menu.open", juceMenu->open(), 1);
+        }
+
+        Call empty, noId, separators;
         const bool emptyRefused = !host.showMenu(funkgui::MenuRequest{}, empty.menu());
         P.eq("menu_refused.no_items", emptyRefused && empty.dropped(), 1);
         funkgui::MenuRequest bad;
@@ -122,9 +159,25 @@ int main(int argc, char** argv)
         bad.items.push_back({ 0, "No id" });
         const bool noIdRefused = !host.showMenu(bad, noId.menu());
         P.eq("menu_refused.item_without_id", noIdRefused && noId.dropped(), 1);
-        host.dismissMenus();                         // nothing showing: JUCE's menus are left alone
-        P.eq("dismiss.nothing_showing", empty.runs + noId.runs, 0);
+        funkgui::MenuRequest onlySeparators;
+        onlySeparators.items.push_back({ .separator = true });
+        onlySeparators.items.push_back({ .separator = true });
+        const bool separatorsRefused = !host.showMenu(onlySeparators, separators.menu());
+        P.eq("menu_refused.separators_alone", separatorsRefused && separators.dropped(), 1);
+        if (juceMenu != nullptr)
+        {
+            P.eq("menu_refused.leaves_juces_menu", juceMenu->open(), 1);
+            // Nothing of the host's is showing (a request taken with no window to show would count as one).
+            host.dismissMenus();
+            P.eq("dismiss.nothing_showing_leaves_juces_menu", juceMenu->open(), 1);
+        }
     }
-    P.eq("destructor.nothing_pending", 1, 1);        // reached: the editor went with no menu and no chooser
+    if (juceMenu != nullptr)
+    {
+        // The editor went with no menu and no chooser pending.
+        P.eq("destructor.nothing_pending_leaves_juces_menu", juceMenu->open(), 1);
+        const bool dismissed = juce::PopupMenu::dismissAllActiveMenus();
+        P.eq("juce_menu.a_dismissal_is_seen", dismissed && !juceMenu->open(), 1);
+    }
     return P.finish();
 }
