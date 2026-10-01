@@ -1,5 +1,7 @@
 #include <funkgui/gpu/EditorHost.h>
 
+#include "HostServicesJuce.h"
+
 #include <funkgui/core/Config.h>
 #include <funkgui/gpu/BgfxContext.h>
 #include <funkgui/gpu/NativeSurface.h>
@@ -67,6 +69,18 @@
 //   stack when the host resizes its window. Input between the click and that frame is converted at the old zoom (the
 //   editor's actual size).
 // - The fallback screen draws at the logical size, scaled by the zoom. GPU_LOG logs every zoom change.
+//
+// Web Sprint B (v0.12.0), additive (the services of HostServices.h; FCompressor ADR-93): the menu, the file chooser and
+// the clipboard are HostServicesJuce's (src/gpu/HostServicesJuce.cpp), which does them as FCompressor's views did with
+// ownerComponent(). Choices where the card is silent:
+// - The anchor's scale is the views' own: the editor's width over the Panel's (the applied zoom, as the editor is
+//   sized), not zoomPercent(), which answers a zoom the next frame has yet to apply.
+// - "The host lets go of the Panel" (HostServices' rule) is ~EditorHost, first thing, and an editor that has left its
+//   window: parentHierarchyChanged() with no peer, which a re-parenting wrapper also passes through. A surface that
+//   is detached for the GPU's sake (a lost context, the retry) keeps its window, so its menu and chooser stay.
+// - A capture (CANVAS_DUMP) serves them like any other editor, as the views did: nothing asks for one unless UI_KEYS
+//   replays a key that does.
+// - ownerComponent() stays (HardwareReverb's PresetPanel anchors its own menus and choosers on it).
 
 namespace funkgui
 {
@@ -153,6 +167,7 @@ namespace funkgui
           capture_(CaptureConfig::fromEnv()), canvas_(FontService::get().atlas())
     {
         jassert(panel_ != nullptr);                  // an EditorHost always runs a Panel
+        services_ = std::make_unique<HostServicesJuce>(*this);
         setOpaque(true);
         setWantsKeyboardFocus(true);
         setTitle(juce::String::fromUTF8(config::kProductName));
@@ -200,6 +215,7 @@ namespace funkgui
     EditorHost::~EditorHost()
     {
         parentWatcher_.reset();                      // no placement callback while the surface goes away
+        services_->letGo();                          // no menu or chooser calls back into a Panel that is going
         stopTimer();
         // A host can close the editor with the mouse still down, in which case mouseUp never arrives; leaving the
         // gesture open strands the host's automation write (HR :168-173).
@@ -347,6 +363,7 @@ namespace funkgui
         auto* peer = getPeer();
         if (peer == nullptr)
         {
+            services_->letGo();                      // the editor left its window: its menu and chooser go with it
             detachSurface();
             return;
         }
@@ -904,6 +921,35 @@ namespace funkgui
     juce::Component* EditorHost::ownerComponent()
     {
         return this;
+    }
+
+    // ---- services (Web Sprint B; HostServicesJuce.cpp) --------------------------------------------------------------
+
+    unsigned EditorHost::services() const
+    {
+        return hostservice::menus | hostservice::fileChooser | hostservice::clipboard;
+    }
+
+    bool EditorHost::showMenu(const MenuRequest& request, MenuCallback done)
+    {
+        // The Panel's logical px to the editor's, as FCompressor's views computed it under the UI zoom (G7c).
+        const float scale = logicalW_ > 0 ? static_cast<float>(getWidth()) / static_cast<float>(logicalW_) : 1.0f;
+        return services_->showMenu(request, std::move(done), scale);
+    }
+
+    void EditorHost::dismissMenus()
+    {
+        services_->dismissMenus();
+    }
+
+    bool EditorHost::chooseFiles(const FileRequest& request, FilesCallback done)
+    {
+        return services_->chooseFiles(request, std::move(done));
+    }
+
+    bool EditorHost::copyText(std::string_view utf8)
+    {
+        return services_->copyText(utf8);
     }
 
     //==================================================================================================================

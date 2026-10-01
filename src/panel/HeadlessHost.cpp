@@ -39,6 +39,18 @@
 // - The destructor calls Panel::closeGestures() (EditorHost's rule when the host closes the editor mid-gesture), so
 //   the Panel must outlive its host.
 // - Zoom (G7c): simulated for a Panel's ZOOM control only; nothing drawn, hit-tested or listed depends on it.
+// - Services (Web Sprint B, v0.12.0): every call is counted and its request kept in `log` before it is judged, so a
+//   refused request can be read too. A request replaces the pending one of its kind, whose callback is destroyed
+//   unrun, whether or not it is taken itself (pendingMenu() is always log.lastMenu or nothing). A menu is refused by
+//   HostServices::showMenu's rule, as EditorHost refuses it (no item that is not a separator, or one with an id <= 0),
+//   so a probe cannot pass on a menu the live host would not open. An answer first takes the callback out of the host
+//   and clears the pending state, then calls it:
+//   the callback may ask for the next menu or chooser, which is then pending when the answering call returns. An
+//   empty callback is taken like any other (the request is pending, the answer returns true and calls nothing). The
+//   destructor destroys the pending callbacks, then closes the Panel's gestures, so nothing a Panel does while its
+//   host goes can reach one. Mode::save's extension rule is JUCE's File::hasFileExtension and withFileExtension, as
+//   EditorHost applies them: a path that does not end in the extension (ASCII case ignored) loses what follows the
+//   last '.' of its file name and gains the extension.
 
 namespace funkgui
 {
@@ -53,6 +65,47 @@ namespace funkgui
             e.clicks = clicks;
             e.popup = m.ctrl;
             return e;
+        }
+
+       #if defined(_WIN32)
+        constexpr std::string_view kSeparators = "\\/";   // juce::File's, per platform
+       #else
+        constexpr std::string_view kSeparators = "/";
+       #endif
+
+        // The extension a save must end in: ".ext" for a pattern that is a single "*.ext", else "" (no rule).
+        std::string_view saveExtension(std::string_view pattern)
+        {
+            if (pattern.size() < 3 || pattern[0] != '*' || pattern[1] != '.')
+                return {};
+            const std::string_view ext = pattern.substr(1);
+            return ext.find_first_of("*?;, ") == std::string_view::npos ? ext : std::string_view{};
+        }
+
+        bool endsWithNoCase(std::string_view s, std::string_view suffix)
+        {
+            if (s.size() < suffix.size())
+                return false;
+            const auto low = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
+            const size_t at = s.size() - suffix.size();
+            for (size_t i = 0; i < suffix.size(); ++i)
+                if (low(s[at + i]) != low(suffix[i]))
+                    return false;
+            return true;
+        }
+
+        // `path` ending in `ext` (".ext"): unchanged when it does already, else what follows the last '.' of its file
+        // name is replaced by it, or it is appended.
+        std::string withExtension(std::string path, std::string_view ext)
+        {
+            if (ext.empty() || endsWithNoCase(path, ext))
+                return path;
+            const size_t slash = path.find_last_of(kSeparators);
+            const size_t dot = path.rfind('.');
+            if (dot != std::string::npos && (slash == std::string::npos || dot > slash))
+                path.erase(dot);
+            path.append(ext);
+            return path;
         }
 
         bool startsWithNoCase(std::string_view s, std::string_view prefix)
@@ -138,13 +191,17 @@ namespace funkgui
 
     HeadlessHost::HeadlessHost(Panel& panel, int themeIdx, float dpi)
         : panel_(panel), theme_(Theme::byIndex(themeIdx)), themeIdx_(themeIdx), dpi_(dpi),
-          canvas_(FontService::get().atlas())
+          canvas_(FontService::get().atlas()), commandKeyIsMeta_(HostServices::commandKeyIsMeta())
     {
         panel_.attach(*this);
     }
 
     HeadlessHost::~HeadlessHost()
     {
+        // The host lets go of the Panel: what is still pending is dropped unrun, before the Panel hears of it.
+        menuPending_ = filesPending_ = false;
+        menuDone_ = nullptr;
+        filesDone_ = nullptr;
         panel_.closeGestures();
     }
 
@@ -351,5 +408,120 @@ namespace funkgui
     {
         return std::find(zoomSteps_.begin(), zoomSteps_.end(), percent) != zoomSteps_.end()
                && (zoomFitLimit_ <= 0 || percent <= zoomFitLimit_);
+    }
+
+    // ---- services (Web Sprint B) ------------------------------------------------------------------------------------
+
+    unsigned HeadlessHost::services() const
+    {
+        return hostservice::menus | hostservice::fileChooser | hostservice::clipboard;
+    }
+
+    bool HeadlessHost::showMenu(const MenuRequest& request, MenuCallback done)
+    {
+        ++log.menuRequests;
+        log.lastMenu = request;
+        menuPending_ = false;                            // the menu still pending is replaced, its callback unrun,
+        menuDone_ = nullptr;                             // even when this request is refused
+        bool anyItem = false;                            // refused: an item with no id, or nothing but separators
+        for (const MenuItem& it : request.items)
+        {
+            if (it.separator)
+                continue;
+            if (it.id <= 0)
+                return false;
+            anyItem = true;
+        }
+        if (!anyItem)
+            return false;
+        menuDone_ = std::move(done);
+        menuPending_ = true;
+        return true;
+    }
+
+    void HeadlessHost::dismissMenus()
+    {
+        ++log.menuDismissals;
+        menuPending_ = false;
+        menuDone_ = nullptr;                             // dropped unrun
+    }
+
+    bool HeadlessHost::chooseFiles(const FileRequest& request, FilesCallback done)
+    {
+        ++log.fileRequests;
+        log.lastFiles = request;
+        filesDone_ = std::move(done);                    // the replaced chooser's callback goes unrun
+        filesPending_ = true;
+        return true;
+    }
+
+    bool HeadlessHost::copyText(std::string_view utf8)
+    {
+        ++log.copies;
+        log.lastCopy.assign(utf8);
+        return true;
+    }
+
+    bool HeadlessHost::commandKeyIsMeta() const { return commandKeyIsMeta_; }
+
+    bool HeadlessHost::chooseMenuItem(int id)
+    {
+        if (!menuPending_ || id <= 0)
+            return false;
+        const auto& items = log.lastMenu.items;
+        const auto it = std::find_if(items.begin(), items.end(),
+                                     [id](const MenuItem& m) { return !m.separator && m.id == id; });
+        if (it == items.end() || !it->enabled)
+            return false;
+        menuPending_ = false;
+        const MenuCallback done = std::exchange(menuDone_, nullptr);
+        if (done)
+            done(id);
+        return true;
+    }
+
+    bool HeadlessHost::chooseMenuItem(std::string_view label)
+    {
+        if (!menuPending_)
+            return false;
+        for (const MenuItem& m : log.lastMenu.items)
+            if (!m.separator && m.label == label)
+                return chooseMenuItem(m.id);
+        return false;
+    }
+
+    bool HeadlessHost::cancelMenu()
+    {
+        if (!menuPending_)
+            return false;
+        menuPending_ = false;
+        const MenuCallback done = std::exchange(menuDone_, nullptr);
+        if (done)
+            done(0);
+        return true;
+    }
+
+    bool HeadlessHost::returnFiles(std::vector<std::string> paths)
+    {
+        if (!filesPending_ || paths.empty() || (paths.size() > 1 && log.lastFiles.mode != FileRequest::Mode::openMany))
+            return false;
+        if (log.lastFiles.mode == FileRequest::Mode::save)
+            paths.front() = withExtension(std::move(paths.front()), saveExtension(log.lastFiles.pattern));
+        filesPending_ = false;
+        const FilesCallback done = std::exchange(filesDone_, nullptr);
+        if (done)
+            done(paths);
+        return true;
+    }
+
+    bool HeadlessHost::cancelFiles()
+    {
+        if (!filesPending_)
+            return false;
+        filesPending_ = false;
+        const FilesCallback done = std::exchange(filesDone_, nullptr);
+        if (done)
+            done({});
+        return true;
     }
 }
