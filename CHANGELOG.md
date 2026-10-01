@@ -3,7 +3,7 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
-## v0.11.0 — 2026-09-30 · MINOR: Linux
+## v0.11.0 — 2026-10-01 · MINOR: Linux
 
 Golden impact: **none on macOS** (no macOS row moves; `fg.shader.hash` gains four SPIR-V rows, the same on every host).
 New: `fg.font.probe-linux` and `fg.smoke.gpu` (Linux), each on Linux only. Linux x86-64 runs every other `fg` test
