@@ -15,12 +15,17 @@
 //    reason, and submit() refuses; nothing throws or aborts.
 // 3. The sink on the page's canvas is ok(): the context was created with the attributes asked for (no alpha, no
 //    antialias, no depth, no stencil), the program compiled and linked, the buffer and the atlas texture were built.
+//    A second sink on that canvas while the first is alive is refused like those of 2, and the first is left as it
+//    was: every frame below is the first sink's, and so is the recovery of 6, which needs the listeners it registered.
 // 4. Per case (a theme and a dpi: 1, 1.25, 2), one frame holding primitives of all four kinds (rrect, text, segment,
 //    area) and real text from the atlas is drawn by WebGlSink, read back, and compared with SoftRaster's image of the
 //    same PrimList at one sample per pixel: the largest channel difference, where it is, the count of samples over
 //    kTolerance and the whole distribution are printed, and the frame passes when no sample differs by more than
 //    kWorst and at most kOverPerMille per mille of them by more than kTolerance. Each kind is then drawn alone and
 //    compared the same way, and must have changed pixels on the canvas, so no kind can be missing behind another.
+//    Then the hard edges, which only a clip makes (below): a clip whose edges lie on pixel centres is filled in the
+//    same columns as SoftRaster's, and a scrolled list at a dpi that puts its clip's top edge on pixel centres
+//    (1.5625) is within the same bounds of SoftRaster once the clip's y edges went through Canvas::snapY.
 // 5. WEBGL_lose_context takes the context: the sink sees the loss (lost(), !ok(), submit() == Result::lost, no frame
 //    counted, nothing to read back).
 // 6. The context is restored: the sink rebuilt its program, buffer and texture (restoreCount() == 1, ok()), and every
@@ -33,17 +38,21 @@
 //   ANGLE on Metal (the GPU)             largest difference 1; none over 2; at most 0.5 % of the samples differ by 1
 //   ANGLE on SwiftShader (software)      largest difference 8 (text), 6 (segment, area), 1 (rrect); at most 5.1 per
 //                                        mille of a frame's samples over 2 (text alone at dpi 1)
+// (the snapped list of 4, a 1500 x 1000 frame: 1 on Metal, 5 on SwiftShader with 0.13 per mille over 2).
 // kTolerance 2 is the small tolerance the count is taken over; kWorst 16 is twice the largest difference seen and
 // kOverPerMille 10 twice the largest share, so both renderers pass with room, and anything that is wrong rather than
 // rounded fails: a missing glyph, another blend or filter, a frame one pixel off (the tie below moved 225 pixels by
 // 26 levels when the scene's clip lay on pixel centres).
 //
-// One difference is outside those bounds and outside the frames, and the page prints it as a note: the fill rule where
-// a hard quad edge passes exactly through pixel centres. A quad has such an edge in y only when a clip is not on a
-// device pixel: Canvas::pushClip asks for one that is, and no primitive has a hard edge of its own in y (an AREA
-// column has them in x, where the rules agree). Metal, and SoftRaster with it, give the tied row to the quad whose top
-// edge it is; WebGL's window is y-up, and gives it to the quad whose bottom edge it is. The scene's clip is on a
-// device pixel at every dpi of kCases.
+// One difference is outside those bounds, and it is WebGlSink's stated rule (web/WebGlSink.h), not a defect the page
+// looks for: the fill rule where a hard quad edge passes exactly through pixel centres. A quad has such an edge only
+// where a clip cut it: no primitive has a hard edge of its own in y (an AREA column has them in x, where the rules
+// agree). Metal, and SoftRaster with it, give the tied row to the quad whose top edge it is; WebGL's window is y-up,
+// and gives it to the quad whose bottom edge it is, so a clip edge on pixel centres in y is filled one row further
+// down. What the header promises is checked: x agrees at a tie, and a clip whose y edges lie on device pixels matches
+// (the scene's clip is on one at every dpi of kCases; the list's is put on one by Canvas::snapY at a dpi where whole
+// logical px are not). What it does not promise is printed as a note with the rows that moved: the same clips with
+// their y edges left on pixel centres.
 
 #include <funkgui/canvas/Canvas.h>
 #include <funkgui/canvas/Prim.h>
@@ -465,10 +474,106 @@ namespace
         }
     }
 
-    // Where a hard edge passes through pixel centres (a note, not a check: see the header comment). A white square
-    // clipped to 10.5 .. 20.5 in x and y at dpi 1: every pixel centre on its border is a tie.
-    void edgeRule()
+    // ---- hard edges: what WebGlSink.h promises is checked, what it does not is a note ------------------------------
+    // The rows in which WebGL and SoftRaster differ by more than kWorst somewhere: what an edge filled one row further
+    // on leaves, and rounding never does.
+    struct Moved
     {
+        int         rows = 0, first = -1, last = -1, worst = 0;
+        std::size_t samples = 0;
+    };
+
+    Moved movedRows(const Image& gl, const Image& soft)
+    {
+        Moved m;
+        if (gl.w != soft.w || gl.h != soft.h || gl.rgba.size() != soft.rgba.size())
+            return m;
+        const std::size_t stride = static_cast<std::size_t>(gl.w) * 4u;
+        for (int y = 0; y < gl.h; ++y)
+        {
+            std::size_t over = 0;
+            const std::size_t row = static_cast<std::size_t>(y) * stride;
+            for (std::size_t i = row; i < row + stride; ++i)
+            {
+                const int delta = std::abs(static_cast<int>(gl.rgba[i]) - static_cast<int>(soft.rgba[i]));
+                over += delta > kWorst ? 1u : 0u;
+                m.worst = std::max(m.worst, delta > kWorst ? delta : 0);
+            }
+            if (over == 0)
+                continue;
+            ++m.rows;
+            m.first = m.first < 0 ? y : m.first;
+            m.last = y;
+            m.samples += over;
+        }
+        return m;
+    }
+
+    // The note for a clip whose y edge was left on pixel centres: how far WebGL is from SoftRaster there.
+    void noteMoved(const char* what, const Image& gl, const Image& soft)
+    {
+        const Moved m = movedRows(gl, soft);
+        if (m.rows == 0)
+            say("note     %s: no row differs from SoftRaster by more than %d (this browser breaks the tie in y as "
+                "SoftRaster does)", what, kWorst);
+        else
+            say("note     %s: %d row%s moved (%zu samples in rows %d..%d differ from SoftRaster by more than %d, the "
+                "largest by %d): WebGL fills an edge through pixel centres in y one row further down, as WebGlSink.h "
+                "says; a caller that needs parity snaps its clip (Canvas::snapY)",
+                what, m.rows, m.rows == 1 ? "" : "s", m.samples, m.first, m.last, kWorst, m.worst);
+    }
+
+    // A scrolled list behind its clip, at the size and dpi of a web host whose canvas is 1000 physical px tall for 640
+    // logical ones (FCompressor's preset list: rows of 20 px in a clip at y 88 .. 308 of a 960 x 640 frame). At that
+    // dpi logical y 88 is device y 137.5, on pixel centres. The rows are moved up by 7 px, so the clip cuts one at
+    // each end. `snapped`: the clip's y edges go through Canvas::snapY, as WebGlSink.h asks of a caller.
+    constexpr float kTieDpi = 1.5625f;
+    constexpr int   kListW = 960, kListH = 640;
+    constexpr funkgui::Rect kListClip{ 32.0f, 88.0f, 896.0f, 220.0f };
+
+    PrimList recordList(Canvas& c, bool snapped)
+    {
+        const Theme th = Theme::byIndex(0);
+        FrameInfo info;
+        info.logicalW = kListW;
+        info.logicalH = kListH;
+        info.dpi = kTieDpi;
+        info.clear = th.ground;
+        info.textGamma = th.textGamma;
+        info.theme = 0;
+        info.fixedClock = true;
+        c.begin(info);
+        const float top = snapped ? c.snapY(kListClip.y) : kListClip.y;
+        const float bottom = snapped ? c.snapY(kListClip.bottom()) : kListClip.bottom();
+        {
+            const Canvas::ClipScope clip(c, funkgui::Rect{ kListClip.x, top, kListClip.w, bottom - top });
+            const float off = c.snapY(7.0f);
+            for (int row = 0; row < 12; ++row)
+            {
+                const float y = 92.0f + 20.0f * static_cast<float>(row) - off;
+                c.rrect(186.0f, y - 4.0f, 734.0f, 20.0f, 0.0f, row % 2 == 0 ? th.ink32 : th.accentDim);
+                char name[32];
+                std::snprintf(name, sizeof name, "PRESET %02d", row + 1);
+                c.text(name, 196.0f, y, funkgui::type::kLabel, th.ink100);
+                c.text("FACTORY", 908.0f, y, funkgui::type::kLabel, th.ink52, funkgui::Align::right);
+            }
+        }
+        return c.end();
+    }
+
+    // A list through the sink and SoftRaster with nothing judged; false when it was not drawn.
+    bool drawBoth(const PrimList& list, Image& gl, Image& soft)
+    {
+        soft = funkgui::rasterise(list, *page.atlas, 1);
+        const WebGlSink::Result result = page.sink->submit(list, soft.w, soft.h);
+        gl = page.sink->readPixels();
+        return result == WebGlSink::Result::submitted && gl.w == soft.w && gl.h == soft.h && gl.w > 0;
+    }
+
+    void hardEdges()
+    {
+        // ---- x agrees, at a tie on both sides: a white square clipped to 10.5 .. 20.5 in x and y at dpi 1, so every
+        // pixel centre on its border is a tie
         FrameInfo info;
         info.logicalW = 32;
         info.logicalH = 32;
@@ -479,13 +584,11 @@ namespace
             const Canvas::ClipScope clip(*page.canvas, funkgui::Rect{ 10.5f, 10.5f, 10.0f, 10.0f });
             page.canvas->rrect(0.0f, 0.0f, 32.0f, 32.0f, 0.0f, Col{ 255, 255, 255, 255 });
         }
-        const PrimList list = page.canvas->end();
-        const Image soft = funkgui::rasterise(list, *page.atlas, 1);
-        const WebGlSink::Result result = page.sink->submit(list, soft.w, soft.h);
-        const Image gl = page.sink->readPixels();
-        if (result != WebGlSink::Result::submitted || gl.w != 32 || gl.h != 32 || soft.w != 32 || soft.h != 32)
+        const PrimList square = page.canvas->end();
+        Image gl, soft;
+        if (!drawBoth(square, gl, soft) || gl.w != 32 || gl.h != 32)
         {
-            fail("the edge rule frame was not drawn");
+            fail("the hard edge frame (a clip at 10.5 .. 20.5, dpi 1) was not drawn");
             return;
         }
         // The lit span of row 15 (columns) and of column 15 (rows), as "first..last".
@@ -504,12 +607,24 @@ namespace
         };
         const std::string softX = span(soft, true), softY = span(soft, false);
         const std::string glX = span(gl, true), glY = span(gl, false);
-        say("note     a hard edge through pixel centres (a clip at 10.5 .. 20.5, dpi 1): SoftRaster fills columns %s "
-            "and rows %s, WebGL fills columns %s and rows %s",
-            softX.c_str(), softY.c_str(), glX.c_str(), glY.c_str());
-        if (softX != glX || softY != glY)
-            say("note     WebGL gives a tied row or column to the other quad than Metal and SoftRaster do: a clip edge "
-                "that lies on pixel centres cuts one pixel further on");
+        check(softX == glX && softX == "10..19",
+              "a hard edge through pixel centres in x is filled alike (a clip at 10.5 .. 20.5, dpi 1): SoftRaster "
+              "fills columns " + softX + ", WebGL columns " + glX);
+        noteMoved(("the same clip's y edges, on pixel centres (SoftRaster fills rows " + softY + ", WebGL rows " + glY
+                   + ")").c_str(), gl, soft);
+
+        // ---- y agrees when the clip's edges are on device pixels: the list, its clip snapped
+        const PrimList snapped = recordList(*page.canvas, true);
+        drawAndCompare("a list's clip (y 88 .. 308 of 640) at dpi 1.5625, its y edges through snapY", snapped, true);
+
+        // ---- and left where it is, its top edge at device y 137.5: the note
+        const PrimList unsnapped = recordList(*page.canvas, false);
+        if (!drawBoth(unsnapped, gl, soft))
+        {
+            fail("the unsnapped list frame was not drawn");
+            return;
+        }
+        noteMoved("the same list with its clip left at y 88 (device y 137.5, on pixel centres)", gl, soft);
     }
 
     bool sameImage(const Image& a, const Image& b) noexcept
@@ -568,7 +683,8 @@ namespace
         say("restore  webglcontextrestored delivered after %.0f ms", page.waitedMs);
         WebGlSink& sink = *page.sink;
         check(sink.ok() && !sink.lost() && sink.restoreCount() == 1 && sink.error()[0] == '\0',
-              "after the restore the sink is ok(): program, buffer and texture rebuilt (restoreCount "
+              "after the restore the sink is ok(): program, buffer and texture rebuilt, and the second sink it refused "
+              "took none of its listeners (restoreCount "
                   + std::to_string(sink.restoreCount()) + ", error '" + sink.error() + "')");
         if (sink.ok())
         {
@@ -649,6 +765,15 @@ namespace
         say("ok       WebGlSink on '%s' is ok(): context created, program linked, buffer and atlas texture built",
             kCanvas);
         fg_page_watch(kCanvas);
+
+        // A second sink while this one lives is refused, and this one is left as it was: it keeps its mark, so the
+        // next attempt is refused too, and its listeners (that shows at the restore: a sink without them is never
+        // restored).
+        refuses(kCanvas, "a canvas that already has a sink");
+        refuses(kCanvas, "that canvas again, after the refused sink was destroyed");
+        check(page.sink->ok() && page.sink->error()[0] == '\0',
+              "the first sink is still ok() after the refused one was destroyed");
+
         char context[512];
         if (fg_page_context_text(context, static_cast<int>(sizeof context)) != 0)
             say("context  %s", context);
@@ -675,7 +800,7 @@ namespace
 
         // ---- 4. the frames
         drawCases("first", true, page.before);
-        edgeRule();
+        hardEdges();
 
         // ---- 5. the loss (continues in afterLoss, once the browser has delivered the event)
         if (fg_page_lose() == 0)

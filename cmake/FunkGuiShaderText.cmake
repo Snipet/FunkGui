@@ -17,8 +17,10 @@
 #   directives stood for, with their types read from shaders/varying.def.sc: a vertex `$input` is an attribute
 #   (`layout(location = <its position in the list>) in`), a vertex `$output` an `out`, a fragment `$input` an `in`;
 # - the fragment stage declares `out vec4 fg_FragColor` and `gl_FragColor` is renamed to it.
-# Anything else a browser could not compile is an error here, not there: another #include, another `$` directive, a
-# name varying.def.sc does not declare, gl_FragData.
+# What this script can see a browser could not compile is an error here, not there: another #include, another `$`
+# directive, a name varying.def.sc does not declare, gl_FragData, and a texture2D lookup other than texture2DLod (the
+# rest of bgfx_shader.sh's family compiles natively and is not GLSL ES 3.00). These are looked for in the whole text,
+# comments included. The other bgfx_shader.sh names are fg.shader.web's to refuse (its no_bgfx_macro row).
 #
 # The header holds the two texts as NUL-terminated char arrays, funkgui::shaders::vs_ui_es300 and fs_ui_es300 (raw
 # string literals: the bytes between the delimiters are the text; sizeof - 1 is its length).
@@ -103,6 +105,19 @@ function(_fg_es300 out_var stage name)
                           "into GLSL ES 3.00")
     endif()
   endforeach()
+  # Every identifier that starts with texture2D, one at a time: only texture2DLod is defined above.
+  set(_rest "${_text}")
+  while(_rest MATCHES "(^|[^A-Za-z0-9_])(texture2D[A-Za-z0-9_]*)")
+    set(_lookup "${CMAKE_MATCH_2}")
+    if(NOT _lookup STREQUAL "texture2DLod")
+      message(FATAL_ERROR "FunkGuiShaderText.cmake: shaders/${name}.sc names '${_lookup}', which GLSL ES 3.00 does not "
+                          "have and this script does not define: use texture2DLod")
+    endif()
+    string(FIND "${_rest}" "${_lookup}" _at)
+    string(LENGTH "${_lookup}" _length)
+    math(EXPR _at "${_at} + ${_length}")
+    string(SUBSTRING "${_rest}" ${_at} -1 _rest)
+  endwhile()
   set(${out_var} "${_text}" PARENT_SCOPE)
 endfunction()
 

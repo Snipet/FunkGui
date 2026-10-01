@@ -24,15 +24,32 @@
 // Every entry point makes the sink's context current first: Emscripten's GL calls go to one current context, and a page
 // may hold others.
 
-// Whether the selector names a canvas. querySelector throws on a malformed selector and getContext does not exist on
-// another element: both would be an exception in Emscripten's own lookup, so they are settled here. (EM_JS defines a C
-// symbol: file scope.)
+// What the selector names: 0 no canvas, 1 a canvas, 2 a canvas that carries a live sink's mark. querySelector throws on
+// a malformed selector and getContext does not exist on another element: both would be an exception in Emscripten's own
+// lookup, so they are settled here. (EM_JS defines a C symbol: file scope.)
+//
+// The mark is the sink's own: the property funkguiWebGlSink on the canvas element, set once the sink holds the context
+// and deleted by its destructor (funkgui_web_mark_canvas). Emscripten's canvas.GLctxObject says nearly the same and is
+// not used: it is an internal of libwebgl.js that no header names, and a second emscripten_webgl_create_context
+// overwrites it rather than refusing. The name is written as a string so that a minifier leaves it alone, and a sink
+// of another module instance on the page sees it too.
 EM_JS_DEPS(funkgui_web_sink_deps, "$UTF8ToString");
-EM_JS(int, funkgui_web_is_canvas, (const char* selector), {
+EM_JS(int, funkgui_web_canvas_state, (const char* selector), {
     try {
-        return document.querySelector(UTF8ToString(selector)) instanceof HTMLCanvasElement ? 1 : 0;
+        const canvas = document.querySelector(UTF8ToString(selector));
+        if (!(canvas instanceof HTMLCanvasElement)) return 0;
+        return canvas['funkguiWebGlSink'] ? 2 : 1;
     } catch (e) {
         return 0;
+    }
+});
+EM_JS(void, funkgui_web_mark_canvas, (const char* selector, int marked), {
+    try {
+        const canvas = document.querySelector(UTF8ToString(selector));
+        if (!canvas) return;
+        if (marked) canvas['funkguiWebGlSink'] = true;
+        else delete canvas['funkguiWebGlSink'];
+    } catch (e) {
     }
 });
 
@@ -88,9 +105,18 @@ namespace funkgui
 
     WebGlSink::WebGlSink(const char* canvasSelector) : selector_(canvasSelector != nullptr ? canvasSelector : "")
     {
-        if (selector_.empty() || funkgui_web_is_canvas(selector_.c_str()) == 0)
+        const int canvas = selector_.empty() ? 0 : funkgui_web_canvas_state(selector_.c_str());
+        if (canvas == 0)
         {
             error_ = "no canvas matches '" + selector_ + "'";
+            return;
+        }
+        if (canvas == 2)
+        {
+            // A second handle on the first sink's context: destroying either sink would strip the other's loss and
+            // restore listeners (Emscripten removes a canvas's html5 callbacks with its context). Refused before
+            // anything is created, so context_ stays 0 and the destructor leaves that sink's canvas alone.
+            error_ = "the canvas '" + selector_ + "' already has a sink: destroy that one before constructing another";
             return;
         }
 
@@ -111,6 +137,7 @@ namespace funkgui
             error_ = "the browser gave no WebGL2 context for '" + selector_ + "'";
             return;
         }
+        funkgui_web_mark_canvas(selector_.c_str(), 1);
 
         emscripten_set_webglcontextlost_callback(selector_.c_str(), this, false, &WebGlSink::onContextLost);
         emscripten_set_webglcontextrestored_callback(selector_.c_str(), this, false, &WebGlSink::onContextRestored);
@@ -120,7 +147,8 @@ namespace funkgui
     WebGlSink::~WebGlSink()
     {
         if (context_ == 0)
-            return;
+            return;                                  // nothing was created (a refused sink): nothing here is this one's
+        funkgui_web_mark_canvas(selector_.c_str(), 0);
         emscripten_set_webglcontextlost_callback(selector_.c_str(), nullptr, false, nullptr);
         emscripten_set_webglcontextrestored_callback(selector_.c_str(), nullptr, false, nullptr);
         drop();

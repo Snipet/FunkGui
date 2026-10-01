@@ -10,9 +10,30 @@
 // ONE_MINUS_SRC_ALPHA; there is no depth test and no culling.
 //
 // The context is the sink's own: WebGL2 (never WebGL1), created on the canvas a CSS selector names with alpha,
-// antialias, depth and stencil off, so the canvas is opaque like the native layer and a pixel is one sample. A canvas
-// takes one sink. Nothing here aborts: with no such canvas, or a browser that gives no WebGL2 context, ok() is false,
-// error() says why and submit() draws nothing, so a host can show a fallback.
+// antialias, depth and stencil off, so the canvas is opaque like the native layer and a pixel is one sample. Nothing
+// here aborts: with no such canvas, or a browser that gives no WebGL2 context, ok() is false, error() says why and
+// submit() draws nothing, so a host can show a fallback.
+//
+// A canvas takes one sink at a time, and a second one constructed while the first is alive is refused: ok() is false,
+// error() says so, and it touches neither the first sink's context nor its listeners, then or when it is destroyed.
+// (Two sinks would share the canvas's one context, and destroying either would take the other's loss and restore
+// listeners with it, since Emscripten removes a canvas's html5 callbacks with its context: the survivor would draw
+// until the first context loss and never recover.) So a replacement is constructed after the old sink is destroyed:
+// `sink.reset(); sink = std::make_unique<WebGlSink>(selector);`, never the assignment alone, which constructs the new
+// one first. A sink knows an occupied canvas by its own mark, the element's property funkguiWebGlSink, which its
+// destructor removes.
+//
+// One difference from the native sinks and SoftRaster, which the sink does not correct: the row that gets a pixel
+// centre a hard quad edge passes exactly through. In y a quad has a hard edge only where a clip cut it
+// (Canvas::pushClip; a primitive's own edges in y are antialiased), so this is about clip edges. Output matches the
+// native sinks and SoftRaster (to rounding: test/web/page.cpp has the bounds and the measurements) when every hard
+// quad edge in y, which means every clip edge, lies on a device pixel. An edge through device pixel centres in y
+// (device y = n + 0.5) is filled one row further down here: Metal, Vulkan and SoftRaster give the tied row to the
+// quad below the edge (the top-left rule), WebGL, whose window is y-up, to the quad above it (GL ES leaves the tie to
+// the implementation; ANGLE on Metal and SwiftShader both do this). x agrees, and so does an edge anywhere off a
+// centre. A caller that needs parity puts its clip edges on device pixels with Canvas::snapY. Whole logical px are not
+// enough: a web host's dpi is physical height / logical height, which is any number (at 1000 / 640 = 1.5625, logical
+// y 88 is device y 137.5).
 //
 // Context loss (the browser may take the context at any time: a GPU reset, too many contexts, a backgrounded tab): the
 // sink listens for webglcontextlost and webglcontextrestored on its canvas. While the context is lost, lost() is true
@@ -43,11 +64,13 @@ namespace funkgui
         // Creates the WebGL2 context on the canvas `canvasSelector` names (document.querySelector: "#editor") and
         // builds the program, the vertex buffer and the atlas texture (FontService's atlas: baked or loaded on first
         // use; an atlas that is not baked gives a 1 x 1 blank texture, text draws nothing and shapes still draw, as
-        // on the native sink). Never throws and never aborts: see ok().
+        // on the native sink). Never throws and never aborts: see ok(). On a canvas whose sink is still alive it
+        // creates nothing and is refused (above): destroy the old sink first.
         explicit WebGlSink(const char* canvasSelector);
 
         // Deletes the resources and destroys the context. Emscripten's context teardown also removes every html5
-        // event callback registered on that canvas.
+        // event callback registered on that canvas. A sink that has no context (refused, or the browser gave none)
+        // deletes and removes nothing.
         ~WebGlSink();
 
         WebGlSink(const WebGlSink&) = delete;
@@ -57,8 +80,8 @@ namespace funkgui
         bool ok() const noexcept;
 
         // Why ok() is false after construction or a restore ("" when nothing failed; a lost context is not an error):
-        // the canvas was not found, the browser gave no WebGL2 context, or a shader did not compile or link (with the
-        // browser's log). For a host's fallback screen and diagnostics.
+        // the canvas was not found, it already has a sink, the browser gave no WebGL2 context, or a shader did not
+        // compile or link (with the browser's log). For a host's fallback screen and diagnostics.
         const char* error() const noexcept { return error_.c_str(); }
 
         // One frame. Gives the canvas a physW x physH drawing buffer when it has another size (its width and height

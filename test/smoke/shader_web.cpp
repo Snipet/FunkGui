@@ -13,8 +13,11 @@
 // - version_first: the text starts with `#version 300 es` and a newline (GLSL ES accepts nothing before it).
 // - highp: float, int and sampler2D are declared highp, and no lowp or mediump qualifier appears in the code.
 // - no_bgfx_macro: nothing in the code needs bgfx's shaderc or bgfx_shader.sh: no `$` directive, no #include, no
-//   gl_FragColor or gl_FragData, no bgfx identifier, and every bgfx_shader.sh macro, function or predefined uniform
-//   the code names is one the text defines itself (today vec2_splat, texture2DLod and SAMPLER2D, in the preamble).
+//   gl_FragColor or gl_FragData, no bgfx, Bgfx or BGFX identifier, and every name of kBgfxNames the code uses is one
+//   the text defines itself, under exactly that name (today vec2_splat, texture2DLod and SAMPLER2D, in the preamble:
+//   `#define texture2DLod` does not define texture2D). kBgfxNames is a hand list: the macros, functions and predefined
+//   uniforms of the pinned bgfx's bgfx_shader.sh that GLSL ES 3.00 lacks. What both have (texelFetch, textureSize,
+//   dFdx, mix, ...) is not in it, and a name a later bgfx adds is not either until someone lists it.
 // - body_is_source: after the preamble the text is the .sc file (read from the source tree) byte for byte, less its
 //   `$input`/`$output` and bgfx include lines and with gl_FragColor renamed, and the preamble holds nothing but
 //   #version, precision, #define and in/out declarations: there is still one shader source.
@@ -96,18 +99,32 @@ namespace
         return false;
     }
 
-    // What bgfx_shader.sh (and shaderc's own preprocessing) gives a .sc file and GLSL ES 3.00 does not have.
+    // What bgfx_shader.sh gives a .sc file and GLSL ES 3.00 does not have (by hand, from the file of the pinned
+    // bgfx.cmake v1.153.9385-561: macros, functions, predefined uniforms; bgfx*, Bgfx* and BGFX* go by prefix below).
     constexpr std::string_view kBgfxNames[] = {
         "vec2_splat", "vec3_splat", "vec4_splat", "uvec2_splat", "uvec3_splat", "uvec4_splat", "ivec2_splat",
-        "ivec3_splat", "ivec4_splat", "bvec2_splat", "bvec3_splat", "bvec4_splat", "mul", "saturate", "instMul",
-        "mtxFromRows", "mtxFromCols", "texture2D", "texture2DLod", "texture2DLodOffset", "texture2DProj",
-        "texture2DBias", "texture2DGrad", "texture2DArray", "texture2DArrayLod", "texture3D", "texture3DLod",
-        "textureCube", "textureCubeLod", "textureCubeBias", "shadow2D", "shadow2DProj", "SAMPLER2D", "SAMPLER2DMS",
-        "SAMPLER2DARRAY", "SAMPLER2DSHADOW", "SAMPLER3D", "SAMPLERCUBE", "ISAMPLER2D", "USAMPLER2D", "ISAMPLER3D",
-        "USAMPLER3D", "ARRAY_BEGIN", "ARRAY_END", "CONST", "EARLY_DEPTH_STENCIL", "u_viewRect", "u_viewTexel",
-        "u_view", "u_invView", "u_proj", "u_invProj", "u_viewProj", "u_invViewProj", "u_model", "u_modelView",
-        "u_modelViewProj", "u_alphaRef", "u_alphaRef4",
+        "ivec3_splat", "ivec4_splat", "bvec2_splat", "bvec3_splat", "bvec4_splat", "mul", "saturate", "instMul", "rcp",
+        "atan2", "select", "bitfieldReverse", "dFdxCoarse", "dFdxFine", "dFdyCoarse", "dFdyFine", "mtxFromRows",
+        "mtxFromCols", "mtxGetRow", "mtxGetColumn", "mtxGetElement", "texture2D", "texture2DLod", "texture2DLodOffset",
+        "texture2DProj", "texture2DBias", "texture2DGrad", "texture2DArray", "texture2DArrayLod",
+        "texture2DArrayLodOffset", "texture3D", "texture3DLod", "textureCube", "textureCubeLod", "textureCubeBias",
+        "textureGather", "textureGatherOffset", "shadow2D", "shadow2DProj", "shadow2DArray", "shadowCube", "SAMPLER2D",
+        "SAMPLER2DMS", "SAMPLER2DMSARRAY", "SAMPLER2DARRAY", "SAMPLER2DSHADOW", "SAMPLER2DARRAYSHADOW", "SAMPLER3D",
+        "SAMPLERCUBE", "SAMPLERCUBESHADOW", "SAMPLERCUBEARRAY", "ISAMPLER2D", "USAMPLER2D", "ISAMPLER3D", "USAMPLER3D",
+        "ARRAY_BEGIN", "ARRAY_END", "CONST", "EARLY_DEPTH_STENCIL", "BRANCH", "LOOP", "UNROLL", "REGISTER",
+        "u_viewRect", "u_viewTexel", "u_view", "u_invView", "u_proj", "u_invProj", "u_viewProj", "u_invViewProj",
+        "u_model", "u_modelView", "u_invModelView", "u_modelViewProj", "u_alphaRef", "u_alphaRef4",
     };
+
+    // Whether the code holds `#define <name>` for the whole name: `#define texture2DLod` does not define texture2D.
+    bool defines(const std::string& c, std::string_view name)
+    {
+        const std::string directive = "#define " + std::string(name);
+        for (std::size_t at = c.find(directive); at != std::string::npos; at = c.find(directive, at + 1))
+            if (at + directive.size() >= c.size() || !identChar(c[at + directive.size()]))
+                return true;
+        return false;
+    }
 
     bool noBgfxMacro(std::string_view text)
     {
@@ -115,13 +132,14 @@ namespace
         bool ok = c.find('$') == std::string::npos && c.find("#include") == std::string::npos;
         for (const std::string_view id : identifiers(c))
         {
-            if (id == "gl_FragColor" || id == "gl_FragData" || id.starts_with("bgfx") || id.starts_with("BGFX"))
+            if (id == "gl_FragColor" || id == "gl_FragData" || id.starts_with("bgfx") || id.starts_with("Bgfx")
+                || id.starts_with("BGFX"))
             {
                 std::printf("INFO     the text names %.*s\n", static_cast<int>(id.size()), id.data());
                 ok = false;
             }
             for (const std::string_view b : kBgfxNames)
-                if (id == b && c.find("#define " + std::string(b)) == std::string::npos)
+                if (id == b && !defines(c, b))
                 {
                     std::printf("INFO     the text names %.*s and does not define it\n", static_cast<int>(b.size()),
                                 b.data());
