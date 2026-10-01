@@ -406,8 +406,14 @@ if(FUNKGUI_WITH_PRESETS)
       target_link_libraries(FunkPresets INTERFACE winsqlite3 Normaliz)
       target_compile_definitions(FunkPresets INTERFACE FUNKGUI_WINSQLITE=1)
     else()
+      # FindSQLite3 names its target SQLite::SQLite3 up to CMake 4.2 and SQLite3::SQLite3 from 4.3 (which keeps the old
+      # name as a deprecated alias): link whichever this CMake defines (v0.11.1; Ubuntu 24.04's runner has CMake 3.31).
       find_package(SQLite3 REQUIRED)
-      target_link_libraries(FunkPresets INTERFACE SQLite3::SQLite3)
+      if(TARGET SQLite3::SQLite3)
+        target_link_libraries(FunkPresets INTERFACE SQLite3::SQLite3)
+      else()
+        target_link_libraries(FunkPresets INTERFACE SQLite::SQLite3)
+      endif()
     endif()
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
       # The key fold on Linux (src/presets/Platform.cpp, v0.11.0): GLib's Unicode case fold and normalisation, the
