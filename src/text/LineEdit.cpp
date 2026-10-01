@@ -2,8 +2,6 @@
 
 #include <funkgui/text/TextFit.h>
 
-#include <juce_core/juce_core.h>
-
 #include <cstddef>
 #include <cstdint>
 
@@ -11,6 +9,7 @@
 // (:317-327, :945-975) and printable (:63-75), over funkgui's KeyEvent instead of juce::KeyPress. The rules are in the
 // header. The buffer is printable ASCII by construction; the boundary helpers below still step over UTF-8 continuation
 // bytes, so a caller that fills the buffer directly cannot make key() cut a character in half.
+// The juce::String overload of printable is src/juce/Printable.cpp (v0.12.0): this file is JUCE-free.
 
 namespace funkgui::text
 {
@@ -80,18 +79,6 @@ namespace funkgui::text
     std::string printable(const std::string& utf8)
     {
         return printable(std::string_view(utf8));
-    }
-
-    juce::String printable(const juce::String& s)
-    {
-        juce::String out;
-        out.preallocateBytes(s.getNumBytesAsUTF8() + 1);
-        for (auto p = s.getCharPointer(); !p.isEmpty(); ++p)
-        {
-            const juce::juce_wchar c = *p;
-            out += c >= 32 && c <= 126 ? juce::String::charToString(c) : juce::String("?");
-        }
-        return out;
     }
 
     void LineEdit::set(std::string_view text, int maxLength)

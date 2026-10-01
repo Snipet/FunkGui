@@ -33,6 +33,27 @@
       }
     },
     {
+      "name": "nojuce",
+      "inherits": "base",
+      "displayName": "nojuce (FUNKGUI_WITH_JUCE=OFF on the host compiler, RelWithDebInfo)",
+      "description": "The JUCE-free core: no JUCE is fetched or on any include path; no gpu, no presets. Builds FunkGuiCoreCheck, the JUCE-free tools and the JUCE-free fg tests, which run against the same goldens (the atlas is the committed bake).",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "FUNKGUI_WITH_JUCE": "OFF"
+      }
+    },
+    {
+      "name": "web",
+      "inherits": "base",
+      "displayName": "web (Emscripten, FUNKGUI_WITH_JUCE=OFF, Release)",
+      "description": "The JUCE-free core compiled to wasm32 by Emscripten (the toolchain file comes from em-config): FunkGuiCoreCheck, the JUCE-free tools and the JUCE-free fg tests, which node runs as --arch wasm32 against the same goldens.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "FUNKGUI_WEB": "ON",
+        "FUNKGUI_WITH_JUCE": "OFF"
+      }
+    },
+    {
       "name": "lead",
       "inherits": "base",
       "displayName": "lead (GPU, Release)",
@@ -59,6 +80,20 @@
       "nativeToolOptions": []
     },
     {
+      "name": "nojuce",
+      "configurePreset": "nojuce",
+      "targets": ["all", "funkgui_tools", "funkgui_tests"],
+      "jobs": 6,
+      "nativeToolOptions": []
+    },
+    {
+      "name": "web",
+      "configurePreset": "web",
+      "targets": ["all", "funkgui_tools", "funkgui_tests"],
+      "jobs": 6,
+      "nativeToolOptions": []
+    },
+    {
       "name": "lead",
       "configurePreset": "lead",
       "targets": ["all", "funkgui_tools", "funkgui_tests"]
@@ -74,6 +109,8 @@
     },
     { "name": "agent", "inherits": "base", "configurePreset": "agent" },
     { "name": "agent-gui", "inherits": "base", "configurePreset": "agent-gui" },
+    { "name": "nojuce", "inherits": "base", "configurePreset": "nojuce" },
+    { "name": "web", "inherits": "base", "configurePreset": "web" },
     { "name": "lead", "inherits": "base", "configurePreset": "lead" }
   ],
   "workflowPresets": [
@@ -91,6 +128,22 @@
         { "type": "configure", "name": "agent-gui" },
         { "type": "build", "name": "agent-gui" },
         { "type": "test", "name": "agent-gui" }
+      ]
+    },
+    {
+      "name": "nojuce-verify",
+      "steps": [
+        { "type": "configure", "name": "nojuce" },
+        { "type": "build", "name": "nojuce" },
+        { "type": "test", "name": "nojuce" }
+      ]
+    },
+    {
+      "name": "web-verify",
+      "steps": [
+        { "type": "configure", "name": "web" },
+        { "type": "build", "name": "web" },
+        { "type": "test", "name": "web" }
       ]
     },
     {

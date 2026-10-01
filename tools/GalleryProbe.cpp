@@ -3,7 +3,7 @@
 // this tool, and each section file registers its own test, so a widget card adds fg.gallery.<section> without touching
 // another section's goldens.
 //
-//   FunkGuiGalleryProbe <probe> [--section <name>] [--dump-dir <dir>] --golden-root <dir> --arch arm64|x86_64
+//   FunkGuiGalleryProbe <probe> [--section <name>] [--dump-dir <dir>] --golden-root <dir> --arch arm64|x86_64|wasm32
 //                       [--bless-to <dir>] [--results <dir>] [--only <glob>] [--verbose]
 //   FunkGuiGalleryProbe --list
 //
@@ -26,20 +26,21 @@
 #include <funkgui/a11y/A11yItem.h>
 #include <funkgui/canvas/Fingerprint.h>
 #include <funkgui/canvas/PrimList.h>
+#include <funkgui/panel/HeadlessGuiScope.h>
 #include <funkgui/panel/HeadlessHost.h>
 #include <funkgui/test/Harness.h>
 #include <funkgui/text/FontService.h>
-
-#include <juce_gui_basics/juce_gui_basics.h>
 
 #include <bit>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <set>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace T = funkgui::test;
@@ -119,9 +120,13 @@ namespace
 
     bool writeDumpFile(const std::string& dir, const std::string& name, const funkgui::HeadlessHost& host)
     {
-        const juce::File d = juce::File::getCurrentWorkingDirectory().getChildFile(juce::String(dir));
-        const juce::String path = d.getChildFile(juce::String(name)).getFullPathName();
-        return d.createDirectory().wasOk() && host.writeDump(path.toRawUTF8());
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        const fs::path d = fs::absolute(fs::path(dir), ec);      // relative to the working directory
+        if (ec)
+            return false;
+        fs::create_directories(d, ec);
+        return !ec && fs::is_directory(d, ec) && host.writeDump((d / name).string().c_str());
     }
 
     // One state at one dpi and theme: a fresh section, settled, scripted, settled, drawn.
@@ -163,7 +168,7 @@ namespace
 
 int main(int argc, char** argv)
 {
-    const juce::ScopedJuceInitialiser_GUI juceInit;      // FontService bakes the atlas through JUCE's font stack
+    const funkgui::HeadlessGuiScope gui;                 // JUCE's GUI side, when there is JUCE: the atlas bakes there
 
     // The tool's own flags, taken out before the harness parses argv.
     std::string section, dumpDir;
@@ -207,7 +212,7 @@ int main(int argc, char** argv)
     if (pos.empty())
     {
         std::fprintf(stderr, "usage: %s <probe> [--section <name>] [--dump-dir <dir>] --golden-root <dir> "
-                             "--arch arm64|x86_64 [--bless-to <dir>] [--results <dir>]\n       %s --list\n",
+                             "--arch arm64|x86_64|wasm32 [--bless-to <dir>] [--results <dir>]\n       %s --list\n",
                      argc > 0 ? argv[0] : "FunkGuiGalleryProbe", argc > 0 ? argv[0] : "FunkGuiGalleryProbe");
         return 4;
     }

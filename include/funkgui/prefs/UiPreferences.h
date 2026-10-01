@@ -1,8 +1,13 @@
 #pragma once
 
-#include <juce_data_structures/juce_data_structures.h>
+#include <funkgui/core/HasJuce.h>
+
+#if FUNKGUI_HAS_JUCE
+  #include <juce_data_structures/juce_data_structures.h>
+#endif
 #include <cstdint>
 #include <memory>
+#include <string>
 
 namespace funkgui
 {
@@ -30,10 +35,48 @@ namespace funkgui
     //
     // Message thread only. Nothing here reads the file except the first get()
     // and reload(): the getters read the in-memory copy.
+    //
+    // Storage backends (v0.12.0). The store behind the keys is a Backend. With
+    // JUCE (FUNKGUI_HAS_JUCE) the default one is the properties file above:
+    // format, path and behaviour as they always were. Without JUCE the default
+    // holds the keys in memory for the life of the process, and a host gives
+    // the class somewhere durable with setBackend() (the browser: localStorage).
+    // file() and defaultFile() exist only with JUCE.
     class UiPreferences
     {
     public:
         static UiPreferences& get();
+
+        // Where the keys live (v0.12.0): text values under text keys. Keys are
+        // compared exactly as given; "theme" is the theme's.
+        class Backend
+        {
+        public:
+            virtual ~Backend() = default;
+
+            // The text held under `key` into `value`; false, and `value`
+            // untouched, when the store has no such key.
+            virtual bool read(const char* key, std::string& value) const = 0;
+
+            // Stores `value` under `key` and makes it durable before
+            // returning: a preference is written through, never batched.
+            virtual void write(const char* key, const std::string& value) = 0;
+
+            // Re-reads the store from wherever it lives (another process may
+            // have written it); true when any key or value changed.
+            virtual bool reload() = 0;
+        };
+
+        // Replaces the store (v0.12.0): the theme is read from the new one and
+        // revision() is bumped, so open editors follow. nullptr restores the
+        // default backend (the properties file with JUCE, a fresh in-memory
+        // store without). The values of the old store are not copied.
+        void setBackend(std::unique_ptr<Backend>);
+
+        // A store that lives in memory only (v0.12.0): the default without
+        // JUCE, and a sandbox for a test or a probe in any build. reload()
+        // reports no change.
+        static std::unique_ptr<Backend> memoryBackend();
 
         int  theme() const noexcept { return theme_; }
         void setTheme(int idx);
@@ -61,9 +104,11 @@ namespace funkgui
         // across processes the file is read when an editor opens.
         uint32_t revision() const noexcept { return revision_; }
 
+#if FUNKGUI_HAS_JUCE
         // The file this store reads and writes: <ENV_PREFIX>PREFS_DIR's
         // preferences.settings when that variable was set at the first get(),
-        // else defaultFile(). (G6 addition.)
+        // else defaultFile(). (G6 addition.) A null File when setBackend()
+        // replaced the properties file with another store (v0.12.0).
         juce::File file() const;
 
         // ~/Library/Application Support/<PREFS_FOLDER>/preferences.settings for
@@ -71,11 +116,14 @@ namespace funkgui
         // <PREFS_FOLDER>/preferences.settings ($XDG_CONFIG_HOME is not read).
         // (G6 addition; Linux v0.11.0.)
         static juce::File defaultFile();
+#endif
 
     private:
         UiPreferences();
 
-        std::unique_ptr<juce::PropertiesFile> file_;
+        int readTheme() const;                           // the store's theme, clamped to the themes there are
+
+        std::unique_ptr<Backend> backend_;               // never null after construction
         int      theme_ = 0;
         uint32_t revision_ = 0;
     };

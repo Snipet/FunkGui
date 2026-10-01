@@ -7,7 +7,7 @@
 //
 // One probe subcommand per process:
 //
-//   <exe> <layer>.<name> [--mode <key>] --golden-root <dir> --arch arm64|x86_64 [--bless-to <dir>]
+//   <exe> <layer>.<name> [--mode <key>] --golden-root <dir> --arch arm64|x86_64|wasm32 [--bless-to <dir>]
 //         [--results <dir>] [--only <glob>] [--quick] [--verbose]
 //
 //   int main(int argc, char** argv)          // (FCompressor dispatches through ProbeMain.cpp / FCMP_PROBE)
@@ -72,6 +72,9 @@
 // - positionals(argc, argv): the arguments that are not harness flags or their values, so a tool can read its own
 //   inputs (a font file, a dump) from the same argv the Probe parses.
 // - jsonArray(items): a JSON array of strings, for note().
+// - --arch wasm32 (v0.12.0): a probe compiled to WebAssembly (run under node) names its architecture like any other,
+//   so its overlay is <root>/wasm32/<scope>/<probe>.txt and its candidates go to <bless-to>/wasm32/. ScopedFtz does
+//   nothing there: WebAssembly has no flush-to-zero control, and its arithmetic keeps denormals.
 // There is no --check flag: every run compares against the golden files (v1's --check is the only mode), and
 // candidates go to --bless-to, never into the tree.
 
@@ -118,6 +121,10 @@ namespace funkgui::test
     // x86 matter: with -mavx2 -mfma the whole engine runs in SSE/AVX
     // registers, and MXCSR is the only denormal control those have.
     // (HardwareReverb Tools/Harness.h, unchanged.)
+    //
+    // WebAssembly (v0.12.0) has no floating-point control register at all:
+    // there the scope does nothing, and code that must not see denormals
+    // flushes them itself.
     struct ScopedFtz
     {
 #if defined(__aarch64__)
@@ -137,6 +144,9 @@ namespace funkgui::test
         }
         ~ScopedFtz() noexcept { _mm_setcsr(saved_); }
         uint32_t saved_ = 0;
+#elif defined(__wasm__)
+        ScopedFtz() noexcept {}                          // user-provided: `const ScopedFtz ftz;` stays well-formed
+        ~ScopedFtz() noexcept {}                         // and the unused-variable warning stays quiet
 #else
   #error "ScopedFtz: no flush-to-zero shim for this architecture"
 #endif
@@ -853,9 +863,9 @@ namespace funkgui::test
                              + r.string() + "): probes never write the golden tree");
         }
         if (!haveArch)
-            harnessError("--arch arm64|x86_64 is required");
-        else if (arch_ != "arm64" && arch_ != "x86_64")
-            harnessError("--arch must be arm64 or x86_64, not '" + arch_ + "'");
+            harnessError("--arch arm64|x86_64|wasm32 is required");
+        else if (arch_ != "arm64" && arch_ != "x86_64" && arch_ != "wasm32")
+            harnessError("--arch must be arm64, x86_64 or wasm32, not '" + arch_ + "'");
     }
 
     inline Probe::~Probe()
@@ -1095,7 +1105,8 @@ namespace funkgui::test
         bool haveGolden = false;
         std::vector<std::string> diff;                                 // body of <probe>.diff
         const std::string prefix = probe_ + ".", suffix = ".lines";
-        const bool locatable = !root_.empty() && (arch_ == "arm64" || arch_ == "x86_64") && detail::validKey(probe_);
+        const bool locatable = !root_.empty() && (arch_ == "arm64" || arch_ == "x86_64" || arch_ == "wasm32")
+                            && detail::validKey(probe_);
         std::error_code ec;
 
         if (locatable)

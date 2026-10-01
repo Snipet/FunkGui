@@ -10,6 +10,12 @@ namespace funkgui
     // only to rasterise glyph coverage offscreen; the distance transform and
     // everything on screen is ours. Distance is mapped to [0,1] with the
     // glyph edge at 0.5 and a spread of kSpread texels.
+    //
+    // v0.12.0: bake() is the only part that needs JUCE (src/juce/). A build
+    // without it (FUNKGUI_WITH_JUCE=OFF: the browser) has no rasteriser, so
+    // there bake() returns false and the atlas comes from load(): the bytes
+    // serialise() wrote where JUCE is. FontService does that with the bake
+    // committed under fonts/.
     class FontAtlasSdf
     {
     public:
@@ -51,15 +57,36 @@ namespace funkgui
         // system font. Substituting silently would reproduce exactly the
         // machine-to-machine divergence that bundling a face exists to
         // prevent, and would do it invisibly.
+        // Without JUCE (FUNKGUI_HAS_JUCE == 0) it always returns false.
         bool bake(const void* ttfData = nullptr, size_t ttfBytes = 0,
                   const char* faceName = nullptr);
+
+        // The baked atlas as bytes (v0.12.0): a versioned header (magic, blob
+        // version, atlas size, base px, spread, the glyph set, a hash of the
+        // pixels and one of the table), the seven metrics, one record per glyph
+        // (codepoint, uv, quad, bearing, advance) and the R8 pixels; the layout
+        // is in src/text/FontAtlasSdf.cpp. Little-endian on every host, so one
+        // blob serves every build. Empty before a successful bake() or load().
+        std::vector<uint8_t> serialise() const;
+
+        // Adopts a blob serialise() wrote, in place of a bake (v0.12.0); JUCE
+        // is not involved. True only when the blob is whole and was made by a
+        // build with this one's constants: the same blob version, atlas size,
+        // base px, spread and glyph set in the same order (a blob from before a
+        // Glyphs.def append is refused), both hashes holding, every number
+        // finite. After a refusal the atlas is unbaked, as after a failed
+        // bake(). usedEmbeddedFace() is what it was when the blob was written.
+        bool load(const uint8_t* data, size_t bytes);
+
+        // The blob version serialise() writes and load() accepts.
+        static constexpr uint32_t kBlobVersion = 1;
 
         // Whether the last successful bake used the caller's embedded bytes.
         bool usedEmbeddedFace() const { return usedEmbedded_; }
 
-        // Whether the last bake() succeeded, so glyphs, metrics and pixels()
-        // are real (02 §3.3: text needs only this, no GPU texture). False
-        // before the first bake and after a failed one.
+        // Whether the last bake() or load() succeeded, so glyphs, metrics and
+        // pixels() are real (02 §3.3: text needs only this, no GPU texture).
+        // False before the first bake and after a failed one.
         bool baked() const { return baked_; }
 
         // Codepoint lookup. ASCII hits a flat array; the handful of extras

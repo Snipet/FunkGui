@@ -18,12 +18,21 @@
 #   FunkGui source directory, the build directory and the test's sandbox directory.
 # - gpu=1 tests exist only with FUNKGUI_WITH_BGFX. labels=live marks a test that needs a window server: it is never in
 #   `verify`. Other labels are added to the standard ones.
+# - FUNKGUI_WITH_JUCE=OFF (v0.12.0; the `nojuce` preset): a compiled test is a plain executable, not a JUCE console
+#   app. A test that needs JUCE does not exist there: one whose source includes JUCE (cmake/FunkGuiTargets.cmake's
+#   _funkgui_needs_juce: an unindented #include of a JUCE module header, of funkgui/juce/, funkgui/presets/ or
+#   funkgui/gpu/, or of params/JuceParamPort.h), and one whose exe= names a tool that needs JUCE. Every other test is
+#   JUCE-free, runs there too, and is compared with the same goldens.
 # A file under test/ without a FUNKGUI_TEST first line is not a test (gallery sections, helpers); a FUNKGUI_TEST line
 # anywhere but the first line, or a malformed one, is a configure error, as is a duplicate name.
 #
 # Harness flags (03 §3.2.2): --golden-root <src>/test/golden --arch ${FUNKGUI_RUN_ARCH} --bless-to
 # <build>/golden-candidates --results <build>/probe-results. The probe name is the test name, so goldens live at
 # test/golden/{base,arm64,x86_64}/global/fg.<x>.txt (03 §3.3; FunkGui tests are global-scope probes).
+#
+# Emscripten (v0.12.0, the `web` preset): the tests are wasm32 executables run by node (CMAKE_CROSSCOMPILING_EMULATOR,
+# which Emscripten's toolchain file finds), as --arch wasm32, against the same base goldens (an overlay would be
+# test/golden/wasm32/). They are the JUCE-free tests: Emscripten builds only with FUNKGUI_WITH_JUCE=OFF.
 #
 # Labels: verify, fg, plus gpu (needs FUNKGUI_WITH_BGFX), or live (not in verify). A harness test passes CTest when its
 # own RESULT line reports pass, golden_drift or golden_missing: drift and missing goldens are candidates, not failures
@@ -37,15 +46,17 @@ set(_fg_candidates_dir ${CMAKE_BINARY_DIR}/golden-candidates)
 
 # ---- The architecture the tests run as (selects the golden overlay, 03 §3.3) -----------------------------------------
 list(LENGTH CMAKE_OSX_ARCHITECTURES _fg_arch_count)
-if(_fg_arch_count EQUAL 1)
+if(EMSCRIPTEN)
+  set(FUNKGUI_RUN_ARCH wasm32)
+elseif(_fg_arch_count EQUAL 1)
   set(FUNKGUI_RUN_ARCH ${CMAKE_OSX_ARCHITECTURES})
 elseif(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
   set(FUNKGUI_RUN_ARCH arm64)
 else()
   set(FUNKGUI_RUN_ARCH x86_64)
 endif()
-if(NOT FUNKGUI_RUN_ARCH MATCHES "^(arm64|x86_64)$")
-  message(FATAL_ERROR "FunkGui tests: unsupported architecture '${FUNKGUI_RUN_ARCH}' (arm64 or x86_64)")
+if(NOT FUNKGUI_RUN_ARCH MATCHES "^(arm64|x86_64|wasm32)$")
+  message(FATAL_ERROR "FunkGui tests: unsupported architecture '${FUNKGUI_RUN_ARCH}' (arm64, x86_64 or wasm32)")
 endif()
 if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
   set(_fg_host_arch arm64)
@@ -53,7 +64,16 @@ else()
   set(_fg_host_arch x86_64)
 endif()
 set(_fg_can_run ON)
-if(NOT FUNKGUI_RUN_ARCH STREQUAL _fg_host_arch)     # e.g. x86_64 on Apple silicon: needs Rosetta 2
+set(_fg_emulator "")
+if(EMSCRIPTEN)                                      # wasm32: node runs the executables
+  if(CMAKE_CROSSCOMPILING_EMULATOR)
+    set(_fg_emulator ${CMAKE_CROSSCOMPILING_EMULATOR})
+  else()
+    set(_fg_can_run OFF)
+    message(WARNING "FunkGui tests: no CMAKE_CROSSCOMPILING_EMULATOR (node) to run wasm32 executables; every test is "
+                    "DISABLED")
+  endif()
+elseif(NOT FUNKGUI_RUN_ARCH STREQUAL _fg_host_arch) # e.g. x86_64 on Apple silicon: needs Rosetta 2
   try_run(_fg_run_rc _fg_compile_ok SOURCE_FROM_CONTENT fg_can_run.c "int main(void) { return 0; }"
           CMAKE_FLAGS -DCMAKE_OSX_ARCHITECTURES=${FUNKGUI_RUN_ARCH})
   if(NOT _fg_compile_ok OR NOT _fg_run_rc EQUAL 0)
@@ -91,6 +111,21 @@ function(_fg_add_test name timeout gpu links exe args labels source)
     message(STATUS "FunkGui tests: ${name} skipped (FUNKGUI_WITH_PRESETS is OFF)")
     return()
   endif()
+  if(NOT FUNKGUI_WITH_JUCE AND NOT FUNKGUI_HARNESS_ONLY)
+    get_property(_juce_tools GLOBAL PROPERTY FUNKGUI_JUCE_ONLY_TOOLS)
+    set(_needs_juce OFF)
+    if(exe)
+      if(exe IN_LIST _juce_tools)
+        set(_needs_juce ON)
+      endif()
+    elseif(NOT links STREQUAL "harness")
+      _funkgui_needs_juce(_needs_juce ${source})
+    endif()
+    if(_needs_juce)
+      message(STATUS "FunkGui tests: ${name} skipped (needs JUCE, FUNKGUI_WITH_JUCE is OFF)")
+      return()
+    endif()
+  endif()
 
   set(_sandbox ${CMAKE_BINARY_DIR}/sandbox/${name})
   file(MAKE_DIRECTORY ${_sandbox})
@@ -104,7 +139,7 @@ function(_fg_add_test name timeout gpu links exe args labels source)
   set(_harness ON)
   if(exe)
     if(TARGET ${exe})
-      set(_command $<TARGET_FILE:${exe}> ${name} ${_args} ${_harness_flags})
+      set(_command ${_fg_emulator} $<TARGET_FILE:${exe}> ${name} ${_args} ${_harness_flags})
       add_dependencies(funkgui_tests ${exe})
     elseif(EXISTS "${PROJECT_SOURCE_DIR}/${exe}" AND NOT IS_DIRECTORY "${PROJECT_SOURCE_DIR}/${exe}")
       set(_command ${PROJECT_SOURCE_DIR}/${exe} ${_args})
@@ -118,7 +153,11 @@ function(_fg_add_test name timeout gpu links exe args labels source)
       add_executable(${_target} ${source})
       target_link_libraries(${_target} PRIVATE FunkGui::harness)
     else()
-      juce_add_console_app(${_target} PRODUCT_NAME ${_target})
+      if(FUNKGUI_WITH_JUCE)
+        juce_add_console_app(${_target} PRODUCT_NAME ${_target})
+      else()
+        add_executable(${_target})
+      endif()
       target_sources(${_target} PRIVATE ${source})
       target_link_libraries(${_target} PRIVATE FunkGui::core FunkGui::harness)
       if(links STREQUAL "gpu")
@@ -136,7 +175,7 @@ function(_fg_add_test name timeout gpu links exe args labels source)
     set_target_properties(${_target} PROPERTIES EXCLUDE_FROM_ALL TRUE)
     _funkgui_internal_target(${_target} ${source})
     add_dependencies(funkgui_tests ${_target})
-    set(_command $<TARGET_FILE:${_target}> ${name} ${_harness_flags})
+    set(_command ${_fg_emulator} $<TARGET_FILE:${_target}> ${name} ${_harness_flags})
   endif()
 
   add_test(NAME ${name} COMMAND ${_command} WORKING_DIRECTORY ${_sandbox})
@@ -262,6 +301,9 @@ if(NOT FUNKGUI_HARNESS_ONLY)
   if(FUNKGUI_WITH_BGFX)
     target_link_libraries(fg_header_flags PRIVATE FunkGui::gpu)
     list(APPEND _fg_headers_args --bgfx)
+  endif()
+  if(NOT FUNKGUI_WITH_JUCE)
+    list(APPEND _fg_headers_args --no-juce)            # juce/ and presets/ headers need JUCE: not checked without it
   endif()
   target_include_directories(fg_header_flags PRIVATE ${FUNKGUI_GENERATED_DIR})
   funkgui_configure_product(fg_header_flags PRODUCT FunkGui OBJC_PREFIX FunkGui ENV_PREFIX FUNKGUI_

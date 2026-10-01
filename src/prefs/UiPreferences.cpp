@@ -1,13 +1,25 @@
 #include <funkgui/prefs/UiPreferences.h>
 
-#include <funkgui/core/Config.h>
-#include <funkgui/core/Env.h>
+#include "PrefsBackend.h"
+
 #include <funkgui/core/Theme.h>
 
 #include <charconv>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <memory>
 #include <string>
 #include <system_error>
 #include <utility>
+
+// UiPreferences over a storage backend (v0.12.0). This file is JUCE-free: the class's logic (the theme's cached copy
+// and clamp, the generic int keys, the revision) and the in-memory backend. The properties-file backend, file() and
+// defaultFile() are src/juce/PrefsFileBackend.cpp; which backend a new store starts with is
+// detail::makeDefaultPrefsBackend() (src/prefs/PrefsBackend.h). With JUCE every call reaches the same
+// juce::PropertiesFile calls, in the same order, as before the split, so the file's bytes are unchanged
+// (fg.prefs.check's golden rows).
 
 namespace funkgui
 {
@@ -15,38 +27,19 @@ namespace funkgui
     {
         constexpr const char* kThemeKey = "theme";
 
-        juce::PropertiesFile::Options storeOptions()
+        char lowerAscii(char c) noexcept
         {
-            juce::PropertiesFile::Options o;
-            o.applicationName     = "preferences";
-            o.filenameSuffix      = "settings";
-            o.folderName          = FUNKGUI_PREFS_FOLDER;
-            o.osxLibrarySubFolder = "Application Support";
-            o.commonToAllUsers    = false;
-            o.doNotSave           = false;
-            return o;
+            return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
         }
 
-        // The store's file when <ENV_PREFIX>PREFS_DIR is not set: JUCE's default for these options on macOS,
-        // ~/Library/Application Support/<folder>/preferences.settings. On Linux JUCE's default is ~/<folder>/, a
-        // visible folder in the home directory, so FunkGui uses the configuration directory JUCE resolves instead,
-        // ~/.config, where FunkPresets keeps its database too (v0.11.0). JUCE 8.0.4 looks for an XDG_CONFIG_HOME line
-        // in ~/.config/user-dirs.dirs, which holds none, and never reads the environment variable: a relocated
-        // $XDG_CONFIG_HOME is not followed yet.
-        juce::File defaultStoreFile()
+        // "Theme" and "THEME" are the theme (fg.prefs.check: prefs.int.theme_key_ignores_case).
+        bool isThemeKey(const char* key) noexcept
         {
-           #if JUCE_LINUX || JUCE_BSD
-            return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-                       .getChildFile(FUNKGUI_PREFS_FOLDER).getChildFile("preferences.settings");
-           #else
-            return storeOptions().getDefaultFile();
-           #endif
-        }
-
-        // The store's keys ignore case (juce::PropertiesFile::Options::ignoreCaseOfKeyNames), so "Theme" is the theme.
-        bool isThemeKey(const char* key)
-        {
-            return juce::String(key).equalsIgnoreCase(kThemeKey);
+            const char* t = kThemeKey;
+            for (; *key != '\0' && *t != '\0'; ++key, ++t)
+                if (lowerAscii(*key) != *t)
+                    return false;
+            return *key == '\0' && *t == '\0';
         }
 
         int clampTo(int v, int lo, int hi) noexcept
@@ -54,11 +47,10 @@ namespace funkgui
             return v < lo ? lo : (v > hi ? hi : v);
         }
 
-        // A decimal integer that fits an int ("-12", "48"), and nothing else: juce::String::getIntValue() reads "48abc"
-        // as 48 and "abc" as 0, which would turn a damaged file into a real setting.
-        bool parseInt(const juce::String& s, int& out)
+        // A decimal integer that fits an int ("-12", "48"), and nothing else: a lenient reader takes "48abc" as 48 and
+        // "abc" as 0, which would turn a damaged file into a real setting.
+        bool parseInt(const std::string& t, int& out)
         {
-            const std::string t = s.toStdString();
             if (t.empty())
                 return false;
             const char* first = t.data();
@@ -66,6 +58,44 @@ namespace funkgui
             const auto [end, ec] = std::from_chars(first, last, out);
             return ec == std::errc{} && end == last;
         }
+
+        // The theme's own reading, kept as it always was: juce::String::getIntValue's (the properties file's
+        // getIntValue), which skips leading white space, takes an optional '-' and then digits up to the first
+        // character that is not one, and wraps instead of failing. "3abc" is 3, "abc" is 0; the clamp follows.
+        int lenientInt(const std::string& t) noexcept
+        {
+            size_t i = 0;
+            while (i < t.size() && (t[i] == ' ' || (t[i] >= '\t' && t[i] <= '\r')))
+                ++i;
+            const bool negative = i < t.size() && t[i] == '-';
+            if (negative)
+                ++i;
+            uint32_t v = 0;
+            for (; i < t.size() && t[i] >= '0' && t[i] <= '9'; ++i)
+                v = v * 10u + static_cast<uint32_t>(t[i] - '0');
+            return static_cast<int>(negative ? 0u - v : v);
+        }
+
+        // The store without JUCE, and anyone's sandbox: nothing outside the process can change it.
+        class MemoryBackend final : public UiPreferences::Backend
+        {
+        public:
+            bool read(const char* key, std::string& value) const override
+            {
+                const auto it = values_.find(key);
+                if (it == values_.end())
+                    return false;
+                value = it->second;
+                return true;
+            }
+
+            void write(const char* key, const std::string& value) override { values_[key] = value; }
+
+            bool reload() override { return false; }
+
+        private:
+            std::map<std::string, std::string, std::less<>> values_;
+        };
     }
 
     UiPreferences& UiPreferences::get()
@@ -79,61 +109,54 @@ namespace funkgui
         return *prefs;
     }
 
-    juce::File UiPreferences::defaultFile()
+    std::unique_ptr<UiPreferences::Backend> UiPreferences::memoryBackend()
     {
-        return defaultStoreFile();
+        return std::make_unique<MemoryBackend>();
     }
 
     UiPreferences::UiPreferences()
+        : backend_(detail::makeDefaultPrefsBackend())
     {
-        const juce::PropertiesFile::Options o = storeOptions();
-
-        // <ENV_PREFIX>PREFS_DIR redirects the store to a directory of the caller's
-        // choosing. It exists so the preferences harness can run against a
-        // scratch file instead of the real one — which it used to write, with
-        // no teardown, and every editor on the machine then read.
-        if (const char* dir = funkgui::env("PREFS_DIR"))
-            file_ = std::make_unique<juce::PropertiesFile>(
-                juce::File(juce::String(dir)).getChildFile("preferences.settings"), o);
-        else
-            file_ = std::make_unique<juce::PropertiesFile>(defaultStoreFile(), o);
-        theme_ = juce::jlimit(0, Theme::kCount - 1,
-                              file_->getIntValue(kThemeKey, 0));
+        theme_ = readTheme();
     }
 
-    juce::File UiPreferences::file() const
+    int UiPreferences::readTheme() const
     {
-        return file_ != nullptr ? file_->getFile() : juce::File();
+        std::string text;
+        const int stored = backend_ != nullptr && backend_->read(kThemeKey, text) ? lenientInt(text) : 0;
+        return clampTo(stored, 0, Theme::kCount - 1);
+    }
+
+    void UiPreferences::setBackend(std::unique_ptr<Backend> backend)
+    {
+        backend_ = backend != nullptr ? std::move(backend) : detail::makeDefaultPrefsBackend();
+        theme_ = readTheme();
+        ++revision_;                                     // another store: every preference may have moved
     }
 
     void UiPreferences::reload()
     {
-        if (file_ == nullptr) return;
-        const juce::StringPairArray before = file_->getAllProperties();
-        file_->reload();
-        theme_ = juce::jlimit(0, Theme::kCount - 1,
-                              file_->getIntValue(kThemeKey, 0));
+        if (backend_ == nullptr) return;
+        const bool changed = backend_->reload();
+        theme_ = readTheme();
         // Any key, not just the theme: an editor follows every preference.
-        if (file_->getAllProperties() != before) ++revision_;
+        if (changed) ++revision_;
     }
 
     void UiPreferences::setTheme(int idx)
     {
-        const int clamped = juce::jlimit(0, Theme::kCount - 1, idx);
+        const int clamped = clampTo(idx, 0, Theme::kCount - 1);
         if (clamped == theme_) return;
 
         theme_ = clamped;
         ++revision_;
 
-        if (file_ != nullptr)
-        {
-            file_->setValue(kThemeKey, theme_);
-            // Written through immediately rather than at destruction: a host
-            // that is force-quit, or a plugin unloaded mid-teardown, must not
-            // lose the choice the user just made. Two hosts open at once are
-            // last-writer-wins, which is the right semantics for a preference.
-            file_->saveIfNeeded();
-        }
+        // Written through immediately rather than at destruction: a host
+        // that is force-quit, or a plugin unloaded mid-teardown, must not
+        // lose the choice the user just made. Two hosts open at once are
+        // last-writer-wins, which is the right semantics for a preference.
+        if (backend_ != nullptr)
+            backend_->write(kThemeKey, std::to_string(theme_));
     }
 
     int UiPreferences::getInt(const char* key, int fallback, int lo, int hi) const
@@ -145,7 +168,8 @@ namespace funkgui
         if (isThemeKey(key))
             return clampTo(theme_, lo, hi);
         int v = fallback;
-        if (file_ != nullptr && file_->containsKey(key) && !parseInt(file_->getValue(key), v))
+        std::string text;
+        if (backend_ != nullptr && backend_->read(key, text) && !parseInt(text, v))
             v = fallback;
         return clampTo(v, lo, hi);
     }
@@ -159,13 +183,13 @@ namespace funkgui
             setTheme(value);                             // the theme keeps its clamp and its cached copy
             return;
         }
-        if (file_ == nullptr)
+        if (backend_ == nullptr)
             return;
-        const juce::String text(value);
-        if (file_->containsKey(key) && file_->getValue(key) == text)
+        const std::string text = std::to_string(value);
+        std::string held;
+        if (backend_->read(key, held) && held == text)
             return;                                      // already held: no write, no revision
-        file_->setValue(key, text);
-        file_->saveIfNeeded();                           // written through, as setTheme()
+        backend_->write(key, text);                      // written through, as setTheme()
         ++revision_;
     }
 }

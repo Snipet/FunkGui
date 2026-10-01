@@ -14,8 +14,17 @@
 # Output for FunkGuiTargets.cmake: FUNKGUI_SHADERC_STAMP, the stamp line of the shaderc that compiles the shaders (the
 # prebuilt one's shaderc.stamp, or "bgfx.cmake <HEAD>" of the sources a shaderc target is built from); fg.shader.hash
 # asserts it against the pin with a spec row (S0 review R-G1 #9).
+#
+# FUNKGUI_WITH_JUCE=OFF (v0.12.0): JUCE is neither fetched, nor looked for, nor version-checked, and there is no bgfx
+# (the top-level CMakeLists.txt turns FUNKGUI_WITH_BGFX off with it). _fg_juce below is "this configuration has JUCE".
 
 include(FetchContent)
+
+if(FUNKGUI_WITH_JUCE AND NOT FUNKGUI_HARNESS_ONLY)
+  set(_fg_juce ON)
+else()
+  set(_fg_juce OFF)
+endif()
 
 # ---- Pins (03 §1.3). The consumer pins its own copies; top-level FunkGui builds assert these. ------------------------
 set(FUNKGUI_JUCE_TAG  8.0.4)
@@ -131,7 +140,7 @@ if(PROJECT_IS_TOP_LEVEL)
     endif()
   endmacro()
 
-  if(NOT FUNKGUI_HARNESS_ONLY)
+  if(_fg_juce)
     _funkgui_default_source_dir(JUCE JUCE-${FUNKGUI_JUCE_TAG})
     # SYSTEM: JUCE's headers are third-party code to FunkGui's -Werror sources.
     FetchContent_Declare(JUCE GIT_REPOSITORY https://github.com/juce-framework/JUCE.git GIT_TAG ${FUNKGUI_JUCE_TAG}
@@ -159,17 +168,18 @@ if(PROJECT_IS_TOP_LEVEL)
     endif()
   endif()
 
-  if(NOT FUNKGUI_HARNESS_ONLY)
+  if(_fg_juce)
     FetchContent_MakeAvailable(JUCE)
     _funkgui_assert_git("${juce_SOURCE_DIR}" ${FUNKGUI_JUCE_SHA} JUCE)
   endif()
 endif()
 
 # ---- JUCE: provided by the consumer (02 §1.3) ------------------------------------------------------------------------
-if(NOT FUNKGUI_HARNESS_ONLY)
+if(_fg_juce)
   if(NOT TARGET juce::juce_gui_basics OR NOT COMMAND juce_add_binary_data)
     message(FATAL_ERROR "FunkGui: call FetchContent_MakeAvailable(JUCE) before FunkGui "
-                        "(or set FUNKGUI_HARNESS_ONLY=ON for a JUCE-free build with FunkGui::harness only)")
+                        "(or set FUNKGUI_HARNESS_ONLY=ON for a JUCE-free build with FunkGui::harness only, or "
+                        "FUNKGUI_WITH_JUCE=OFF for the JUCE-free FunkGui::core)")
   endif()
   set(_fg_juce_modules "${JUCE_MODULES_DIR}")
   if(NOT _fg_juce_modules)

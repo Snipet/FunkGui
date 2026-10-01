@@ -28,12 +28,12 @@
 #include <funkgui/widgets/SegmentedSelector.h>
 #include <funkgui/widgets/ThemeCells.h>
 
-#include <juce_core/juce_core.h>
-
 #include <array>
 #include <cstdio>
+#include <filesystem>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace funkgui::gallery
@@ -51,10 +51,16 @@ namespace funkgui::gallery
         {
             if (funkgui::env("PREFS_DIR") != nullptr)
                 return;
-            const juce::File dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
-                                       .getNonexistentChildFile("FunkGuiGalleryPrefs", "", false);
-            dir.createDirectory();
-            test::setEnv(FUNKGUI_ENV_PREFIX "PREFS_DIR", dir.getFullPathName().toRawUTF8());
+            namespace fs = std::filesystem;
+            std::error_code ec;
+            fs::path base = fs::temp_directory_path(ec);
+            if (ec)
+                base = fs::path(".");
+            fs::path dir = base / "FunkGuiGalleryPrefs";        // the first name nothing has taken yet
+            for (int n = 2; fs::exists(dir, ec); ++n)
+                dir = base / ("FunkGuiGalleryPrefs" + std::to_string(n));
+            fs::create_directories(dir, ec);
+            test::setEnv(FUNKGUI_ENV_PREFIX "PREFS_DIR", dir.string().c_str());
             funkgui::envReload();
         }
 

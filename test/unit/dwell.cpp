@@ -11,12 +11,11 @@
 #include <funkgui/canvas/Tags.h>
 #include <funkgui/core/Ease.h>
 #include <funkgui/core/Theme.h>
+#include <funkgui/panel/HeadlessGuiScope.h>
 #include <funkgui/test/Harness.h>
 #include <funkgui/text/FontService.h>
 #include <funkgui/widgets/DwellSelector.h>
 #include <funkgui/widgets/HintLine.h>
-
-#include <juce_gui_basics/juce_gui_basics.h>
 
 #include <cmath>
 #include <cstdint>
@@ -80,7 +79,7 @@ namespace
 
 int main(int argc, char** argv)
 {
-    const juce::ScopedJuceInitialiser_GUI juceInit;      // FontService bakes the atlas through JUCE's font stack
+    const funkgui::HeadlessGuiScope gui;                 // JUCE's GUI side, when there is JUCE: the atlas bakes there
     T::Probe P("fg.dwell", "", argc, argv);
     const float nan = std::numeric_limits<float>::quiet_NaN();
 
