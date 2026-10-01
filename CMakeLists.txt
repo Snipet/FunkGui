@@ -109,7 +109,7 @@ if(FUNKGUI_BUILD_TESTS)
 endif()
 
 set(_fg_summary "FunkGui::harness")
-foreach(_t core gpu presets)
+foreach(_t core gpu presets web)
   if(TARGET FunkGui::${_t})
     string(APPEND _fg_summary ", FunkGui::${_t}")
   endif()
