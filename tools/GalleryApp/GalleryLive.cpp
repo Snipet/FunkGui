@@ -75,13 +75,16 @@ namespace
     };
 
     // Three sections (HR's primitive kinds with text and a live element; KIND_AREA strips; the RuleSlider widget
-    // grid), one keyboard-driven state through the UI_KEYS replay, and the overflow path.
+    // grid), one keyboard-driven state through the UI_KEYS replay, and the overflow path. Web Sprint B (v0.12.0): the
+    // services section at rest, whose HOST line draws HostServices::services() and commandKeyIsMeta(), so EditorHost
+    // must answer both as HeadlessHost does (every service; the platform's command key).
     constexpr Case kCases[] = {
         { "primitives", "primitives", "", 0 },
         { "area", "area", "", 0 },
         { "ruleslider", "ruleslider", "", 0 },
         { "ruleslider_keys", "ruleslider", "tab,tab,right", 0 },
         { "overflow", "primitives", "", 8192 },
+        { "services", "services", "", 0 },
     };
 
     bool sameBits(float a, float b) { return std::bit_cast<uint32_t>(a) == std::bit_cast<uint32_t>(b); }

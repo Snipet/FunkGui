@@ -3,7 +3,14 @@
 // What a Panel may ask of its host (02 §3.5). EditorHost implements it over JUCE and the frame pump; HeadlessHost over
 // a simulated clock and a call log; a Panel reaches it through attach() and GestureController.
 
+#include <funkgui/core/Geometry.h>
+#include <funkgui/core/Theme.h>
+
+#include <functional>
 #include <span>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace juce
 {
@@ -13,6 +20,55 @@ namespace juce
 namespace funkgui
 {
     class ParamPort;
+
+    // ---- Web Sprint B additions (v0.12.0; FCompressor ADR-93) -------------------------------------------------------
+    // What the service calls at the end of HostServices take: plain structs, every text UTF-8.
+
+    // The services a host can offer: HostServices::services() is a mask of these bits.
+    namespace hostservice
+    {
+        inline constexpr unsigned menus       = 1u << 0;   // showMenu, dismissMenus
+        inline constexpr unsigned fileChooser = 1u << 1;   // chooseFiles
+        inline constexpr unsigned clipboard   = 1u << 2;   // copyText
+    }
+
+    // One row of a menu: an item, or with `separator` a dividing line (its other fields are not read). Every member
+    // of these structs has an initialiser, so `{ 1, "Save" }` and `{ .separator = true }` are both complete.
+    struct MenuItem
+    {
+        int         id = 0;                          // > 0: what the callback receives when the user chooses this item
+        std::string label{};
+        bool        enabled = true;                  // false: shown, and cannot be chosen
+        bool        checked = false;                 // ticked
+        bool        separator = false;
+    };
+
+    // A flat menu (no submenus, no icons, no shortcut column).
+    struct MenuRequest
+    {
+        std::vector<MenuItem> items{};               // top to bottom
+        Rect  anchor{};                              // the menu opens beside this rectangle, in the Panel's own px
+        Theme theme = Theme::graphite();             // the palette the menu borrows. The caller passes it: a product's
+                                                     // Theme is not always Theme::byIndex(themeIndex())
+    };
+
+    // The chosen item's id, or 0 when the user dismissed the menu without choosing.
+    using MenuCallback = std::function<void(int id)>;
+
+    struct FileRequest
+    {
+        enum class Mode { open, openMany, save };    // one existing file; one or several; a file to write
+
+        Mode        mode = Mode::open;
+        std::string title{};                         // the chooser's title: "Import presets"
+        std::string pattern{};                       // the files it offers, as wildcards: "*.fcmppreset"; several
+                                                     // separated by ';'; empty = every file
+        std::string suggestedName{};                 // save: the file name it starts with, extension included. The
+                                                     // host drops the characters a file name cannot hold
+    };
+
+    // The chosen files as absolute paths; empty when the user cancelled. Mode::open and Mode::save give one path.
+    using FilesCallback = std::function<void(const std::vector<std::string>& paths)>;
 
     class HostServices
     {
@@ -78,5 +134,71 @@ namespace funkgui
         // display is known, and for the smallest step (drawn when nothing fits). HeadlessHost: setZoomFitLimit.
         // Default: true.
         virtual bool zoomFits(int /*percent*/) const { return true; }
+
+        // ---- Web Sprint B additions (v0.12.0; FCompressor ADR-93). Not pure: the defaults refuse. -------------------
+        //
+        // A popup menu, a file chooser and the clipboard as plain calls (the request types are above the class), so a
+        // Panel needs no JUCE and no ownerComponent() for them, a host without JUCE can serve them, and HeadlessHost
+        // can script them. A host written before them keeps compiling and serves nothing.
+        //
+        // The rules every host keeps for the callbacks of showMenu and chooseFiles:
+        // - a callback runs on the message thread, at most once, and never from inside the call that took it;
+        // - it never runs after dismissMenus() (a menu's), after the host has let go of the Panel (EditorHost: its
+        //   editor left its window; HeadlessHost: its destructor, before Panel::closeGestures()) or after the host is
+        //   destroyed;
+        // - a second showMenu replaces a menu still showing (even when the second is refused), a second chooseFiles a
+        //   chooser still open: the replaced request's callback does not run. A menu and a chooser do not replace
+        //   each other.
+        // A callback that does not run is destroyed without being called, when it is dropped (a refused one: when the
+        // call returns), so what it captured is released. One that runs may call showMenu or chooseFiles again. A
+        // sub-view that can go before its Panel still guards what its callbacks touch, as with any deferred call; it
+        // needs no dismissMenus() in a destructor that runs with the Panel's, since the host has dropped the callbacks
+        // by then (and may itself be gone).
+
+        // What this host serves: a mask of hostservice bits, so a view can disable a cell its host cannot serve. A
+        // call for a service that is not reported refuses, as the defaults below do. EditorHost and HeadlessHost: all
+        // three. Default: none (0).
+        virtual unsigned services() const { return 0; }
+
+        // Opens the menu beside request.anchor in request.theme's colours and returns true; `done` then runs once
+        // with the chosen id, or with 0 when the user dismisses the menu. Returns false, and drops `done` unrun, when
+        // the host shows no menus, the request has no items, or an item that is not a separator has an id <= 0.
+        // EditorHost: a juce::PopupMenu with a funkgui::MenuLook of the theme, anchored to the rectangle on screen
+        // under the UI zoom (the rectangle times the editor's width over the Panel's, to the nearest editor px).
+        // HeadlessHost: nothing is shown; the request is logged and stays pending until the test answers it
+        // (chooseMenuItem, cancelMenu), which is when `done` runs. Default: false.
+        virtual bool showMenu(const MenuRequest& /*request*/, MenuCallback /*done*/) { return false; }
+
+        // Closes the menu this host is showing, if any; its callback does not run. For a Panel whose menu no longer
+        // means anything (the sub-view that asked is going away while the Panel stays). EditorHost: JUCE can only
+        // dismiss every popup menu of the process, so it does that, and only while a menu of its own is showing.
+        // HeadlessHost: the pending menu is dropped, and the call counted. Default: nothing.
+        virtual void dismissMenus() {}
+
+        // Opens a file chooser and returns true; `done` then runs once with the chosen paths, or with none when the
+        // user cancels. Mode::save warns before an existing file is overwritten, and its path ends in the pattern's
+        // extension when the pattern is a single "*.<ext>": the host replaces another extension or appends it
+        // (compared without case), as a native save panel does. Returns false, and drops `done` unrun, when the host
+        // has no chooser. EditorHost: a native juce::FileChooser parented on the editor, starting in the user's
+        // Documents folder (Mode::save: at the suggested name there). HeadlessHost: nothing is shown; the request is
+        // logged and stays pending until the test answers it (returnFiles, cancelFiles). Default: false.
+        virtual bool chooseFiles(const FileRequest& /*request*/, FilesCallback /*done*/) { return false; }
+
+        // Puts the text on the system clipboard; returns whether it was written. EditorHost: juce::SystemClipboard.
+        // HeadlessHost: logged (log.lastCopy), no clipboard is touched, true. Default: false.
+        virtual bool copyText(std::string_view /*utf8*/) { return false; }
+
+        // Whether the platform's command key is Meta (Cmd, as on macOS) rather than Ctrl: which name a shortcut hint
+        // prints, and which of Mods::cmd and Mods::ctrl alone means "command" (JUCE sets both for Ctrl where Ctrl is
+        // the command key). EditorHost: the default, which is JUCE's own rule. HeadlessHost: the default until
+        // setCommandKeyIsMeta(). Default: the platform this was compiled for (true on Apple's).
+        virtual bool commandKeyIsMeta() const
+        {
+           #if defined(__APPLE__)
+            return true;
+           #else
+            return false;
+           #endif
+        }
     };
 }

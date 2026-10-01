@@ -16,6 +16,8 @@
 
 #include <cstdint>
 #include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace funkgui
@@ -52,6 +54,15 @@ namespace funkgui
             int  batches = 0;
             int  batchDepth = 0;
             int  zooms = 0;
+            // Web Sprint B (v0.12.0): the services. `menus` above stays showParamMenu's count. Each call is counted
+            // whether or not it was taken, and its request kept until the next one, answered or not.
+            int  menuRequests = 0;                   // showMenu
+            int  menuDismissals = 0;                 // dismissMenus
+            int  fileRequests = 0;                   // chooseFiles
+            int  copies = 0;                         // copyText
+            MenuRequest lastMenu{};                  // the items, the anchor, the theme
+            FileRequest lastFiles{};                 // the mode, the title, the pattern, the suggested name
+            std::string lastCopy{};                  // the text
         } log;
 
         // G7c (v0.8.0): the UI zoom a Panel's ZOOM control reads and writes, simulated. HeadlessHost stays logical:
@@ -63,6 +74,32 @@ namespace funkgui
         void setZoom(std::vector<int> steps, int percent);
         // Lead (v0.8.0): the largest step zoomFits() accepts (a simulated display); 0 (the default) = every step fits.
         void setZoomFitLimit(int maxPercent) { zoomFitLimit_ = maxPercent; }
+
+        // Web Sprint B (v0.12.0): the services of HostServices.h, scripted. HeadlessHost reports all three and shows
+        // nothing: a showMenu or chooseFiles that was taken is pending until the test answers it with one of the calls
+        // below, and the callback runs inside that call, so the next line of the test sees what the Panel did with the
+        // answer. Each returns whether a callback was due and the answer was one the user could have given; when it
+        // returns false nothing ran and the request is still pending.
+        //
+        //   host.click(x, y, ctrl);                                       // the Panel calls showMenu
+        //   P.eq("menu.shown", host.pendingMenu() != nullptr, 1);         // its items: host.pendingMenu()->items
+        //   P.eq("menu.chosen", host.chooseMenuItem("Copy A to B"), 1);   // the callback has run
+        //
+        // The pending request (&log.lastMenu, &log.lastFiles), or nullptr when nothing waits for an answer.
+        const MenuRequest* pendingMenu() const noexcept { return menuPending_ ? &log.lastMenu : nullptr; }
+        const FileRequest* pendingFiles() const noexcept { return filesPending_ ? &log.lastFiles : nullptr; }
+        // The user chooses an item: by id, or by label (the first item with exactly that label). False for an item
+        // the menu does not hold, a disabled one or a separator.
+        bool chooseMenuItem(int id);
+        bool chooseMenuItem(std::string_view label);
+        bool cancelMenu();                           // the user dismisses the menu: its callback runs with 0
+        // The user picks files. False for no path (that is cancelFiles), or for several when the request's mode is
+        // not openMany. Mode::save: the path is given the pattern's extension, by HostServices::chooseFiles' rule.
+        bool returnFiles(std::vector<std::string> paths);
+        bool cancelFiles();                          // the user cancels the chooser: its callback runs with no path
+        // What commandKeyIsMeta() answers; until a call, HostServices' default (the platform), so a probe whose rows
+        // print the command key's name sets it.
+        void setCommandKeyIsMeta(bool meta) { commandKeyIsMeta_ = meta; }
 
         // HostServices: records into log; nowSeconds() returns the simulated clock.
         void   setUnboundedDrag(bool on) override;
@@ -79,6 +116,14 @@ namespace funkgui
         void   setZoomPercent(int percent) override;
         std::span<const int> zoomSteps() const override;
         bool   zoomFits(int percent) const override;   // a listed step <= setZoomFitLimit (any, when 0)
+        // Web Sprint B (v0.12.0): logged, and pending until answered (see pendingMenu() above). The destructor drops
+        // what is still pending before it closes the Panel's gestures.
+        unsigned services() const override;
+        bool   showMenu(const MenuRequest&, MenuCallback) override;
+        void   dismissMenus() override;
+        bool   chooseFiles(const FileRequest&, FilesCallback) override;
+        bool   copyText(std::string_view utf8) override;
+        bool   commandKeyIsMeta() const override;
 
     private:
         // Private state: completed by the implementing card (G3); not part of the frozen API.
@@ -93,5 +138,10 @@ namespace funkgui
         std::vector<int> zoomSteps_;                 // G7c: setZoom()
         int      zoomPercent_ = 100;
         int      zoomFitLimit_ = 0;                  // setZoomFitLimit; 0 = every step fits
+        MenuCallback  menuDone_;                     // Web Sprint B: the pending menu's callback (may be empty)
+        FilesCallback filesDone_;                    // and the pending chooser's
+        bool     menuPending_ = false;
+        bool     filesPending_ = false;
+        bool     commandKeyIsMeta_ = false;          // the constructor sets HostServices' default
     };
 }

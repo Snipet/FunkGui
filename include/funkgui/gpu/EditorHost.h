@@ -59,10 +59,13 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace funkgui
 {
+    class HostServicesJuce;                          // Web Sprint B: src/gpu/HostServicesJuce.h
+
     struct EditorConfig
     {
         int width = 0, height = 0;                   // the Panel's fixed logical size; 0 = its width()/height()
@@ -147,6 +150,12 @@ namespace funkgui
         void   setZoomPercent(int percent) override; // G7c: a listed step: the preference, then the next frame
         std::span<const int> zoomSteps() const override;   // G7c: EditorConfig::zoomSteps, cleaned
         bool   zoomFits(int percent) const override;         // lead (v0.8.0): a listed step that fits (HostServices.h)
+        // Web Sprint B (v0.12.0): the services over JUCE (HostServices.h; src/gpu/HostServicesJuce.cpp).
+        unsigned services() const override;          // menus, the file chooser and the clipboard
+        bool   showMenu(const MenuRequest&, MenuCallback) override;   // a juce::PopupMenu in a MenuLook, under the zoom
+        void   dismissMenus() override;
+        bool   chooseFiles(const FileRequest&, FilesCallback) override;   // a native juce::FileChooser on this editor
+        bool   copyText(std::string_view utf8) override;                  // juce::SystemClipboard
 
         class ParentWatcher;                         // G7b: followPlacement() on an ancestor's move (EditorHost.cpp)
 
@@ -221,6 +230,10 @@ namespace funkgui
         int   zoomTarget_ = 100;                     // what the next frame applies: HostServices::zoomPercent()
         int   zoomApplied_ = 100;                    // what the editor is sized and drawn at: Diagnostics
         float zoomScale_ = 1.0f;                     // zoomApplied_ / 100: editor px per logical px
+
+        // Web Sprint B: the menus, the chooser and their pending callbacks. ~EditorHost lets them go before anything
+        // else, and so does an editor that leaves its window (parentHierarchyChanged with no peer).
+        std::unique_ptr<HostServicesJuce> services_;
 
         // Declared last, destroyed first (and reset first in ~EditorHost): it calls back into the members above.
         std::unique_ptr<ParentWatcher> parentWatcher_;
