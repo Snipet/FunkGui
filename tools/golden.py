@@ -24,7 +24,10 @@ candidates into <build>/golden-candidates, and `adopt`, run by the lead from the
       the UI freeze FZ5). Merge rules: arm64 candidates alone overwrite base/ (a stale arm64 overlay is removed, x86_64
       overlay rows no longer in base are pruned); with --x86, a row equal on both arches (or, for a numeric tolerance,
       x86 within tolerance of arm64) goes to base/, any other row to base/ (arm64 value) and both overlays, and an
-      xarch. row that differs aborts: it is a determinism bug.
+      xarch. row that differs aborts: it is a determinism bug. wasm32 (v0.12.0: a probe compiled to WebAssembly and
+      run under node, --arch wasm32) is an architecture like the others to report and diff, and its overlay
+      <root>/wasm32/ is pruned like x86_64's whenever base moves; adopt does not write a wasm32 overlay yet, so
+      wasm32 candidates are refused there.
   golden.py selftest
       This file's own checks, in a scratch directory (never the golden tree, never the allow variable).
 
@@ -52,7 +55,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 KEY_RE = re.compile(r"^[a-z0-9][a-z0-9._:+-]{0,119}$")
-ARCHES = ("arm64", "x86_64")
+ARCHES = ("arm64", "x86_64", "wasm32")
 BLOCKING = ("spec_fail", "harness_error")
 ADOPTABLE = ("pass", "golden_drift", "golden_missing")        # every other status (unreadable, ...) is refused
 ALLOW_ENV_RE = re.compile(r"^[A-Z][A-Z0-9_]*_ALLOW_BLESS$")
@@ -496,19 +499,27 @@ def plan_single(root: Path, c: Candidate) -> Plan:
     if arm.is_file():
         plan.deletes.add(arm)
         plan.notes.append("%s: removed the arm64 overlay (base now holds the arm64 values)" % c.label)
-    x86 = root / "x86_64" / c.scope / (c.probe + ".txt")
-    if x86.is_file():
-        kept = {k: r for k, r in read_rows(x86).items() if k in rows and not k.startswith("xarch.")}
-        if not kept:
-            plan.deletes.add(x86)
-            plan.notes.append("%s: removed the x86_64 overlay (none of its keys is left in base)" % c.label)
-        else:
-            plan.writes[x86] = write_rows(x86, c.probe, c.scope, kept)
-            dropped = len(read_rows(x86)) - len(kept)
-            if dropped:
-                plan.notes.append("%s: pruned %d x86_64 overlay row(s) no longer in base" % (c.label, dropped))
+    for arch in ARCHES[1:]:
+        prune_overlay(root, arch, c, rows, plan)
     plan_sidecars(root, c, c.sidecars, plan)
     return plan
+
+
+def prune_overlay(root: Path, arch: str, c: Candidate, rows: dict[str, Row], plan: Plan) -> None:
+    """An overlay this adoption does not write keeps only the rows whose keys base still holds (an overlay-only key is
+    a harness error), and never an xarch. row."""
+    over = root / arch / c.scope / (c.probe + ".txt")
+    if not over.is_file():
+        return
+    kept = {k: r for k, r in read_rows(over).items() if k in rows and not k.startswith("xarch.")}
+    if not kept:
+        plan.deletes.add(over)
+        plan.notes.append("%s: removed the %s overlay (none of its keys is left in base)" % (c.label, arch))
+    else:
+        plan.writes[over] = write_rows(over, c.probe, c.scope, kept)
+        dropped = len(read_rows(over)) - len(kept)
+        if dropped:
+            plan.notes.append("%s: pruned %d %s overlay row(s) no longer in base" % (c.label, dropped, arch))
 
 
 def plan_sidecars(root: Path, c: Candidate, sidecars: dict[str, Path], plan: Plan) -> None:
@@ -558,6 +569,8 @@ def plan_merge(root: Path, arm: Candidate, x86: Candidate) -> Plan:
             plan.deletes.add(path)
     if over_a:
         plan.notes.append("%s: %d row(s) differ between the arches -> both overlays" % (arm.label, len(over_a)))
+    for arch in ARCHES[2:]:                                     # overlays this merge does not write (wasm32)
+        prune_overlay(root, arch, arm, base, plan)
     for key in set(arm.sidecars) | set(x86.sidecars):
         pa, px = arm.sidecars.get(key), x86.sidecars.get(key)
         if pa is None or px is None or pa.read_text(encoding="utf-8") != px.read_text(encoding="utf-8"):
@@ -617,8 +630,8 @@ def adopt(a: argparse.Namespace, environ) -> int:
         raise Refused("no candidate in %s matches --only %s" % (build / "golden-candidates", a.only))
     wrong = sorted({c.arch for c in chosen} - {"arm64"})
     if wrong:
-        raise Refused("the primary build must hold arm64 candidates (found %s); pass an x86_64 build with --x86"
-                      % wrong)
+        raise Refused("the primary build must hold arm64 candidates (found %s); pass an x86_64 build with --x86 "
+                      "(a wasm32 overlay is not adopted by this tool yet)" % wrong)
     results = load_results(build)
     x86_results = load_results(x86_build) if x86_build else {}
     x86_cands = {(c.scope, c.probe): c for c in discover(x86_build, "x86_64")} if x86_build else {}
@@ -723,6 +736,7 @@ def cmd_selftest(_: argparse.Namespace) -> int:
         write_atomic(root / "base" / "global" / "p.txt", "a\t1\texact\nb\t2\tabs:0.1\n")
         write_atomic(root / "arm64" / "global" / "p.txt", "b\t2.5\tabs:0.1\n")
         write_atomic(root / "x86_64" / "global" / "p.txt", "b\t2.4\tabs:0.1\n")
+        write_atomic(root / "wasm32" / "global" / "p.txt", "a\t1.5\texact\nb\t2.3\tabs:0.1\n")
         write_atomic(root / "base" / "global" / "p.old.lines", "stale\n")
         sh("git", "add", "-A")
         sh("git", "commit", "-q", "-m", "init")
@@ -808,6 +822,13 @@ def cmd_selftest(_: argparse.Namespace) -> int:
         refused("adopt.geometry_before_fz5", lambda: adopt(ns(geo, only=("ui.geometry",)), env), "--allow-geometry")
         refused("adopt.x86_as_primary", lambda: adopt(ns(build("x86only", "x86_64", "a\t1\texact\n")), env),
                 "must hold arm64 candidates")
+        # wasm32 (v0.12.0): discovered and reported like the other arches; adopt writes no wasm32 overlay yet
+        wasm = build("wasmonly", "wasm32", "a\t1\texact\n", sidecars={"a11y": "x\n"})
+        check("discover.wasm32", [(c.arch, c.label, sorted(c.sidecars)) for c in discover(wasm)]
+              == [("wasm32", "global/p", ["a11y"])])
+        check("golden_rows.wasm32_overlay", golden_rows(root, "wasm32", "global", "p") ==
+              {"a": Row("a", "1.5", Tol("exact")), "b": Row("b", "2.3", Tol("abs", 0.1))})
+        refused("adopt.wasm32_as_primary", lambda: adopt(ns(wasm), env), "must hold arm64 candidates")
 
         (root / "base" / "global" / "dirty.txt").write_text("a\t1\texact\n")
         refused("adopt.uncommitted_golden_tree", lambda: adopt(ns(arm), env), "uncommitted changes")
@@ -829,6 +850,8 @@ def cmd_selftest(_: argparse.Namespace) -> int:
         check("adopt.single.arm_overlay_removed", not (root / "arm64" / "global" / "p.txt").exists())
         check("adopt.single.x86_overlay_kept", read_rows(root / "x86_64" / "global" / "p.txt") ==
               {"b": Row("b", "2.4", Tol("abs", 0.1))})
+        check("adopt.single.wasm_overlay_kept", read_rows(root / "wasm32" / "global" / "p.txt") ==
+              {"a": Row("a", "1.5", Tol("exact")), "b": Row("b", "2.3", Tol("abs", 0.1))})
         check("adopt.single.sidecar", (root / "base" / "global" / "p.a11y.lines").read_text() == "x\ny\n"
               and not (root / "base" / "global" / "p.old.lines").exists())
         check("adopt.single.header", (root / "base" / "global" / "p.txt").read_text().startswith(

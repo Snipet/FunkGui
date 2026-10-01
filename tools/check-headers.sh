@@ -2,7 +2,7 @@
 # tools/check-headers.sh: every public header under include/funkgui compiles standalone (CTest fg.headers; FCompressor
 # docs/design/03-build-verify-process.md §4.7 item 2, lead revision 1 of docs/sprints/s0.md).
 #
-#   check-headers.sh --cxx <compiler> --flags <file> --root <FunkGui source dir> [--bgfx] [--sdk <path>]
+#   check-headers.sh --cxx <compiler> --flags <file> --root <FunkGui source dir> [--bgfx] [--no-juce] [--sdk <path>]
 #                    [--min-macos <version>] [--extra-flag <flag>]...
 #
 # --extra-flag adds a compiler flag to every header's compile: cmake/FunkGuiPlatform.cmake's JUCE 8.0.4 workaround where
@@ -17,9 +17,12 @@
 # -ffp-contract=off, compiled as c++-header (objective-c++-header when it contains Objective-C), so a missing include,
 # a non-inline definition in a header or a warning fails. include/funkgui/gpu/ is checked only with --bgfx. Negative
 # check: core/Config.h without the product seams must fail with its "call funkgui_configure_product()" #error.
+#
+# --no-juce (v0.12.0, a FUNKGUI_WITH_JUCE=OFF build): include/funkgui/juce/ and include/funkgui/presets/ include JUCE
+# and are skipped; every other header must compile with no JUCE on the include path (the flags file names none there).
 set -uo pipefail
 
-cxx="" flags="" root="" bgfx=0 sdk="" minos="" extra=()
+cxx="" flags="" root="" bgfx=0 juce=1 sdk="" minos="" extra=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --cxx) cxx="${2:-}"; shift 2 ;;
@@ -28,13 +31,14 @@ while [ $# -gt 0 ]; do
     --sdk) sdk="${2:-}"; shift 2 ;;
     --min-macos) minos="${2:-}"; shift 2 ;;
     --bgfx) bgfx=1; shift ;;
+    --no-juce) juce=0; shift ;;
     --extra-flag) extra+=("${2:-}"); shift 2 ;;
     *) echo "check-headers.sh: unknown argument $1" >&2; exit 2 ;;
   esac
 done
 if [ -z "$cxx" ] || [ ! -f "$flags" ] || [ ! -d "$root/include/funkgui" ]; then
-  echo "usage: check-headers.sh --cxx <compiler> --flags <file> --root <FunkGui source dir> [--bgfx] [--sdk <path>]" \
-       "[--min-macos <version>] [--extra-flag <flag>]..." >&2
+  echo "usage: check-headers.sh --cxx <compiler> --flags <file> --root <FunkGui source dir> [--bgfx] [--no-juce]" \
+       "[--sdk <path>] [--min-macos <version>] [--extra-flag <flag>]..." >&2
   exit 2
 fi
 root="$(cd "$root" && pwd)"
@@ -76,11 +80,17 @@ exceptions=(
 log="$build/fg-headers.last.log"                          # the last compile's output, kept for inspection
 checked=0 passed=0 failed=0 skipped=0
 
-echo "fg.headers: $root/include/funkgui (bgfx: $([ $bgfx -eq 1 ] && echo yes || echo no); $cxx)"
+echo "fg.headers: $root/include/funkgui (bgfx: $([ $bgfx -eq 1 ] && echo yes || echo no);" \
+     "juce: $([ $juce -eq 1 ] && echo yes || echo no); $cxx)"
 while IFS= read -r header; do
   rel="${header#"$root"/}"
   if [ $bgfx -eq 0 ] && [[ "$rel" == include/funkgui/gpu/* ]]; then
     echo "SKIP  $rel  (gpu/ needs FUNKGUI_WITH_BGFX)"
+    skipped=$((skipped + 1))
+    continue
+  fi
+  if [ $juce -eq 0 ] && [[ "$rel" == include/funkgui/juce/* || "$rel" == include/funkgui/presets/* ]]; then
+    echo "SKIP  $rel  (needs FUNKGUI_WITH_JUCE)"
     skipped=$((skipped + 1))
     continue
   fi

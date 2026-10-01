@@ -19,6 +19,7 @@
 #include <funkgui/canvas/Tags.h>
 #include <funkgui/core/Ease.h>
 #include <funkgui/core/Theme.h>
+#include <funkgui/panel/HeadlessGuiScope.h>
 #include <funkgui/panel/HostServices.h>
 #include <funkgui/params/GestureController.h>
 #include <funkgui/params/ParamPort.h>
@@ -27,8 +28,6 @@
 #include <funkgui/widgets/AttachedWord.h>
 #include <funkgui/widgets/RuleSlider.h>
 #include <funkgui/widgets/ValueModel.h>
-
-#include <juce_gui_basics/juce_gui_basics.h>
 
 #include <bit>
 #include <cmath>
@@ -451,7 +450,7 @@ namespace
 
 int main(int argc, char** argv)
 {
-    const juce::ScopedJuceInitialiser_GUI juceInit;      // the atlas bakes through JUCE's font stack
+    const funkgui::HeadlessGuiScope gui;                 // JUCE's GUI side, when there is JUCE: the atlas bakes there
     T::Probe P("fg.ruleslider.input", "", argc, argv);
     funkgui::FontService::get().atlas();
     P.eq("font.ok", funkgui::FontService::get().ok(), 1);

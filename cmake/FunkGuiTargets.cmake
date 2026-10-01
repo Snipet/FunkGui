@@ -9,6 +9,10 @@
 # Every source list is a per-directory glob with CONFIGURE_DEPENDS, so later cards add files, never CMake edits
 # (03 §1.1, K3 #2):
 #   src/{core,text,canvas,panel,params,widgets,a11y,live,prefs,juce}/**   -> FunkGuiCore  (C++ only, no bgfx, no ObjC)
+#     FUNKGUI_WITH_JUCE=OFF (v0.12.0): src/nojuce/** in place of src/juce/**. Everything in core that includes JUCE
+#     lives under src/juce/ (the atlas bake, the PNG encoder, the properties-file preferences, JuceParamPort,
+#     MenuLook, …); src/nojuce/ holds what a JUCE-free build defines instead. The other nine directories are
+#     JUCE-free, which the `nojuce` and `web` presets prove by compiling them with no JUCE on the include path.
 #   src/gpu/**                                                           -> FunkGuiGpu   (.cpp and .mm; *.mm on
 #                                                                           Apple only, src/gpu/linux/** on Linux only)
 #   src/presets/**                                                       -> FunkPresets  (empty placeholder until then)
@@ -26,6 +30,11 @@ if(FUNKGUI_WITH_BGFX AND NOT FUNKGUI_HARNESS_ONLY)
 else()
   set_property(GLOBAL PROPERTY FUNKGUI_GPU OFF)
 endif()
+if(FUNKGUI_WITH_JUCE AND NOT FUNKGUI_HARNESS_ONLY)              # v0.12.0: this configuration has JUCE under it
+  set_property(GLOBAL PROPERTY FUNKGUI_JUCE ON)
+else()
+  set_property(GLOBAL PROPERTY FUNKGUI_JUCE OFF)
+endif()
 
 # Warnings for FunkGui's own sources in FunkGui's own targets (tools, tests): the FunkGui test rule of 02 §3.11 and
 # CLAUDE.md. Applied per source file, so JUCE's and bgfx's sources compiled into the same targets never get them.
@@ -42,6 +51,16 @@ add_library(FunkGuiHarness INTERFACE)
 add_library(FunkGui::harness ALIAS FunkGuiHarness)
 target_include_directories(FunkGuiHarness INTERFACE ${PROJECT_SOURCE_DIR}/include)
 target_compile_features(FunkGuiHarness INTERFACE cxx_std_20)
+# The harness exports the same include root as FunkGui::core, so it carries the same answer to FUNKGUI_HAS_JUCE
+# (include/funkgui/core/HasJuce.h): a target that links only the harness must not read a JUCE-free build as a JUCE one.
+# Not in a harness-only configuration, which has no core.
+if(NOT FUNKGUI_HARNESS_ONLY)
+  if(FUNKGUI_WITH_JUCE)
+    target_compile_definitions(FunkGuiHarness INTERFACE FUNKGUI_HAS_JUCE=1)
+  else()
+    target_compile_definitions(FunkGuiHarness INTERFACE FUNKGUI_HAS_JUCE=0)
+  endif()
+endif()
 
 #=======================================================================================================================
 # Consumer functions (02 §1.5, §1.6, §1.8; 03 §1.2). Defined in every configuration.
@@ -193,6 +212,32 @@ function(_funkgui_internal_target target)
   if(ARGN OR _lib)
     set_source_files_properties(${ARGN} ${_lib} TARGET_DIRECTORY ${target} PROPERTIES COMPILE_OPTIONS "${_warn}")
   endif()
+  # Emscripten (v0.12.0, the `web` preset): FunkGui's own executables are run by node (CTest's emulator), so they see
+  # the host's file system and environment (goldens, candidates and sandboxes are host paths), return main()'s exit
+  # code, and may grow their heap.
+  if(EMSCRIPTEN)
+    get_target_property(_type ${target} TYPE)
+    if(_type STREQUAL "EXECUTABLE")
+      target_link_options(${target} PRIVATE -sNODERAWFS=1 -sEXIT_RUNTIME=1 -sALLOW_MEMORY_GROWTH=1)
+    endif()
+  endif()
+endfunction()
+
+# Internal (v0.12.0): whether any of the given sources needs JUCE, told by its own unconditional includes: a line that
+# starts with #include and names a JUCE module header, a header of include/funkgui/{juce,presets,gpu}/ or
+# params/JuceParamPort.h. With FUNKGUI_WITH_JUCE=OFF such a tool or test is not defined; everything else is JUCE-free
+# and is built there, so a file never has to be listed anywhere to take part (and one that is misjudged fails to
+# compile in the `nojuce` preset).
+function(_funkgui_needs_juce out_var)
+  set(${out_var} OFF PARENT_SCOPE)
+  foreach(_f IN LISTS ARGN)
+    file(STRINGS "${_f}" _hit LIMIT_COUNT 1
+         REGEX "^#include <(juce_[a-z_]+/|funkgui/(juce|presets|gpu)/|funkgui/params/JuceParamPort\\.h)")
+    if(_hit)
+      set(${out_var} ON PARENT_SCOPE)
+      return()
+    endif()
+  endforeach()
 endfunction()
 
 # funkgui_add_tool(<name> SOURCES <files>... [GPU])
@@ -200,6 +245,8 @@ endfunction()
 # A FunkGui tool (02 §1.2): a JUCE console app, EXCLUDE_FROM_ALL, linking FunkGui::core (+ ::gpu with GPU) and
 # FunkGui::harness, with FunkGui's own product identity (environment prefix FUNKGUI_). Used for tools/*.cpp and by
 # tools/<Name>/CMakeLists.txt. Built only when FUNKGUI_BUILD_TOOLS is ON; `funkgui_tools` builds them all.
+# FUNKGUI_WITH_JUCE=OFF (v0.12.0): a plain executable; a tool whose sources need JUCE is not defined (its name is
+# appended to the global property FUNKGUI_JUCE_ONLY_TOOLS, which test/CMakeLists.txt reads to skip its tests).
 function(funkgui_add_tool name)
   cmake_parse_arguments(PARSE_ARGV 1 _fg "GPU" "" "SOURCES")
   if(NOT _fg_SOURCES OR _fg_UNPARSED_ARGUMENTS)
@@ -210,7 +257,18 @@ function(funkgui_add_tool name)
     message(STATUS "FunkGui: tool ${name} needs FUNKGUI_WITH_BGFX; not defined")
     return()
   endif()
-  juce_add_console_app(${name} PRODUCT_NAME ${name})
+  get_property(_juce GLOBAL PROPERTY FUNKGUI_JUCE)
+  if(_juce)
+    juce_add_console_app(${name} PRODUCT_NAME ${name})
+  else()
+    _funkgui_needs_juce(_needs ${_fg_SOURCES})
+    if(_needs)
+      message(STATUS "FunkGui: tool ${name} needs JUCE (FUNKGUI_WITH_JUCE is OFF); not defined")
+      set_property(GLOBAL APPEND PROPERTY FUNKGUI_JUCE_ONLY_TOOLS ${name})
+      return()
+    endif()
+    add_executable(${name})
+  endif()
   set_target_properties(${name} PROPERTIES EXCLUDE_FROM_ALL TRUE)
   target_sources(${name} PRIVATE ${_fg_SOURCES})
   target_link_libraries(${name} PRIVATE FunkGui::core FunkGui::harness)
@@ -231,7 +289,12 @@ endif()
 #=======================================================================================================================
 # Source globs, per directory (02 §1.1: anything that includes bgfx or Objective-C lives under gpu/)
 #=======================================================================================================================
-set(_fg_core_modules core text canvas panel params widgets a11y live prefs juce)
+set(_fg_core_modules core text canvas panel params widgets a11y live prefs)
+if(FUNKGUI_WITH_JUCE)
+  list(APPEND _fg_core_modules juce)                 # what includes JUCE outside gpu/ and presets/
+else()
+  list(APPEND _fg_core_modules nojuce)               # v0.12.0: the JUCE-free counterparts of src/juce/
+endif()
 set(_fg_core_sources "")
 set(_fg_all_sources "")
 foreach(_m IN LISTS _fg_core_modules ITEMS gpu presets)
@@ -261,6 +324,9 @@ set_property(GLOBAL PROPERTY FUNKGUI_ALL_SOURCES "${_fg_all_sources}")
 # consumer's JUCE configuration, 02 §1.3); FunkGui's own tools and tests (FUNKGUI_PRECOMPILED_JUCE) get FunkGuiJuce.
 set(_fg_precompiled "$<BOOL:$<TARGET_PROPERTY:FUNKGUI_PRECOMPILED_JUCE>>")
 function(_funkgui_link_juce target)
+  if(NOT FUNKGUI_WITH_JUCE)
+    return()                                         # v0.12.0: no JUCE under this build
+  endif()
   foreach(_mod IN LISTS ARGN)
     target_link_libraries(${target} INTERFACE $<$<NOT:${_fg_precompiled}>:juce::${_mod}>)
   endforeach()
@@ -269,12 +335,46 @@ endfunction()
 
 #=======================================================================================================================
 # FunkGuiFonts: the bundled face and its licence as binary data (02 §1.6). BundledFont.h names the symbols.
+#
+# FUNKGUI_WITH_JUCE=OFF (v0.12.0): the same target, header and symbols without juce_add_binary_data
+# (cmake/FunkGuiEmbed.cmake, run at build time), plus funkguifonts::FunkGuiAtlasmacos_bin: the committed bake of the
+# atlas, fonts/FunkGuiAtlas-macos.bin, which FontService adopts where nothing can bake (src/text/FontService.cpp;
+# tools/AtlasBlob.cpp writes the file and fg.font.baked holds it to macOS's live bake). A JUCE build bakes at run time
+# and does not carry the blob.
 #=======================================================================================================================
-juce_add_binary_data(FunkGuiFonts
-    HEADER_NAME FunkGuiFonts.h
-    NAMESPACE   funkguifonts
-    SOURCES     ${PROJECT_SOURCE_DIR}/fonts/JetBrainsMono-Regular-subset.ttf
-                ${PROJECT_SOURCE_DIR}/fonts/JetBrainsMono-LICENSE.txt)
+if(FUNKGUI_WITH_JUCE)
+  juce_add_binary_data(FunkGuiFonts
+      HEADER_NAME FunkGuiFonts.h
+      NAMESPACE   funkguifonts
+      SOURCES     ${PROJECT_SOURCE_DIR}/fonts/JetBrainsMono-Regular-subset.ttf
+                  ${PROJECT_SOURCE_DIR}/fonts/JetBrainsMono-LICENSE.txt)
+else()
+  set(_fg_fonts_dir ${FunkGui_BINARY_DIR}/funkgui-fonts)
+  set(_fg_fonts_files
+      JetBrainsMonoRegularsubset_ttf=${PROJECT_SOURCE_DIR}/fonts/JetBrainsMono-Regular-subset.ttf
+      JetBrainsMonoLICENSE_txt=${PROJECT_SOURCE_DIR}/fonts/JetBrainsMono-LICENSE.txt
+      FunkGuiAtlasmacos_bin=${PROJECT_SOURCE_DIR}/fonts/FunkGuiAtlas-macos.bin)
+  set(_fg_fonts_inputs "")
+  foreach(_entry IN LISTS _fg_fonts_files)
+    string(REGEX REPLACE "^[^=]+=" "" _file "${_entry}")
+    if(NOT EXISTS "${_file}")
+      message(FATAL_ERROR "FunkGui: missing ${_file} (the atlas blob is written by `FunkGuiAtlasBlob write` on macOS)")
+    endif()
+    list(APPEND _fg_fonts_inputs "${_file}")
+  endforeach()
+  list(JOIN _fg_fonts_files "|" _fg_fonts_arg)
+  file(MAKE_DIRECTORY ${_fg_fonts_dir})
+  add_custom_command(OUTPUT ${_fg_fonts_dir}/FunkGuiFonts.h ${_fg_fonts_dir}/FunkGuiFonts.cpp
+    COMMAND ${CMAKE_COMMAND} -DFUNKGUI_EMBED_OUT=${_fg_fonts_dir} -DFUNKGUI_EMBED_NAME=FunkGuiFonts
+            -DFUNKGUI_EMBED_NAMESPACE=funkguifonts "-DFUNKGUI_EMBED_FILES=${_fg_fonts_arg}"
+            -P ${PROJECT_SOURCE_DIR}/cmake/FunkGuiEmbed.cmake
+    DEPENDS ${_fg_fonts_inputs} ${PROJECT_SOURCE_DIR}/cmake/FunkGuiEmbed.cmake
+    COMMENT "FunkGui: embedding the bundled face and the baked atlas"
+    VERBATIM)
+  add_library(FunkGuiFonts STATIC ${_fg_fonts_dir}/FunkGuiFonts.cpp ${_fg_fonts_dir}/FunkGuiFonts.h)
+  target_include_directories(FunkGuiFonts PUBLIC ${_fg_fonts_dir})
+  target_compile_features(FunkGuiFonts PRIVATE cxx_std_20)
+endif()
 # juce_add_binary_data makes a STATIC library with default visibility; linked into a plug-in, its funkguifonts::
 # symbols (the font arrays, getNamedResource, ...) would be exported, and release.sh's `nm -gU` check (03 §5, K2 #26f)
 # would fail. Hidden, like bgfx, bx and bimg (S0 review R-G1 #2).
@@ -285,7 +385,7 @@ set_target_properties(FunkGuiFonts PROPERTIES CXX_VISIBILITY_PRESET hidden VISIB
 # machine budget of 03 §2.11: one JUCE compile per build directory, not one per executable). Internal, never linked
 # by a consumer's product; EXCLUDE_FROM_ALL.
 #=======================================================================================================================
-if(FUNKGUI_BUILD_TOOLS OR FUNKGUI_BUILD_TESTS)
+if(FUNKGUI_WITH_JUCE AND (FUNKGUI_BUILD_TOOLS OR FUNKGUI_BUILD_TESTS))
   add_library(FunkGuiJuce STATIC EXCLUDE_FROM_ALL)
   target_link_libraries(FunkGuiJuce PRIVATE juce::juce_gui_basics juce::juce_data_structures juce::juce_audio_processors)
   target_compile_definitions(FunkGuiJuce PRIVATE JUCE_STANDALONE_APPLICATION=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
@@ -308,6 +408,13 @@ target_include_directories(FunkGuiCore INTERFACE ${PROJECT_SOURCE_DIR}/include)
 target_compile_features(FunkGuiCore INTERFACE cxx_std_20)
 _funkgui_link_juce(FunkGuiCore juce_gui_basics juce_data_structures juce_audio_processors)
 target_link_libraries(FunkGuiCore INTERFACE FunkGuiFonts)
+# FUNKGUI_HAS_JUCE (v0.12.0; include/funkgui/core/HasJuce.h), beside FunkGuiGpu's FUNKGUI_HAS_BGFX: 1 with JUCE, 0
+# for the JUCE-free core.
+if(FUNKGUI_WITH_JUCE)
+  target_compile_definitions(FunkGuiCore INTERFACE FUNKGUI_HAS_JUCE=1)
+else()
+  target_compile_definitions(FunkGuiCore INTERFACE FUNKGUI_HAS_JUCE=0)
+endif()
 
 #=======================================================================================================================
 # FunkGuiGpu (FunkGui::gpu), FunkGuiShaders, licences: only with bgfx (02 §1.2, §1.5, §1.6)
@@ -430,6 +537,20 @@ add_library(FunkGui INTERFACE)
 target_link_libraries(FunkGui INTERFACE FunkGuiCore)
 if(TARGET FunkGuiGpu)
   target_link_libraries(FunkGui INTERFACE FunkGuiGpu)
+endif()
+
+#=======================================================================================================================
+# FunkGuiCoreCheck (v0.12.0): FunkGui's own build without JUCE compiles every core source once, as a static library in
+# `all`, under FunkGui's warnings (-Werror): the proof that the core needs no JUCE, on the host compiler (the `nojuce`
+# preset) and under Emscripten (the `web` preset), whatever tools and tests are built. Top level only; never a
+# consumer's.
+#=======================================================================================================================
+if(PROJECT_IS_TOP_LEVEL AND NOT FUNKGUI_WITH_JUCE)
+  add_library(FunkGuiCoreCheck STATIC)
+  target_link_libraries(FunkGuiCoreCheck PRIVATE FunkGui::core)
+  funkgui_configure_product(FunkGuiCoreCheck PRODUCT FunkGui OBJC_PREFIX FunkGui ENV_PREFIX FUNKGUI_
+                            PREFS_FOLDER FunkGui)
+  _funkgui_internal_target(FunkGuiCoreCheck)
 endif()
 
 #=======================================================================================================================

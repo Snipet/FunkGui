@@ -13,8 +13,8 @@
 //       primitives, colours and text gamma left out). Live parity (03 §3.6) compares its geometry line with the
 //       headless probe's hash of the same state. --legacy-hr prints HR's layout.* metrics instead (below).
 //
-//   funkgui_framerender --fingerprint <dump> [--legacy-hr] --check <probe> --golden-root <dir> --arch arm64|x86_64
-//                       [--bless-to <dir>] [--results <dir>] [--only <glob>] [--verbose]
+//   funkgui_framerender --fingerprint <dump> [--legacy-hr] --check <probe> --golden-root <dir>
+//                       --arch arm64|x86_64|wasm32 [--bless-to <dir>] [--results <dir>] [--only <glob>] [--verbose]
 //       The same numbers as golden rows of the Harness v2 probe <probe> (global scope; there is no --bless, 03 §3.2):
 //       frame.* (Fingerprint.h addMetrics, plus frame.view_w/h), or with --legacy-hr HR's nine rows under HR's own
 //       keys (layout.geometry, static_count, text_count, rank_strokes, segments, view_w, view_h, max_x, max_y), so
@@ -34,10 +34,9 @@
 #include <funkgui/canvas/PrimList.h>
 #include <funkgui/canvas/SoftRaster.h>
 #include <funkgui/canvas/Tags.h>
+#include <funkgui/panel/HeadlessGuiScope.h>
 #include <funkgui/test/Harness.h>
 #include <funkgui/text/FontService.h>
-
-#include <juce_gui_basics/juce_gui_basics.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -58,7 +57,7 @@ namespace
         "usage: funkgui_framerender <dump> <out.png> [ss 1-4, default 2]\n"
         "       funkgui_framerender --fingerprint <dump> [--legacy-hr]\n"
         "       funkgui_framerender --fingerprint <dump> [--legacy-hr] --check <probe> --golden-root <dir> "
-        "--arch arm64|x86_64 [--bless-to <dir>] [--results <dir>] [--only <glob>] [--verbose]\n";
+        "--arch arm64|x86_64|wasm32 [--bless-to <dir>] [--results <dir>] [--only <glob>] [--verbose]\n";
 
     // The whole file, or false when it cannot be read.
     bool readFile(const std::string& path, std::string& out)
@@ -253,7 +252,7 @@ namespace
 
 int main(int argc, char** argv)
 {
-    const juce::ScopedJuceInitialiser_GUI juceInit;      // the atlas bakes through JUCE's font stack
+    const funkgui::HeadlessGuiScope gui;                 // JUCE's GUI side, when there is JUCE: the atlas bakes there
 
     // The tool's own flags come out first; with --check, what is left goes to the Probe (whose flags they are).
     std::string dump, probe;

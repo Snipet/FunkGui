@@ -393,6 +393,14 @@ namespace
             S.eq("overlay.other_arch_uses_base", base.exit, 0);
             const auto stale = S.run(sb, "self.over", "", sb.args(), body);
             S.eq("overlay.base_value_drifts_on_arm64", stale.exit, 2);
+            // wasm32 (v0.12.0) is an architecture like the other two: its own overlay, and nobody else's.
+            put(sb.overlay("wasm32", "self.over"), "a\t7\texact\n");
+            const auto wasm = S.run(sb, "self.over", "", sb.args({}, "wasm32"), [](T::Probe& P) {
+                P.num("a", 7, T::Tol::exact());
+                P.num("b", 2, T::Tol::exact());
+            });
+            S.eq("overlay.wasm32_applies", wasm.exit, 0);
+            S.eq("overlay.wasm32_is_not_x86_64s", S.run(sb, "self.over", "", sb.args({}, "x86_64"), body).exit, 0);
         }
         {
             const Sandbox sb = S.fresh("overlay-only-key");
@@ -472,6 +480,7 @@ namespace
         S.eq("flags.no_golden_root", exitOf({ "--arch", "arm64" }), 4);
         S.eq("flags.no_arch", exitOf({ "--golden-root", g }), 4);
         S.eq("flags.bad_arch", exitOf({ "--golden-root", g, "--arch", "ppc" }), 4);
+        S.eq("flags.arch_wasm32", exitOf({ "--golden-root", g, "--arch", "wasm32" }), 0);
         S.eq("flags.value_missing", exitOf({ "--golden-root", g, "--arch", "arm64", "--results" }), 4);
         S.eq("flags.value_is_flag", exitOf({ "--golden-root", "--arch", "arm64" }), 4);
         S.eq("flags.mode_mismatch", exitOf({ "--golden-root", g, "--arch", "arm64", "--mode", "clean" }, "bus-g"), 4);

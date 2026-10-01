@@ -8,8 +8,29 @@ cmake_minimum_required(VERSION 3.30)
 # sets its own (HR CMakeLists.txt:133, 03 §2.1). Guarded so that a consumer's cache is never written from here.
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS")
+  # Web (v0.12.0; the `web` preset): FunkGui's own Emscripten build of the JUCE-free core. The toolchain file has to be
+  # chosen before project(); where the caller gave none it is Emscripten's own, found through em-config (on PATH with
+  # Homebrew's emscripten and with an activated emsdk alike), so the preset needs no environment variable. A consumer
+  # chooses its own toolchain: this option exists only at top level.
+  option(FUNKGUI_WEB "FunkGui's own build for the browser: Emscripten's toolchain, FUNKGUI_WITH_JUCE=OFF" OFF)
+  if(FUNKGUI_WEB AND NOT CMAKE_TOOLCHAIN_FILE)
+    find_program(FUNKGUI_EM_CONFIG em-config)
+    if(NOT FUNKGUI_EM_CONFIG)
+      message(FATAL_ERROR "FunkGui: FUNKGUI_WEB needs Emscripten (em-config is not on PATH): install it (brew install "
+                          "emscripten, or emsdk) or pass -DCMAKE_TOOLCHAIN_FILE")
+    endif()
+    execute_process(COMMAND ${FUNKGUI_EM_CONFIG} EMSCRIPTEN_ROOT OUTPUT_VARIABLE _fg_em_root
+                    OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _fg_em_rc)
+    if(NOT _fg_em_rc EQUAL 0 OR NOT EXISTS "${_fg_em_root}/cmake/Modules/Platform/Emscripten.cmake")
+      message(FATAL_ERROR "FunkGui: `em-config EMSCRIPTEN_ROOT` gave '${_fg_em_root}', which has no "
+                          "cmake/Modules/Platform/Emscripten.cmake")
+    endif()
+    set(CMAKE_TOOLCHAIN_FILE "${_fg_em_root}/cmake/Modules/Platform/Emscripten.cmake" CACHE FILEPATH
+        "Emscripten's CMake toolchain file (from em-config EMSCRIPTEN_ROOT)")
+  endif()
   # Linux (v0.11.0): Clang, as on macOS, unless the caller chose a compiler (-DCMAKE_CXX_COMPILER, or CC/CXX).
-  if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux" AND NOT DEFINED CMAKE_CXX_COMPILER AND NOT DEFINED ENV{CXX})
+  if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux" AND NOT FUNKGUI_WEB AND NOT DEFINED CMAKE_CXX_COMPILER
+     AND NOT DEFINED ENV{CXX})
     set(CMAKE_C_COMPILER clang)
     set(CMAKE_CXX_COMPILER clang++)
   endif()
@@ -31,10 +52,10 @@ if(PROJECT_IS_TOP_LEVEL)
   # No C++20 modules anywhere: without this, Ninja and a Clang with clang-scan-deps (Linux) scan every source twice.
   set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
   include(${PROJECT_SOURCE_DIR}/cmake/FunkGuiPlatform.cmake)
-  funkgui_juce_compile_workarounds()                 # before any target: JUCE's modules compile inside FunkGui's
 endif()
 
 # ---- Options (02 §1.7). A consumer sets them as NORMAL variables before FetchContent_MakeAvailable (CMP0077). --------
+option(FUNKGUI_WITH_JUCE        "JUCE under FunkGui (OFF: a JUCE-free FunkGui::core; no gpu, no presets)"   ON)
 option(FUNKGUI_WITH_BGFX        "FunkGui::gpu, shaders and bgfx (OFF: headless, FunkGui = FunkGuiCore)" ON)
 option(FUNKGUI_WITH_PRESETS     "FunkGui::presets (FunkPresets; SQLite once it has sources)"                 ON)
 option(FUNKGUI_HARNESS_ONLY     "Define only FunkGui::harness and never require JUCE (DSP-only consumers)"   OFF)
@@ -50,6 +71,29 @@ if(NOT FUNKGUI_TRANSIENT_VB_MIB MATCHES "^[1-9][0-9]*$")
 endif()
 if(FUNKGUI_HARNESS_ONLY)
   set(FUNKGUI_BUILD_TOOLS OFF)                       # tools need JUCE
+endif()
+
+# FUNKGUI_WITH_JUCE=OFF (v0.12.0): FunkGui::core with no JUCE under it, for a host that is not a JUCE plug-in (the
+# browser: the `web` preset and FCompressor's web build) and, natively, the `nojuce` preset that keeps that core honest
+# on the host compiler. What needs JUCE is not there: FunkGui::gpu (its EditorHost is a juce::Component) and
+# FunkGui::presets (juce::ValueTree and File in its API), the sources under src/juce/ (src/nojuce/ holds their
+# counterparts), and every tool and test that includes JUCE. FunkGuiFonts embeds the face and the committed bake of the
+# atlas without juce_add_binary_data, and FunkGui::core defines FUNKGUI_HAS_JUCE=0. The default, ON, is every build
+# there was before: the same targets, flags and sources, plus FUNKGUI_HAS_JUCE=1. NORMAL variables, as above: they
+# shadow the cache options for this configure only.
+if(NOT FUNKGUI_WITH_JUCE AND NOT FUNKGUI_HARNESS_ONLY)
+  if(FUNKGUI_WITH_BGFX OR FUNKGUI_WITH_PRESETS)
+    message(STATUS "FunkGui: FUNKGUI_WITH_JUCE=OFF: FunkGui::gpu and FunkGui::presets need JUCE and are not defined")
+  endif()
+  set(FUNKGUI_WITH_BGFX OFF)
+  set(FUNKGUI_WITH_PRESETS OFF)
+endif()
+if(EMSCRIPTEN AND FUNKGUI_WITH_JUCE AND NOT FUNKGUI_HARNESS_ONLY)
+  message(FATAL_ERROR "FunkGui: JUCE does not build with Emscripten: set FUNKGUI_WITH_JUCE=OFF (the JUCE-free "
+                      "FunkGui::core) or FUNKGUI_HARNESS_ONLY=ON")
+endif()
+if(PROJECT_IS_TOP_LEVEL AND FUNKGUI_WITH_JUCE)
+  funkgui_juce_compile_workarounds()                 # before any target: JUCE's modules compile inside FunkGui's
 endif()
 if(FUNKGUI_BUILD_TESTS AND NOT FUNKGUI_HARNESS_ONLY AND NOT FUNKGUI_BUILD_TOOLS)
   message(FATAL_ERROR "FunkGui: FUNKGUI_BUILD_TESTS needs FUNKGUI_BUILD_TOOLS (fg.font.probe and fg.prefs.check run "
@@ -70,6 +114,9 @@ foreach(_t core gpu presets)
     string(APPEND _fg_summary ", FunkGui::${_t}")
   endif()
 endforeach()
+if(NOT FUNKGUI_WITH_JUCE AND NOT FUNKGUI_HARNESS_ONLY)
+  string(APPEND _fg_summary " (without JUCE)")
+endif()
 if(TARGET FunkPresets)
   get_target_property(_fg_presets_sources FunkPresets INTERFACE_SOURCES)
   if(NOT _fg_presets_sources)

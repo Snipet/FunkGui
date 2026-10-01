@@ -3,6 +3,28 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## Unreleased — for v0.12.0 · MINOR: FunkGui::core without JUCE
+
+Golden impact: **none** (no row moves on macOS or Linux with JUCE; the JUCE-free configurations run the same rows
+against the same goldens). New tests: `fg.font.blob`, `fg.font.baked` (macOS), `fg.prefs.backend`. Not tagged yet: the
+tag follows the WebGL2 sink and the host services (FCompressor ADR-93, web Sprint B).
+
+- **`FUNKGUI_WITH_JUCE`** (CMake option, default ON: nothing changes). OFF gives a `FunkGui::core` with no JUCE under
+  it, for a host that is not a JUCE plug-in (the browser). `FunkGui::gpu` and `FunkGui::presets` need JUCE and are not
+  defined there. Sources that need JUCE live in `src/juce/`, their counterparts in `src/nojuce/`. Consumers read
+  `FUNKGUI_HAS_JUCE` (`funkgui/core/HasJuce.h`), an interface definition of `FunkGui::core` and `FunkGui::harness`.
+- **The font atlas, baked ahead.** `FontAtlasSdf::serialise()` and `load()`; `fonts/FunkGuiAtlas-macos.bin` is the
+  committed bake of the bundled face on macOS (`tools/AtlasBlob.cpp` writes it; `fg.font.baked` holds it to a fresh
+  bake bit for bit). A JUCE-free build loads it, since it has no JUCE to rasterise glyphs.
+- **Preferences behind a storage backend:** `UiPreferences::Backend`, `setBackend()`, `memoryBackend()`. With JUCE
+  the default backend is the same properties file as before, read the same way (the theme still reads as `atoi`
+  did). `file()` and `defaultFile()` exist only with JUCE.
+- **`HeadlessGuiScope`** (`funkgui/panel/HeadlessGuiScope.h`): what a headless test or tool holds before it draws:
+  JUCE's GUI initialiser with JUCE, nothing without, so the same source builds in both configurations.
+- **Emscripten:** `CLocale` has a branch for it, the Harness knows `--arch wasm32`, and FunkGui's own `web` preset
+  builds the JUCE-free tests as wasm32 and runs them under node. The `nojuce` preset is the same core natively, so the
+  option stays honest on every gate.
+
 ## v0.11.1 — 2026-10-01 · PATCH: the SQLite target name under CMake before 4.3
 
 Golden impact: **none**.

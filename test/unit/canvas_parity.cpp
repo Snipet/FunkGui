@@ -17,11 +17,10 @@
 #include <funkgui/core/Col.h>
 #include <funkgui/core/Theme.h>
 #include <funkgui/core/TypeScale.h>
+#include <funkgui/panel/HeadlessGuiScope.h>
 #include <funkgui/test/Harness.h>
 #include <funkgui/text/FontService.h>
 #include <funkgui/text/TextFit.h>
-
-#include <juce_gui_basics/juce_gui_basics.h>
 
 #include <algorithm>
 #include <bit>
@@ -194,7 +193,7 @@ namespace
 
 int main(int argc, char** argv)
 {
-    const juce::ScopedJuceInitialiser_GUI juceInit;      // the atlas bakes through JUCE's font stack
+    const funkgui::HeadlessGuiScope gui;                 // JUCE's GUI side, when there is JUCE: the atlas bakes there
     T::Probe P("fg.canvas.parity", "", argc, argv);
 
     auto& fonts = funkgui::FontService::get();

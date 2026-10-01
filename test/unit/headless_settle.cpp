@@ -14,13 +14,12 @@
 #include <funkgui/core/Ease.h>
 #include <funkgui/core/Theme.h>
 #include <funkgui/core/TypeScale.h>
+#include <funkgui/panel/HeadlessGuiScope.h>
 #include <funkgui/panel/HeadlessHost.h>
 #include <funkgui/panel/Panel.h>
 #include <funkgui/params/GestureController.h>
 #include <funkgui/params/ParamPort.h>
 #include <funkgui/test/Harness.h>
-
-#include <juce_gui_basics/juce_gui_basics.h>
 
 #include <bit>
 #include <cstdint>
@@ -239,7 +238,7 @@ namespace
 
 int main(int argc, char** argv)
 {
-    const juce::ScopedJuceInitialiser_GUI juceInit;      // FontService bakes the atlas through JUCE's font stack
+    const funkgui::HeadlessGuiScope gui;                 // JUCE's GUI side, when there is JUCE: the atlas bakes there
     T::Probe P("fg.headless.settle", "", argc, argv);
     constexpr float kDt = 1.0f / 60.0f;
 

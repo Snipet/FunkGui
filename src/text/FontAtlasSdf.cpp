@@ -1,16 +1,44 @@
 #include "FontAtlasSdf.h"
 
-#include <juce_gui_basics/juce_gui_basics.h>
+#include "SdfField.h"
+
 #include <algorithm>
+#include <bit>
 #include <cmath>
-#include <limits>
+#include <cstring>
+#include <utility>
+#include <vector>
+
+// The atlas's JUCE-free parts (v0.12.0): the distance transform the bake runs (the bake itself, which rasterises with
+// JUCE, is src/juce/FontAtlasBake.cpp), and the baked atlas as bytes: serialise() and load(), so that a build without
+// JUCE (FUNKGUI_WITH_JUCE=OFF: the browser) starts from a bake made where JUCE is.
+//
+// The blob, little-endian whatever the host, floats as their IEEE-754 bit patterns:
+//
+//   offset  bytes  field
+//        0      8  magic "FGSDFATL"
+//        8      4  version (kBlobVersion)
+//       12      4  size of the whole blob in bytes
+//       16      4  kAtlasW            20  4  kAtlasH
+//       24      4  kBasePx (float)    28  4  kSpread
+//       32      4  kFirstChar         36  4  kLastChar
+//       40      4  kNumExtra          44  4  glyph count (ASCII + extras)
+//       48      4  flags: bit 0 = baked from the caller's embedded face (usedEmbeddedFace)
+//       52      4  0 (reserved)
+//       56      8  FNV-1a 64 of the pixels (what FontService::atlasHash() and FontProbe's font.atlas report)
+//       64      8  FNV-1a 64 of the table: every byte from offset 72 up to the pixels
+//       72     28  metrics: space advance, ascent, descent, line height, cap height, x height, widest digit advance
+//      100  40 * n glyph records in atlas order (ASCII kFirstChar..kLastChar, then kExtraChars): codepoint, then
+//                  u0 v0 u1 v1 w h bx by advance
+//        .  W * H  the R8 distance field, row-major from the top
+//
+// load() accepts a blob only when every constant in it is this build's (so a blob baked before a Glyphs.def append, or
+// with another atlas size, is refused rather than drawn with shifted UVs), both hashes hold and every float is finite.
 
 namespace funkgui
 {
     namespace
     {
-        constexpr float kInf = 1.0e20f;
-
         // Felzenszwalb & Huttenlocher's exact 1-D squared distance transform:
         // the lower envelope of the parabolas (q - v)^2 + f[v]. Linear time,
         // and separable, so running it over columns then rows gives the exact
@@ -26,8 +54,8 @@ namespace funkgui
         {
             int k = 0;
             v[0] = 0;
-            z[0] = -kInf;
-            z[1] =  kInf;
+            z[0] = -detail::kSdfInf;
+            z[1] =  detail::kSdfInf;
 
             for (int q = 1; q < n; ++q)
             {
@@ -44,7 +72,7 @@ namespace funkgui
                 ++k;
                 v[k]     = q;
                 z[k]     = s;
-                z[k + 1] = kInf;
+                z[k + 1] = detail::kSdfInf;
             }
 
             k = 0;
@@ -56,226 +84,211 @@ namespace funkgui
             }
         }
 
-        // Exact squared EDT of the set { grid[i] == 0 }.
-        void edt2d(std::vector<float>& grid, int w, int h)
-        {
-            const size_t W = static_cast<size_t>(w), H = static_cast<size_t>(h);
-            const size_t n = std::max(W, H);
-            std::vector<float> f(n), d(n), z(n + 1);
-            std::vector<int>   v(n);
+        constexpr char   kMagic[8] = { 'F', 'G', 'S', 'D', 'F', 'A', 'T', 'L' };
+        constexpr size_t kHeaderBytes = 72;
+        constexpr size_t kMetricCount = 7;
+        constexpr size_t kGlyphFloats = 9;
+        constexpr size_t kGlyphBytes = 4u * (1u + kGlyphFloats);
+        constexpr size_t kAsciiCount = static_cast<size_t>(FontAtlasSdf::kLastChar - FontAtlasSdf::kFirstChar + 1);
+        constexpr size_t kGlyphCount = kAsciiCount + static_cast<size_t>(FontAtlasSdf::kNumExtra);
+        constexpr size_t kTableBytes = 4u * kMetricCount + kGlyphBytes * kGlyphCount;
+        constexpr size_t kPixelBytes = static_cast<size_t>(FontAtlasSdf::kAtlasW) * FontAtlasSdf::kAtlasH;
+        constexpr size_t kBlobBytes = kHeaderBytes + kTableBytes + kPixelBytes;
+        constexpr uint32_t kFlagEmbeddedFace = 1u;
 
-            for (size_t x = 0; x < W; ++x)
+        uint64_t fnv1a(const uint8_t* p, size_t n) noexcept
+        {
+            uint64_t h = 1469598103934665603ull;
+            for (size_t i = 0; i < n; ++i)
             {
-                for (size_t y = 0; y < H; ++y) f[y] = grid[y * W + x];
-                edt1d(f.data(), d.data(), h, v.data(), z.data());
-                for (size_t y = 0; y < H; ++y) grid[y * W + x] = d[y];
+                h ^= p[i];
+                h *= 1099511628211ull;
             }
-            for (size_t y = 0; y < H; ++y)
-            {
-                float* row = &grid[y * W];
-                for (size_t x = 0; x < W; ++x) f[x] = row[x];
-                edt1d(f.data(), d.data(), w, v.data(), z.data());
-                for (size_t x = 0; x < W; ++x) row[x] = d[x];
-            }
+            return h;
+        }
+
+        void put32(uint8_t* at, uint32_t v) noexcept
+        {
+            for (int i = 0; i < 4; ++i)
+                at[i] = static_cast<uint8_t>(v >> (8 * i));
+        }
+
+        void put64(uint8_t* at, uint64_t v) noexcept
+        {
+            for (int i = 0; i < 8; ++i)
+                at[i] = static_cast<uint8_t>(v >> (8 * i));
+        }
+
+        void putFloat(uint8_t* at, float v) noexcept { put32(at, std::bit_cast<uint32_t>(v)); }
+
+        uint32_t get32(const uint8_t* at) noexcept
+        {
+            uint32_t v = 0;
+            for (int i = 0; i < 4; ++i)
+                v |= static_cast<uint32_t>(at[i]) << (8 * i);
+            return v;
+        }
+
+        uint64_t get64(const uint8_t* at) noexcept
+        {
+            uint64_t v = 0;
+            for (int i = 0; i < 8; ++i)
+                v |= static_cast<uint64_t>(at[i]) << (8 * i);
+            return v;
+        }
+
+        // A finite float, or false: a blob never holds NaN or infinity (a bake never produces one).
+        bool getFloat(const uint8_t* at, float& out) noexcept
+        {
+            out = std::bit_cast<float>(get32(at));
+            return std::isfinite(out);
+        }
+
+        // The codepoint of the i-th glyph record: the atlas's packing order.
+        uint32_t codepointAt(size_t i) noexcept
+        {
+            return i < kAsciiCount ? static_cast<uint32_t>(FontAtlasSdf::kFirstChar) + static_cast<uint32_t>(i)
+                                   : FontAtlasSdf::kExtraChars[i - kAsciiCount];
         }
     }
 
-    bool FontAtlasSdf::bake(const void* ttfData, size_t ttfBytes, const char* faceName)
+    void detail::sdfEdt2d(std::vector<float>& grid, int w, int h)
     {
-        using namespace juce;
+        const size_t W = static_cast<size_t>(w), H = static_cast<size_t>(h);
+        const size_t n = std::max(W, H);
+        std::vector<float> f(n), d(n), z(n + 1);
+        std::vector<int>   v(n);
 
-        glyphs_.assign(static_cast<size_t>(kLastChar - kFirstChar + 1), {});
+        for (size_t x = 0; x < W; ++x)
+        {
+            for (size_t y = 0; y < H; ++y) f[y] = grid[y * W + x];
+            edt1d(f.data(), d.data(), h, v.data(), z.data());
+            for (size_t y = 0; y < H; ++y) grid[y * W + x] = d[y];
+        }
+        for (size_t y = 0; y < H; ++y)
+        {
+            float* row = &grid[y * W];
+            for (size_t x = 0; x < W; ++x) f[x] = row[x];
+            edt1d(f.data(), d.data(), w, v.data(), z.data());
+            for (size_t x = 0; x < W; ++x) row[x] = d[x];
+        }
+    }
+
+    std::vector<uint8_t> FontAtlasSdf::serialise() const
+    {
+        if (!baked_ || glyphs_.size() != kAsciiCount || extras_.size() != static_cast<size_t>(kNumExtra)
+            || pixels_.size() != kPixelBytes)
+            return {};
+
+        std::vector<uint8_t> blob(kBlobBytes, 0);
+        uint8_t* const b = blob.data();
+        std::memcpy(b, kMagic, sizeof kMagic);
+        put32(b + 8, kBlobVersion);
+        put32(b + 12, static_cast<uint32_t>(kBlobBytes));
+        put32(b + 16, static_cast<uint32_t>(kAtlasW));
+        put32(b + 20, static_cast<uint32_t>(kAtlasH));
+        putFloat(b + 24, kBasePx);
+        put32(b + 28, static_cast<uint32_t>(kSpread));
+        put32(b + 32, static_cast<uint32_t>(kFirstChar));
+        put32(b + 36, static_cast<uint32_t>(kLastChar));
+        put32(b + 40, static_cast<uint32_t>(kNumExtra));
+        put32(b + 44, static_cast<uint32_t>(kGlyphCount));
+        put32(b + 48, usedEmbedded_ ? kFlagEmbeddedFace : 0u);
+        put32(b + 52, 0u);
+
+        uint8_t* at = b + kHeaderBytes;
+        for (const float m : { spaceAdvance_, ascent_, descent_, lineHeight_, capHeight_, xHeight_, maxDigitAdvance_ })
+        {
+            putFloat(at, m);
+            at += 4;
+        }
+        for (size_t i = 0; i < kGlyphCount; ++i)
+        {
+            const Glyph& g = i < kAsciiCount ? glyphs_[i] : extras_[i - kAsciiCount];
+            put32(at, codepointAt(i));
+            at += 4;
+            for (const float f : { g.u0, g.v0, g.u1, g.v1, g.w, g.h, g.bx, g.by, g.advance })
+            {
+                putFloat(at, f);
+                at += 4;
+            }
+        }
+        std::memcpy(at, pixels_.data(), kPixelBytes);
+
+        put64(b + 56, fnv1a(pixels_.data(), kPixelBytes));
+        put64(b + 64, fnv1a(b + kHeaderBytes, kTableBytes));
+        return blob;
+    }
+
+    bool FontAtlasSdf::load(const uint8_t* data, size_t bytes)
+    {
+        // As bake(): the atlas is unbaked until this load has proved itself, and stays so when it fails.
+        glyphs_.assign(kAsciiCount, {});
         extras_.assign(static_cast<size_t>(kNumExtra), {});
-        pixels_.assign(static_cast<size_t>(kAtlasW) * kAtlasH, 0);
-
+        pixels_.assign(kPixelBytes, 0);
         usedEmbedded_ = false;
-        baked_ = false;               // until this bake has proved itself below
+        baked_ = false;
 
-        FontOptions opts = FontOptions { kBasePx };
-        if (ttfData != nullptr && ttfBytes > 0)
+        if (data == nullptr || bytes != kBlobBytes || std::memcmp(data, kMagic, sizeof kMagic) != 0)
+            return false;
+        if (get32(data + 8) != kBlobVersion || get32(data + 12) != static_cast<uint32_t>(kBlobBytes)
+            || get32(data + 16) != static_cast<uint32_t>(kAtlasW) || get32(data + 20) != static_cast<uint32_t>(kAtlasH)
+            || get32(data + 24) != std::bit_cast<uint32_t>(kBasePx)
+            || get32(data + 28) != static_cast<uint32_t>(kSpread)
+            || get32(data + 32) != static_cast<uint32_t>(kFirstChar)
+            || get32(data + 36) != static_cast<uint32_t>(kLastChar)
+            || get32(data + 40) != static_cast<uint32_t>(kNumExtra)
+            || get32(data + 44) != static_cast<uint32_t>(kGlyphCount)
+            || (get32(data + 48) & ~kFlagEmbeddedFace) != 0u || get32(data + 52) != 0u)
+            return false;
+
+        const uint8_t* const table = data + kHeaderBytes;
+        const uint8_t* const pixels = table + kTableBytes;
+        if (get64(data + 56) != fnv1a(pixels, kPixelBytes) || get64(data + 64) != fnv1a(table, kTableBytes))
+            return false;
+
+        float metrics[kMetricCount] = {};
+        const uint8_t* at = table;
+        for (float& m : metrics)
         {
-            // Registered for the lifetime of the returned Ptr, which
-            // FontOptions holds by value until the bake below finishes; the
-            // typeface takes its own copy of these bytes, so nothing here
-            // outlives the call.
-            auto tf = Typeface::createSystemTypefaceFor(ttfData, ttfBytes);
-            if (tf == nullptr)
-                return false;      // asked for a specific face, could not get it
-            opts = FontOptions{}.withTypeface(tf).withHeight(kBasePx);
-            usedEmbedded_ = true;
-        }
-        else if (faceName != nullptr && *faceName != 0)
-        {
-            opts = FontOptions{}.withName(faceName).withHeight(kBasePx);
-        }
-        Font font { opts };
-        ascent_     = font.getAscent();
-        descent_    = font.getDescent();
-        lineHeight_ = font.getHeight();
-
-        int penX = 1, penY = 1, rowH = 0;
-        bool overflow = false;
-
-        // Rasterise one glyph and write its SDF into the atlas. Returns false
-        // only when the atlas is genuinely out of room.
-        auto bakeOne = [&](juce_wchar cp, Glyph& g) -> bool
-        {
-            GlyphArrangement one;
-            one.addLineOfText(font, String::charToString(cp), 0.0f, 0.0f);
-            if (one.getNumGlyphs() < 1) return true;   // nothing to draw
-
-            // PositionedGlyph::w is the glyph's own shaped advance. The old
-            // code took the difference between consecutive glyph *lefts* in
-            // one long run of the whole charset, which folded the kerning of
-            // whatever arbitrary pair happened to be adjacent into every
-            // advance.
-            g.advance = one.getGlyph(0).getRight() - one.getGlyph(0).getLeft();
-
-            Path path;
-            one.createPath(path);
-            const auto pb = path.getBounds();
-            if (pb.isEmpty()) return true;             // whitespace
-
-            const int pad = kSpread + 1;
-            const int gw  = static_cast<int>(std::ceil(pb.getWidth()))  + pad * 2;
-            const int gh  = static_cast<int>(std::ceil(pb.getHeight())) + pad * 2;
-
-            Image img(Image::SingleChannel, gw, gh, true);
-            {
-                Graphics gr(img);
-                gr.setColour(Colours::white);
-                gr.fillPath(path, AffineTransform::translation(
-                    static_cast<float>(pad) - pb.getX(),
-                    static_cast<float>(pad) - pb.getY()));
-            }
-
-            if (penX + gw + 1 >= kAtlasW) { penX = 1; penY += rowH + 1; rowH = 0; }
-            if (penY + gh + 1 >= kAtlasH) return false;
-            rowH = std::max(rowH, gh);
-
-            const size_t GW = static_cast<size_t>(gw), GH = static_cast<size_t>(gh);
-            const size_t area = GW * GH;
-            std::vector<float> cov(area);
-            {
-                Image::BitmapData bd(img, Image::BitmapData::readOnly);
-                for (int y = 0; y < gh; ++y)
-                {
-                    const uint8* src = bd.getLinePointer(y);
-                    for (int x = 0; x < gw; ++x)
-                        cov[static_cast<size_t>(y) * GW + static_cast<size_t>(x)] =
-                            static_cast<float>(src[x * bd.pixelStride]) * (1.0f / 255.0f);
-                }
-            }
-
-            // Two EDTs: distance to the nearest outside texel and to the
-            // nearest inside texel. Sites are the zeros of each grid.
-            std::vector<float> dIn(area), dOut(area);
-            for (size_t i = 0; i < area; ++i)
-            {
-                const bool inside = cov[i] > 0.5f;
-                dIn [i] = inside ? kInf : 0.0f;   // sites = outside texels
-                dOut[i] = inside ? 0.0f : kInf;   // sites = inside texels
-            }
-            edt2d(dIn,  gw, gh);
-            edt2d(dOut, gw, gh);
-
-            for (int y = 0; y < gh; ++y)
-            {
-                for (int x = 0; x < gw; ++x)
-                {
-                    const size_t i = static_cast<size_t>(y) * GW + static_cast<size_t>(x);
-                    const float  a = cov[i];
-                    float sd;
-
-                    if (a > 0.004f && a < 0.996f)
-                    {
-                        // The edge crosses this texel: its area coverage
-                        // localises the edge far better than any distance
-                        // measured between texel centres. This is what kills
-                        // the stair-stepping the old threshold-only field
-                        // produced on diagonals and curves.
-                        sd = a - 0.5f;
-                    }
-                    else
-                    {
-                        // Distances run centre-to-centre, and the edge sits
-                        // about half a texel inside the nearer of the two, so
-                        // subtract the half texel to land on the real outline.
-                        const bool  inside = a > 0.5f;
-                        const float d = std::sqrt(inside ? dIn[i] : dOut[i]);
-                        sd = (inside ? 1.0f : -1.0f) * (d - 0.5f);
-                    }
-
-                    const float n = 0.5f + sd / (2.0f * static_cast<float>(kSpread));
-                    pixels_[static_cast<size_t>(penY + y) * kAtlasW
-                          + static_cast<size_t>(penX + x)] =
-                        static_cast<uint8_t>(jlimit(0.0f, 1.0f, n) * 255.0f);
-                }
-            }
-
-            g.u0 = static_cast<float>(penX)      / kAtlasW;
-            g.v0 = static_cast<float>(penY)      / kAtlasH;
-            g.u1 = static_cast<float>(penX + gw) / kAtlasW;
-            g.v1 = static_cast<float>(penY + gh) / kAtlasH;
-            g.w  = static_cast<float>(gw);
-            g.h  = static_cast<float>(gh);
-            g.bx = pb.getX() - static_cast<float>(pad);
-            g.by = pb.getY() - static_cast<float>(pad);   // relative to baseline
-
-            penX += gw + 1;
-            return true;
-        };
-
-        for (int c = kFirstChar; c <= kLastChar && !overflow; ++c)
-            if (!bakeOne(static_cast<juce_wchar>(c), glyphs_[static_cast<size_t>(c - kFirstChar)]))
-                overflow = true;
-
-        for (int i = 0; i < kNumExtra && !overflow; ++i)
-            if (!bakeOne(static_cast<juce_wchar>(kExtraChars[i]), extras_[static_cast<size_t>(i)]))
-                overflow = true;
-
-        // Space advance, and the cap/x heights the layout code centres on.
-        {
-            GlyphArrangement sp;
-            sp.addLineOfText(font, " ", 0.0f, 0.0f);
-            if (sp.getNumGlyphs() >= 1)
-                spaceAdvance_ = sp.getGlyph(0).getRight() - sp.getGlyph(0).getLeft();
-
-            auto outlineHeight = [&](juce_wchar cp, float fallback)
-            {
-                GlyphArrangement ga;
-                ga.addLineOfText(font, String::charToString(cp), 0.0f, 0.0f);
-                Path p;
-                ga.createPath(p);
-                const auto b = p.getBounds();
-                return b.isEmpty() ? fallback : b.getHeight();
-            };
-            capHeight_ = outlineHeight('H', ascent_ * 0.72f);
-            xHeight_   = outlineHeight('x', ascent_ * 0.52f);
-
-            maxDigitAdvance_ = 0.0f;
-            for (int c = '0'; c <= '9'; ++c)
-                if (const auto* g = glyph(static_cast<uint32_t>(c)))
-                    maxDigitAdvance_ = std::max(maxDigitAdvance_, g->advance);
-            if (!(maxDigitAdvance_ > 0.0f)) maxDigitAdvance_ = kBasePx * 0.55f;
-        }
-
-        // Overflow is a real failure, not a degraded render. bakeOne writes
-        // the advance before the packing check, so the glyph that overflows
-        // keeps a correct advance with a zero-area quad, and every glyph after
-        // it stays default-constructed with advance 0 — which stalls the pen
-        // in SdfCanvas::text and makes textWidth under-report, silently
-        // shifting every centred and right-aligned run. Rendering no text is
-        // more honest than rendering truncated text.
-        if (overflow) return false;
-
-        // Sample across the packing order rather than trusting one glyph:
-        // '0' is baked sixteenth, so a failure after it used to report success
-        // with the whole alphabet missing.
-        for (const char ch : { '0', '9', 'A', 'Z', 'a', 'z', '%' })
-            if (const auto* g = glyph(static_cast<uint32_t>(static_cast<unsigned char>(ch)));
-                g == nullptr || !(g->w > 0.0f))
+            if (!getFloat(at, m))
                 return false;
+            at += 4;
+        }
+        std::vector<Glyph> ascii(kAsciiCount), extras(static_cast<size_t>(kNumExtra));
+        for (size_t i = 0; i < kGlyphCount; ++i)
+        {
+            if (get32(at) != codepointAt(i))
+                return false;                            // another glyph set, or another order: every UV would shift
+            at += 4;
+            Glyph& g = i < kAsciiCount ? ascii[i] : extras[i - kAsciiCount];
+            for (float* f : { &g.u0, &g.v0, &g.u1, &g.v1, &g.w, &g.h, &g.bx, &g.by, &g.advance })
+            {
+                if (!getFloat(at, *f))
+                    return false;
+                at += 4;
+            }
+        }
+
+        // bake()'s own last check: a blob of a bake that missed part of the alphabet is not an atlas.
+        for (const char ch : { '0', '9', 'A', 'Z', 'a', 'z', '%' })
+        {
+            const size_t index = static_cast<size_t>(static_cast<unsigned char>(ch)) - static_cast<size_t>(kFirstChar);
+            if (!(ascii[index].w > 0.0f))
+                return false;
+        }
+
+        glyphs_ = std::move(ascii);
+        extras_ = std::move(extras);
+        std::memcpy(pixels_.data(), pixels, kPixelBytes);
+        spaceAdvance_    = metrics[0];
+        ascent_          = metrics[1];
+        descent_         = metrics[2];
+        lineHeight_      = metrics[3];
+        capHeight_       = metrics[4];
+        xHeight_         = metrics[5];
+        maxDigitAdvance_ = metrics[6];
+        usedEmbedded_    = (get32(data + 48) & kFlagEmbeddedFace) != 0u;
         baked_ = true;
         return true;
     }

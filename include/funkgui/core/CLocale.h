@@ -9,6 +9,7 @@
 //   macOS  the *_l functions with a null locale_t
 //   Linux  strtof_l / strtol_l with a C locale_t made once; the printf family between uselocale() calls, which set this
 //          thread's locale only
+//   Emscripten (v0.12.0)  the plain functions: its libc has no other numeric locale (and no strtol_l)
 // Thread-safe; no allocation after the first call.
 
 #include <cstddef>
