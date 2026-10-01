@@ -7,7 +7,7 @@ re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are anno
 
 Golden impact: **none on macOS** (no macOS row moves; `fg.shader.hash` gains four SPIR-V rows, the same on every host).
 New: `fg.font.probe-linux` and `fg.smoke.gpu` (Linux), each on Linux only. Linux x86-64 runs every other `fg` test
-against the same goldens as macOS. (FCompressor ADR-91.)
+against the same goldens as macOS. (FCompressor ADR-92.)
 
 - **The GPU layer on Linux:** bgfx on **Vulkan** into an X11 child window of JUCE's peer (`src/gpu/linux/`). The view
   is created on JUCE's display connection through JUCE's own dynamically loaded Xlib, selects no events (every event
@@ -33,6 +33,10 @@ against the same goldens as macOS. (FCompressor ADR-91.)
   C++20 deprecation warning). `funkgui_add_font` copies the licences into the VST3 bundle's `Contents/Resources` and
   beside other executables at PRE_LINK on Linux. Tests: `*.mm` and `*_apple.cpp` register on Apple only, `*_linux.cpp`
   on Linux only; `fg.headers` skips the compiler's own include directories and takes `--extra-flag`.
+- **Keys:** `EditorHost` delivers a chord whose text is a control character as its key code (`Key::character`, `ch`
+  the key), as it already does for a chord with no text: X11 reports Ctrl-Z, the command chord on Linux, as 0x1A, so a
+  Panel that tests `mods.cmd` and `ch == 'z'` sees it. `mods.cmd` and `mods.ctrl` are both set there (JUCE's command
+  modifier is Ctrl off macOS).
 - **Tools:** the gallery app puts its Section menu in the window on Linux; `PrefsCheck`, `fg.presets.store` and
   `fg.font.probe` know each platform's paths and atlas.
 

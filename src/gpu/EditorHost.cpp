@@ -732,10 +732,12 @@ namespace funkgui
         else
         {
             // A character arrives as the OS delivers it: its text, or with cmd held no text and the (lower-case) key
-            // code, which is what HeadlessHost::keys gives for the same token.
+            // code, which is what HeadlessHost::keys gives for the same token. A control character is no text either:
+            // X11 delivers a Ctrl chord (the command key there) as its control code beside the key code, Ctrl-Z as
+            // 0x1A and 'z', so the key code is the character then too.
             const juce::juce_wchar text = k.getTextCharacter();
             char32_t ch = 0;
-            if (text != 0)
+            if (text >= 0x20)
                 ch = static_cast<char32_t>(text);
             else if (code >= 0x20 && code < 0x7f)
                 ch = static_cast<char32_t>(code);
