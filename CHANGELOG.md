@@ -19,8 +19,8 @@ tag follows the WebGL2 sink and the host services (FCompressor ADR-93, web Sprin
 - **Preferences behind a storage backend:** `UiPreferences::Backend`, `setBackend()`, `memoryBackend()`. With JUCE
   the default backend is the same properties file as before, read the same way (the theme still reads as `atoi`
   did). `file()` and `defaultFile()` exist only with JUCE.
-- **`HeadlessGuiScope`** (`funkgui/panel/HeadlessGuiScope.h`): what a headless tool needs from the GUI toolkit, a
-  JUCE message-manager scope with JUCE and nothing without.
+- **`HeadlessGuiScope`** (`funkgui/panel/HeadlessGuiScope.h`): what a headless test or tool holds before it draws:
+  JUCE's GUI initialiser with JUCE, nothing without, so the same source builds in both configurations.
 - **Emscripten:** `CLocale` has a branch for it, the Harness knows `--arch wasm32`, and FunkGui's own `web` preset
   builds the JUCE-free tests as wasm32 and runs them under node. The `nojuce` preset is the same core natively, so the
   option stays honest on every gate.
