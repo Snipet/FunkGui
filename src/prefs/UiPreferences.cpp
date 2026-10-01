@@ -29,8 +29,10 @@ namespace funkgui
 
         // The store's file when <ENV_PREFIX>PREFS_DIR is not set: JUCE's default for these options on macOS,
         // ~/Library/Application Support/<folder>/preferences.settings. On Linux JUCE's default is ~/<folder>/, a
-        // visible folder in the home directory, so FunkGui uses the XDG configuration directory JUCE resolves instead
-        // ($XDG_CONFIG_HOME, else ~/.config), where FunkPresets keeps its database too (v0.11.0).
+        // visible folder in the home directory, so FunkGui uses the configuration directory JUCE resolves instead,
+        // ~/.config, where FunkPresets keeps its database too (v0.11.0). JUCE 8.0.4 looks for an XDG_CONFIG_HOME line
+        // in ~/.config/user-dirs.dirs, which holds none, and never reads the environment variable: a relocated
+        // $XDG_CONFIG_HOME is not followed yet.
         juce::File defaultStoreFile()
         {
            #if JUCE_LINUX || JUCE_BSD

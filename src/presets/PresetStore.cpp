@@ -1008,8 +1008,8 @@ namespace funkgui::presets
         if (config.dbEnvVar.isNotEmpty())
             if (const char* p = std::getenv(config.dbEnvVar.toRawUTF8()); p != nullptr && *p != 0)
                 return juce::File::getCurrentWorkingDirectory().getChildFile(juce::String::fromUTF8(p));
-        // ~/Library/Application Support/<product>/Presets.db on macOS. Linux (v0.11.0): the XDG configuration
-        // directory JUCE resolves ($XDG_CONFIG_HOME, else ~/.config), beside UiPreferences' file, so
+        // ~/Library/Application Support/<product>/Presets.db on macOS. Linux (v0.11.0): the configuration directory
+        // JUCE resolves, ~/.config (it does not read the $XDG_CONFIG_HOME variable), beside UiPreferences' file, so
         // ~/.config/<product>/Presets.db.
        #if JUCE_LINUX || JUCE_BSD
         return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)

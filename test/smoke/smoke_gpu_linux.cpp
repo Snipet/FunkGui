@@ -144,7 +144,12 @@ int main(int argc, char** argv)
     surfaceRows(P);
 
     // ---- bgfx and the shared context, before any window is acquired -------------------------------------------------
-    P.eq("bgfx.vulkan_backend_name", std::strcmp(bgfx::getRendererName(bgfx::RendererType::Vulkan), "Vulkan") == 0, 1);
+    // Compiled in, read from bgfx's table before anything initialises it (a renderer's name is there either way).
+    bgfx::RendererType::Enum renderers[bgfx::RendererType::Count];
+    const uint8_t nRenderers = bgfx::getSupportedRenderers(static_cast<uint8_t>(bgfx::RendererType::Count), renderers);
+    const bool hasVulkan = std::find(renderers, renderers + nRenderers, bgfx::RendererType::Vulkan)
+                           != renderers + nRenderers;
+    P.eq("bgfx.vulkan_supported", hasVulkan, 1);
     auto& ctx = funkgui::BgfxContext::get();
     P.eq("context.idle", !ctx.valid(), 1);
     P.eq("context.has_free_slot", ctx.hasFreeSlot(), 1);

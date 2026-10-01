@@ -36,8 +36,8 @@ namespace funkgui::presets
         explicit PresetStore(const ProductConfig& config);
         ~PresetStore();
 
-        // ~/Library/Application Support/<productName>/Presets.db (Linux, v0.11.0: $XDG_CONFIG_HOME, else ~/.config,
-        // /<productName>/Presets.db), or the path in the environment variable
+        // ~/Library/Application Support/<productName>/Presets.db (Linux, v0.11.0: ~/.config/<productName>/Presets.db;
+        // $XDG_CONFIG_HOME is not read), or the path in the environment variable
         // config.dbEnvVar when that is set and not empty — harnesses and frame captures point it at a scratch file so
         // they never read or write the real one. The variable is read on every call (each store construction), so a
         // harness can point successive stores at successive files. An invalid configuration gives juce::File().

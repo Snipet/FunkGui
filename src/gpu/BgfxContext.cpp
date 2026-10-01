@@ -87,6 +87,11 @@ namespace funkgui
         init.platformData.type = bgfx::NativeWindowHandleType::Default;
         if (init.platformData.ndt == nullptr)
             return false;
+        // Vulkan or nothing: with bgfx's default (fallback on) a Vulkan that does not come up is followed by the next
+        // renderer compiled in, OpenGL through EGL (which aborts the process on an initialisation failure), and in
+        // the end by Noop, so init() never failed and the editor never reached its fallback screen. Without the
+        // fallback a failed Vulkan is a failed init(), and stays available for EditorHost's retries.
+        init.fallback = false;
 #endif
         init.resolution.width   = static_cast<uint32_t>(physW);
         init.resolution.height  = static_cast<uint32_t>(physH);
@@ -99,6 +104,13 @@ namespace funkgui
         init.limits.maxTransientVbSize = config_.transientVbBytes;
         if (!bgfx::init(init))
             return false;
+        // The shaders are this renderer's alone: anything else (a consumer's bgfx built otherwise, a fallback) is a
+        // failed init, so the editor shows its fallback screen instead of an empty frame.
+        if (bgfx::getRendererType() != kRenderer)
+        {
+            bgfx::shutdown();
+            return false;
+        }
 
         activeTransientVbBytes_ = config_.transientVbBytes;
         primaryW_ = physW;

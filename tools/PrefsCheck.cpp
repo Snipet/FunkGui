@@ -39,8 +39,8 @@ namespace T = funkgui::test;
 
 namespace
 {
-    // UiPreferences' real store: ~/Library/Application Support/<folder>/ on macOS, the XDG configuration directory
-    // ($XDG_CONFIG_HOME, else ~/.config) on Linux (v0.11.0).
+    // UiPreferences' real store: ~/Library/Application Support/<folder>/ on macOS, the configuration directory JUCE
+    // resolves, ~/.config, on Linux (v0.11.0).
     juce::File platformStore()
     {
         const juce::File base = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory);
