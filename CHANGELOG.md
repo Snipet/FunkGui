@@ -3,6 +3,15 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.11.1 — 2026-10-01 · PATCH: the SQLite target name under CMake before 4.3
+
+Golden impact: **none**.
+
+- `FunkPresets` linked `SQLite3::SQLite3`, which CMake's FindSQLite3 defines only from 4.3; up to 4.2 the target is
+  `SQLite::SQLite3` (kept as a deprecated alias since). FunkGui asks for CMake 3.30, so a Linux configure with CMake
+  3.30 to 4.2 failed to generate (FCompressor's first Linux CI run: Ubuntu 24.04, CMake 3.31.6). It now links whichever
+  the running CMake defines. macOS and CMake 4.3 or later are unchanged.
+
 ## v0.11.0 — 2026-10-01 · MINOR: Linux
 
 Golden impact: **none on macOS** (no macOS row moves; `fg.shader.hash` gains four SPIR-V rows, the same on every host).
