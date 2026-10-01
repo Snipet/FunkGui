@@ -15,7 +15,9 @@ namespace funkgui
     //
     // Backed by a properties file under
     //   ~/Library/Application Support/<PREFS_FOLDER>/preferences.settings
-    // which is a different file from the Standalone wrapper's own settings.
+    // (on Linux, v0.11.0: ~/.config/<PREFS_FOLDER>/preferences.settings; the
+    // $XDG_CONFIG_HOME variable is not read), which is a different file from the Standalone
+    // wrapper's own settings.
     // <PREFS_FOLDER> is the product's (funkgui_configure_product PREFS_FOLDER,
     // 02 §1.8), so each product keeps its own preferences (Q7).
     //
@@ -65,7 +67,9 @@ namespace funkgui
         juce::File file() const;
 
         // ~/Library/Application Support/<PREFS_FOLDER>/preferences.settings for
-        // the product this source is compiled into. (G6 addition.)
+        // the product this source is compiled into; on Linux ~/.config/
+        // <PREFS_FOLDER>/preferences.settings ($XDG_CONFIG_HOME is not read).
+        // (G6 addition; Linux v0.11.0.)
         static juce::File defaultFile();
 
     private:

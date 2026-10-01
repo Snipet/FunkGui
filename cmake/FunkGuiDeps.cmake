@@ -190,8 +190,9 @@ endif()
 
 # ---- bgfx and shaderc: only when FUNKGUI_WITH_BGFX (02 §1.4) ---------------------------------------------------------
 if(FUNKGUI_WITH_BGFX AND NOT FUNKGUI_HARNESS_ONLY)
-  if(NOT APPLE)
-    message(FATAL_ERROR "FunkGui: FUNKGUI_WITH_BGFX needs macOS (Metal shaders, Objective-C++ views)")
+  if(NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    message(FATAL_ERROR "FunkGui: FUNKGUI_WITH_BGFX needs macOS (Metal, Objective-C++ views) or Linux (Vulkan or "
+                        "OpenGL on an X11 child window); this is ${CMAKE_SYSTEM_NAME}")
   endif()
   if(NOT TARGET bgfx)
     # HR CMakeLists.txt:307-313 settings as NORMAL variables (CMP0077; bgfx.cmake requires CMake 3.20, so its
@@ -208,6 +209,9 @@ if(FUNKGUI_WITH_BGFX AND NOT FUNKGUI_HARNESS_ONLY)
     endif()
     set(BGFX_BUILD_EXAMPLES OFF)
     set(BGFX_INSTALL OFF)
+    # Linux: JUCE's peers are X11 windows (a Wayland desktop runs them through XWayland), so bgfx never sees a
+    # wl_surface, and with its Wayland backend on bgfx links libwayland-egl into every plug-in binary (v0.11.0).
+    set(BGFX_WITH_WAYLAND OFF)
     # First declaration wins: a no-op if the consumer declared bgfx. SYSTEM: bgfx headers are third-party code.
     # EXCLUDE_FROM_ALL: only what FunkGui::gpu links (bgfx, bx, bimg) is built, not bimg_encode and the like.
     FetchContent_Declare(bgfx GIT_REPOSITORY https://github.com/bkaradzic/bgfx.cmake.git GIT_TAG ${FUNKGUI_BGFX_TAG}
@@ -216,6 +220,15 @@ if(FUNKGUI_WITH_BGFX AND NOT FUNKGUI_HARNESS_ONLY)
     foreach(_t bgfx bx bimg)                                            # hidden symbols (K2 #26f)
       set_target_properties(${_t} PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
     endforeach()
+    # Linux (v0.11.0): the pinned bgfx warns under Clang 22 in its own sources (renderer_gl.cpp's
+    # -Wtautological-constant-compare, bimg's miniz #pragma message). Third-party code FunkGui does not edit.
+    if(NOT APPLE)
+      foreach(_t bgfx bx bimg bimg_decode bimg_encode)
+        if(TARGET ${_t})
+          target_compile_options(${_t} PRIVATE -w)
+        endif()
+      endforeach()
+    endif()
   endif()
 
   if(NOT FUNKGUI_SHADERC AND NOT TARGET shaderc)

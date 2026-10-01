@@ -9,7 +9,8 @@
 # Every source list is a per-directory glob with CONFIGURE_DEPENDS, so later cards add files, never CMake edits
 # (03 §1.1, K3 #2):
 #   src/{core,text,canvas,panel,params,widgets,a11y,live,prefs,juce}/**   -> FunkGuiCore  (C++ only, no bgfx, no ObjC)
-#   src/gpu/**                                                           -> FunkGuiGpu   (.cpp and .mm)
+#   src/gpu/**                                                           -> FunkGuiGpu   (.cpp and .mm; *.mm on
+#                                                                           Apple only, src/gpu/linux/** on Linux only)
 #   src/presets/**                                                       -> FunkPresets  (empty placeholder until then)
 #   tools/*.cpp                                                          -> tool FunkGui<Stem> (FrameRender.cpp ->
 #                                                                           funkgui_framerender); tools/*/CMakeLists.txt
@@ -102,7 +103,7 @@ function(funkgui_configure_product target)
   endforeach()
 endfunction()
 
-# funkgui_compile_shaders(<target>): build FunkGuiShaders (the embedded Metal headers) before <target> (02 §1.5). An
+# funkgui_compile_shaders(<target>): build FunkGuiShaders (the embedded shader headers) before <target> (02 §1.5). An
 # INTERFACE library cannot carry a build-order dependency, so every GPU consumer calls it. In a configuration without
 # bgfx there are no shaders and the call does nothing.
 function(funkgui_compile_shaders target)
@@ -122,6 +123,11 @@ endfunction()
 # of each of <target>_AU, <target>_VST3 and <target>_Standalone that exists, or of <target> itself when it is an app
 # bundle (02 §1.6). Resources, never a POST_BUILD copy: a copy after JUCE's ad-hoc codesign broke the seal (HR
 # CMakeLists.txt:379-400). GPU configurations only: a headless consumer has no GPU code and no bundled font to credit.
+#
+# Linux (v0.11.0) has no bundle resources to declare and no seal to break, so the files are copied at PRE_LINK: into
+# the VST3 bundle's Contents/Resources (the macOS layout, beside JUCE's moduleinfo.json), and into licences/ beside any
+# other target's executable (the Standalone, an app). PRE_LINK, not POST_BUILD: JUCE's COPY_PLUGIN_AFTER_BUILD step is a
+# POST_BUILD command registered by juce_add_plugin, before this call, and would install the bundle without them.
 function(funkgui_add_font target)
   if(NOT TARGET ${target})
     message(FATAL_ERROR "funkgui_add_font: '${target}' is not a target")
@@ -143,7 +149,8 @@ function(funkgui_add_font target)
   endforeach()
   if(NOT _bundles)
     get_target_property(_is_bundle ${target} MACOSX_BUNDLE)
-    if(_is_bundle)
+    get_target_property(_type ${target} TYPE)
+    if(_is_bundle OR (NOT APPLE AND _type STREQUAL "EXECUTABLE"))
       set(_bundles ${target})
     else()
       message(FATAL_ERROR "funkgui_add_font(${target}): neither ${target}_{AU,VST3,Standalone} nor ${target} is a "
@@ -151,11 +158,26 @@ function(funkgui_add_font target)
     endif()
   endif()
   foreach(_b IN LISTS _bundles)
-    target_sources(${_b} PRIVATE "${_font_licence}" ${_licences})
-    set_source_files_properties("${_font_licence}" TARGET_DIRECTORY ${_b}
-                                PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
-    set_source_files_properties(${_licences} TARGET_DIRECTORY ${_b}
-                                PROPERTIES MACOSX_PACKAGE_LOCATION Resources/licences)
+    if(APPLE)
+      target_sources(${_b} PRIVATE "${_font_licence}" ${_licences})
+      set_source_files_properties("${_font_licence}" TARGET_DIRECTORY ${_b}
+                                  PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+      set_source_files_properties(${_licences} TARGET_DIRECTORY ${_b}
+                                  PROPERTIES MACOSX_PACKAGE_LOCATION Resources/licences)
+    else()
+      if(_b MATCHES "_VST3$")                        # <name>.vst3/Contents/<arch>-linux/<name>.so
+        set(_font_dir "$<TARGET_FILE_DIR:${_b}>/../Resources")
+        set(_lic_dir "$<TARGET_FILE_DIR:${_b}>/../Resources/licences")
+      else()
+        set(_font_dir "$<TARGET_FILE_DIR:${_b}>/licences")
+        set(_lic_dir "$<TARGET_FILE_DIR:${_b}>/licences")
+      endif()
+      add_custom_command(TARGET ${_b} PRE_LINK
+          COMMAND ${CMAKE_COMMAND} -E make_directory "${_font_dir}" "${_lic_dir}"
+          COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_font_licence}" "${_font_dir}"
+          COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_licences} "${_lic_dir}"
+          VERBATIM)
+    endif()
   endforeach()
 endfunction()
 
@@ -217,6 +239,13 @@ foreach(_m IN LISTS _fg_core_modules ITEMS gpu presets)
   file(GLOB_RECURSE _mm CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/src/${_m}/*.mm)
   if(_mm AND NOT _m STREQUAL "gpu")
     message(FATAL_ERROR "FunkGui: Objective-C++ belongs under src/gpu/ (02 §1.1): ${_mm}")
+  endif()
+  # Platform sources (v0.11.0): *.mm is Apple's, src/<module>/linux/** is Linux's; each compiles only there.
+  if(NOT APPLE)
+    set(_mm "")
+  endif()
+  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(FILTER _cpp EXCLUDE REGEX "/src/${_m}/linux/")
   endif()
   set(_fg_sources_${_m} ${_cpp} ${_mm})
   set_property(GLOBAL PROPERTY FUNKGUI_SOURCES_${_m} "${_fg_sources_${_m}}")
@@ -293,20 +322,34 @@ if(FUNKGUI_WITH_BGFX)
     set(_fg_shaderc "$<TARGET_FILE:shaderc>")
     set(_fg_shaderc_dep shaderc)
   endif()
-  # HR's hrvb_compile_shader (HR CMakeLists.txt:328-344), generalised: Metal only, embedded with --bin2c.
-  function(_funkgui_compile_shader name type)
-    add_custom_command(OUTPUT ${_fg_out}/${name}.mtl.h
-      COMMAND ${_fg_shaderc} -f ${PROJECT_SOURCE_DIR}/shaders/${name}.sc -o ${_fg_out}/${name}.mtl.h
-              --type ${type} --platform osx -p metal
-              --varyingdef ${PROJECT_SOURCE_DIR}/shaders/varying.def.sc
-              -i ${_fg_bgfx_src}/bgfx/src --bin2c ${name}_mtl
-      DEPENDS ${_fg_shaderc_dep} ${PROJECT_SOURCE_DIR}/shaders/${name}.sc ${PROJECT_SOURCE_DIR}/shaders/varying.def.sc
-      COMMENT "FunkGui shaderc: ${name}.sc -> metal"
-      VERBATIM)
-  endfunction()
-  _funkgui_compile_shader(vs_ui vertex)
-  _funkgui_compile_shader(fs_ui fragment)
-  add_custom_target(FunkGuiShaders DEPENDS ${_fg_out}/vs_ui.mtl.h ${_fg_out}/fs_ui.mtl.h)
+  # HR's hrvb_compile_shader (HR CMakeLists.txt:328-344), generalised, embedded with --bin2c as <name>.<ext>.h holding
+  # <name>_<ext>. Every profile on every host (v0.11.0): shaderc's output depends on the pinned bgfx only, not on the
+  # host (the Metal pair compiled on Linux is byte for byte the pair compiled on macOS), so fg.shader.hash has one set
+  # of golden rows everywhere. BgfxContext.cpp includes its platform's pair: Metal on macOS, SPIR-V (Vulkan) on Linux.
+  set(_fg_profiles mtl=osx:metal spv=linux:spirv)
+  set(_fg_shader_headers "")
+  foreach(_shader vs_ui=vertex fs_ui=fragment)
+    string(REPLACE "=" ";" _shader "${_shader}")
+    list(GET _shader 0 _name)
+    list(GET _shader 1 _type)
+    foreach(_p IN LISTS _fg_profiles)
+      string(REGEX MATCH "^([a-z]+)=([a-z]+):([a-z0-9]+)$" _ok "${_p}")
+      set(_ext ${CMAKE_MATCH_1})
+      set(_platform ${CMAKE_MATCH_2})
+      set(_profile ${CMAKE_MATCH_3})
+      add_custom_command(OUTPUT ${_fg_out}/${_name}.${_ext}.h
+        COMMAND ${_fg_shaderc} -f ${PROJECT_SOURCE_DIR}/shaders/${_name}.sc -o ${_fg_out}/${_name}.${_ext}.h
+                --type ${_type} --platform ${_platform} -p ${_profile}
+                --varyingdef ${PROJECT_SOURCE_DIR}/shaders/varying.def.sc
+                -i ${_fg_bgfx_src}/bgfx/src --bin2c ${_name}_${_ext}
+        DEPENDS ${_fg_shaderc_dep} ${PROJECT_SOURCE_DIR}/shaders/${_name}.sc
+                ${PROJECT_SOURCE_DIR}/shaders/varying.def.sc
+        COMMENT "FunkGui shaderc: ${_name}.sc -> ${_profile}"
+        VERBATIM)
+      list(APPEND _fg_shader_headers ${_fg_out}/${_name}.${_ext}.h)
+    endforeach()
+  endforeach()
+  add_custom_target(FunkGuiShaders DEPENDS ${_fg_shader_headers})
 
   # <funkgui/shaders/shaderc_stamp.h>: the stamp of the shaderc in use (cmake/FunkGuiDeps.cmake) and the one the pin
   # requires, which fg.shader.hash compares in a spec row: a shaderc from another bgfx fails that test instead of
@@ -365,6 +408,13 @@ if(FUNKGUI_WITH_PRESETS)
     else()
       find_package(SQLite3 REQUIRED)
       target_link_libraries(FunkPresets INTERFACE SQLite3::SQLite3)
+    endif()
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+      # The key fold on Linux (src/presets/Platform.cpp, v0.11.0): GLib's Unicode case fold and normalisation, the
+      # counterpart of CoreFoundation's CFStringFold on macOS. GLOBAL: the consumer's targets link it.
+      find_package(PkgConfig REQUIRED)
+      pkg_check_modules(FUNKGUI_GLIB REQUIRED IMPORTED_TARGET GLOBAL glib-2.0)
+      target_link_libraries(FunkPresets INTERFACE PkgConfig::FUNKGUI_GLIB)
     endif()
   endif()
 endif()

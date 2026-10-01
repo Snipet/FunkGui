@@ -10,6 +10,7 @@
 //   FUNKGUI_OBJC_PREFIX    identifier       Fcmp            root of the product's Objective-C class names
 //   FUNKGUI_ENV_PREFIX     string literal   "FCMP_"         prepended by funkgui::env() (core/Env.h)
 //   FUNKGUI_PREFS_FOLDER   string literal   "FCompressor"   ~/Library/Application Support/<folder>/preferences.settings
+//                                                           (Linux: ~/.config/<folder>/preferences.settings)
 //
 // A target that links FunkGui but never called funkgui_configure_product() fails to compile here, rather than
 // colliding with another product at run time.

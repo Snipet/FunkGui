@@ -1,15 +1,16 @@
 # FunkGui
 
 ![macOS 14+ on Apple Silicon](https://img.shields.io/badge/macOS-14%2B%20·%20Apple%20Silicon-555)
+![Linux x86-64](https://img.shields.io/badge/Linux-x86--64%20·%20X11%20and%20Wayland-555)
 ![JUCE 8.0.4](https://img.shields.io/badge/JUCE-8.0.4-555)
 [![Licence: GPL-3.0](https://img.shields.io/badge/licence-GPL--3.0-555)](LICENSE)
 
-A GPU user-interface library for JUCE audio plugins on macOS. A plugin's interface is a `Panel` that draws into a
-`Canvas`. The canvas records primitives on the CPU (rounded rectangles, lines, filled areas, signed-distance-field
-text), and bgfx draws the recorded frame on Metal in one draw call. The same Panel also runs headless, in a console
-process with a fixed clock and synthetic input, so a test can check its layout, text and accessibility against golden
-files and render any frame to a PNG without a GPU. FunkGui also has a small widget set, a preset store and the test
-harness itself.
+A GPU user-interface library for JUCE audio plugins on macOS and Linux. A plugin's interface is a `Panel` that draws
+into a `Canvas`. The canvas records primitives on the CPU (rounded rectangles, lines, filled areas,
+signed-distance-field text), and bgfx draws the recorded frame in one draw call, on Metal on macOS and on Vulkan on
+Linux. The same Panel also runs headless, in a console process with a fixed clock and synthetic input, so a test can
+check its layout, text and accessibility against golden files and render any frame to a PNG without a GPU. FunkGui also
+has a small widget set, a preset store and the test harness itself.
 
 FunkGui is the GUI of [FCompressor](https://github.com/Snipet/FCompressor). HardwareReverb, a private plugin whose GUI
 code FunkGui grew from, has moved onto it too. FunkGui is at 0.x, and its API may change between minor versions.
@@ -63,13 +64,14 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
   `DwellSelector`. Widgets render models the product implements and write only through `GestureController`.
 - **a11y**: the accessibility items a Panel lists, and their one-line text form for tests.
 - **prefs**, **live**, **juce**: machine-wide UI preferences (theme, zoom, integer keys) in
-  `~/Library/Application Support/<product>/`; `LiveFeed`, which tells a live telemetry stream from a stale one;
-  `MenuLook`, the theme applied to JUCE popup menus.
-- **gpu** (macOS): `EditorHost`, a `juce::AudioProcessorEditor` that runs one Panel on bgfx/Metal. It handles the
-  surface lifecycle with a no-GPU fallback screen, converts JUCE input, mirrors the accessibility items for VoiceOver,
-  offers UI zoom steps and can capture frames. `FramePump` gives every editor in the process one display-link clock and
-  one `bgfx::frame()` per refresh. Objective-C classes are registered at run time under randomised names, so two
-  products using FunkGui in one host never collide.
+  `~/Library/Application Support/<product>/` (Linux: `~/.config/<product>/`); `LiveFeed`, which tells a live telemetry
+  stream from a stale one; `MenuLook`, the theme applied to JUCE popup menus.
+- **gpu**: `EditorHost`, a `juce::AudioProcessorEditor` that runs one Panel on bgfx: Metal on a click-through NSView
+  on macOS, Vulkan on an X11 child window of JUCE's peer on Linux (which is XWayland on a Wayland desktop). It handles
+  the surface lifecycle with a no-GPU fallback screen, converts JUCE input, mirrors the accessibility items for the
+  screen reader, offers UI zoom steps and can capture frames. `FramePump` gives every editor in the process one clock
+  (a display link on macOS, a timer on Linux) and one `bgfx::frame()` per tick. On macOS the Objective-C classes are
+  registered at run time under randomised names, so two products using FunkGui in one host never collide.
 - **presets** (FunkPresets): a SQLite preset store shared by every plugin instance, a preset manager with product
   hooks, and an XML preset file format. It does not depend on the GUI layers.
 - **test** (`test/Harness.h`): a header-only, JUCE-free probe harness. Spec rows are judged at once and never stored;
@@ -78,13 +80,17 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
 
 ## Requirements
 
-- **Platform:** macOS 14 or later on Apple Silicon is the only tested platform. The GPU layer needs macOS (Metal,
-  Objective-C++): configure stops if `FUNKGUI_WITH_BGFX` is on anywhere else. The preset layer has Windows code paths
-  (Windows' own SQLite) carried over from HardwareReverb; they are untested. The harness and golden tools also handle
-  x86_64 (per-architecture golden overlays).
-- **Tools:** CMake 3.30 or later, Ninja, Xcode or its command-line tools (Apple clang, C++20), Python 3 and git.
+- **Platforms:** macOS 14 or later on Apple Silicon, and (from v0.11.0) x86-64 Linux. The GPU layer needs Metal on
+  macOS and Vulkan on Linux; configure stops if `FUNKGUI_WITH_BGFX` is on anywhere else. The preset layer has Windows
+  code paths (Windows' own SQLite) carried over from HardwareReverb; they are untested. The harness and golden tools
+  also handle x86_64 (per-architecture golden overlays).
+- **Tools:** CMake 3.30 or later, Ninja, Python 3 and git; Xcode or its command-line tools (Apple clang, C++20) on
+  macOS, Clang on Linux (the default there unless `CC`/`CXX` say otherwise). Upstream Clang rejects a constructor
+  template in JUCE 8.0.4's `juce_AudioPluginInstance.h`; where it does, `cmake/FunkGuiPlatform.cmake` adds
+  `-fdelayed-template-parsing`, and a consumer does the same in its own scope.
 - **Dependencies:** JUCE 8.0.4 (another version is a configure error unless `FUNKGUI_ALLOW_OTHER_JUCE=ON`);
-  bgfx.cmake `v1.153.9385-561` (bgfx API 153 is checked); SQLite 3 for the presets (the macOS SDK's).
+  bgfx.cmake `v1.153.9385-561` (bgfx API 153 is checked); SQLite 3 for the presets (the macOS SDK's). On Linux also
+  GLib (the preset keys' Unicode fold) and the development packages JUCE needs (ALSA, FreeType, Fontconfig, X11).
 
 ## Using FunkGui from CMake
 
@@ -106,7 +112,7 @@ FetchContent_MakeAvailable(FunkGui)
 juce_add_plugin(MyPlugin FORMATS AU VST3 Standalone PRODUCT_NAME "My Plugin")   # plus your usual arguments
 target_link_libraries(MyPlugin PRIVATE FunkGui::core FunkGui::gpu FunkGui::presets)
 funkgui_configure_product(MyPlugin PRODUCT MyPlugin OBJC_PREFIX MyPl ENV_PREFIX MYPL_ PREFS_FOLDER MyPlugin)
-funkgui_compile_shaders(MyPlugin)   # builds the embedded Metal shaders before MyPlugin
+funkgui_compile_shaders(MyPlugin)   # builds the embedded Metal and SPIR-V shaders before MyPlugin
 funkgui_add_font(MyPlugin)          # the font's and bgfx's licences into each bundle's Resources
 ```
 
@@ -191,7 +197,7 @@ git clone https://github.com/Snipet/FunkGui.git
 cd FunkGui
 cmake --workflow --preset agent-verify        # headless (no bgfx): core, presets, tools and tests
 tools/verify.sh build-agent                    # the gate: exits 0 when nothing is blocking
-cmake --workflow --preset agent-gui-verify    # adds bgfx, the Metal shaders and the GPU tests
+cmake --workflow --preset agent-gui-verify    # adds bgfx, the shaders and the GPU tests
 tools/verify.sh build-agent-gui
 ```
 

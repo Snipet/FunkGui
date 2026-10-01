@@ -39,6 +39,18 @@ namespace T = funkgui::test;
 
 namespace
 {
+    // UiPreferences' real store: ~/Library/Application Support/<folder>/ on macOS, the configuration directory JUCE
+    // resolves, ~/.config, on Linux (v0.11.0).
+    juce::File platformStore()
+    {
+        const juce::File base = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory);
+       #if JUCE_LINUX || JUCE_BSD
+        return base.getChildFile(FUNKGUI_PREFS_FOLDER "/preferences.settings");
+       #else
+        return base.getChildFile("Application Support/" FUNKGUI_PREFS_FOLDER "/preferences.settings");
+       #endif
+    }
+
     juce::File absolute(const char* path)
     {
         return juce::File::getCurrentWorkingDirectory().getChildFile(juce::String::fromUTF8(path));
@@ -157,8 +169,7 @@ int main(int argc, char** argv)
     T::Probe P(args[0], "", argc, argv);
 
     // The real store, and its state before anything here runs.
-    const juce::File realStore = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-                                     .getChildFile("Application Support/" FUNKGUI_PREFS_FOLDER "/preferences.settings");
+    const juce::File realStore = platformStore();
     const bool realExisted = realStore.existsAsFile();
     const juce::Time realModified = realStore.getLastModificationTime();
 
@@ -218,10 +229,7 @@ int main(int argc, char** argv)
     P.in("prefs.clamp_negative", prefs.theme(), 0, funkgui::Theme::kCount - 1);
 
     // ---- Generic int keys (02 §5.9; G6). The product's folder (Q7), then getInt / setInt with setTheme's semantics. ----
-    P.eq("prefs.default_file_in_product_folder",
-         funkgui::UiPreferences::defaultFile() == juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-                                                      .getChildFile("Application Support/" FUNKGUI_PREFS_FOLDER
-                                                                    "/preferences.settings"), 1);
+    P.eq("prefs.default_file_in_product_folder", funkgui::UiPreferences::defaultFile() == platformStore(), 1);
     P.eq("prefs.file_is_redirected_store", prefs.file() == store, 1);
     writeStore(store, { { "theme", "0" } });
     prefs.reload();

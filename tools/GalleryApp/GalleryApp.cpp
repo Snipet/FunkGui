@@ -3,11 +3,13 @@
 // on the GPU: the same Panel GalleryProbe runs headless, so tools/capture-frame.sh can capture a frame of the app and
 // fg.gallery.live can compare it with HeadlessHost's frame of the same section and state.
 //
-//   FunkGuiGalleryApp.app/Contents/MacOS/FunkGuiGalleryApp [--section <name>]
+//   FunkGuiGalleryApp.app/Contents/MacOS/FunkGuiGalleryApp [--section <name>]      (macOS)
+//   FunkGuiGalleryApp_artefacts/<Config>/FunkGuiGalleryApp [--section <name>]      (Linux, v0.11.0)
 //
 // - The section: --section, else FUNKGUI_GALLERY_SECTION, else "primitives" (else the first registered one). An
 //   unknown name lists the sections on stderr and exits 2. The Section menu reopens the window on another section
-//   (the editor's size is fixed per section, EditorHost's rule).
+//   (the editor's size is fixed per section, EditorHost's rule). It is the main menu bar on macOS and the window's own
+//   menu bar elsewhere, set before the content so the window grows by its height and the editor keeps its size.
 // - FUNKGUI_GALLERY_TRANSIENT_VB_BYTES=<n> (>= 1024) configures BgfxContext's transient vertex buffer before the first
 //   editor opens, so a test can force BgfxSink's overflow path (02 §4.5) on a real GPU.
 // - Everything else is EditorHost's capture environment (FUNKGUI_CANVAS_DUMP, _UI_KEYS, _UI_FIXED_DT, ...; 02 §5.1).
@@ -81,12 +83,17 @@ namespace
     class GalleryWindow final : public juce::DocumentWindow
     {
     public:
-        GalleryWindow(NoOpProcessor& processor, const G::SectionInfo& info)
+        GalleryWindow(NoOpProcessor& processor, const G::SectionInfo& info, juce::MenuBarModel* menu)
             : juce::DocumentWindow("FunkGui Gallery: " + juce::String(info.name), juce::Colours::black,
                                    juce::DocumentWindow::closeButton | juce::DocumentWindow::minimiseButton)
         {
             processor.show(info);
             setUsingNativeTitleBar(true);
+           #if JUCE_MAC
+            juce::ignoreUnused(menu);                // the application's main menu bar
+           #else
+            setMenuBar(menu);
+           #endif
             setContentOwned(processor.createEditor(), true);
             setResizable(false, false);
             centreWithSize(getWidth(), getHeight());
@@ -153,12 +160,16 @@ namespace
 
             processor_ = std::make_unique<NoOpProcessor>();
             open(*info);
+           #if JUCE_MAC
             juce::MenuBarModel::setMacMainMenu(this);
+           #endif
         }
 
         void shutdown() override
         {
+           #if JUCE_MAC
             juce::MenuBarModel::setMacMainMenu(nullptr);
+           #endif
             window_.reset();                         // the editor goes before its processor
             processor_.reset();
         }
@@ -171,7 +182,8 @@ namespace
         {
             window_.reset();
             current_ = &info;
-            window_ = std::make_unique<GalleryWindow>(*processor_, info);
+            juce::MenuBarModel* menu = this;         // the private base, converted where it is accessible
+            window_ = std::make_unique<GalleryWindow>(*processor_, info, menu);
             menuItemsChanged();
         }
 

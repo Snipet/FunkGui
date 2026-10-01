@@ -1,0 +1,7 @@
+# funkgui-golden 2  probe=fg.font.probe-linux  scope=global
+# key	value	tolerance
+font.atlas	8d0078b1bae2d442	exact
+font.cap	26.5454559	abs:0.001
+font.x	20	abs:0.001
+font.ascent	37.0909119	abs:0.001
+font.digit	21.8181763	abs:0.001

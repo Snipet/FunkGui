@@ -267,6 +267,7 @@ namespace funkgui
             gpuLog("attach: no render view (failure " + juce::String(retryCount_) + ")");
             return;
         }
+        setRenderViewScale(renderView_, s);          // v0.11.0: on Linux the view's device size is the drawable's
 
         physW_ = juce::roundToInt(area.getWidth() * s);
         physH_ = juce::roundToInt(area.getHeight() * s);
@@ -310,6 +311,7 @@ namespace funkgui
         physW_ = juce::roundToInt(area.getWidth() * scl);
         physH_ = juce::roundToInt(area.getHeight() * scl);
         attachedScale_ = scl;
+        setRenderViewScale(renderView_, scl);        // v0.11.0: Linux resizes the X window with the drawable
         BgfxContext::get().resizeWindow(renderView_, physW_, physH_);
         gpuLog("scale: " + juce::String(scl) + " (" + juce::String(physW_) + " x " + juce::String(physH_) + " px)");
     }
@@ -387,6 +389,7 @@ namespace funkgui
         const double s = scl > 0.0 ? scl : 1.0;     // guarded: an unguarded read halved the drawable during a
                                                      // transient detach (HR :804-806)
         setRenderViewFrame(renderView_, area.getX(), area.getY(), area.getWidth(), area.getHeight());
+        setRenderViewScale(renderView_, s);
         physW_ = juce::roundToInt(area.getWidth() * s);
         physH_ = juce::roundToInt(area.getHeight() * s);
         attachedScale_ = s;
@@ -729,10 +732,12 @@ namespace funkgui
         else
         {
             // A character arrives as the OS delivers it: its text, or with cmd held no text and the (lower-case) key
-            // code, which is what HeadlessHost::keys gives for the same token.
+            // code, which is what HeadlessHost::keys gives for the same token. A control character is no text either:
+            // X11 delivers a Ctrl chord (the command key there) as its control code beside the key code, Ctrl-Z as
+            // 0x1A and 'z', so the key code is the character then too.
             const juce::juce_wchar text = k.getTextCharacter();
             char32_t ch = 0;
-            if (text != 0)
+            if (text >= 0x20)
                 ch = static_cast<char32_t>(text);
             else if (code >= 0x20 && code < 0x7f)
                 ch = static_cast<char32_t>(code);

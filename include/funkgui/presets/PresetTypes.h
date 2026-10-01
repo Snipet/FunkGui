@@ -24,8 +24,9 @@ namespace funkgui::presets
     // to PresetStore and PresetFile; FunkPresets itself names no product.
     struct ProductConfig
     {
-        juce::String productName;     // "FCompressor": ~/Library/Application Support/<productName>/Presets.db, the
-                                      // plugin="…" attribute of an exported file, and the product named in messages
+        juce::String productName;     // "FCompressor": ~/Library/Application Support/<productName>/Presets.db (Linux:
+                                      // ~/.config/<productName>/Presets.db), the plugin="…" attribute of an exported
+                                      // file, and the product named in messages
         juce::String fileExtension;   // ".fcmppreset" (with the dot)
         juce::String xmlRoot;         // "FCompressorPreset": the root element of an exported file
         juce::String dbEnvVar;        // "FCMP_PRESETS_DB": the FULL name of the variable whose value, when set and not

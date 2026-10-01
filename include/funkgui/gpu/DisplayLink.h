@@ -8,6 +8,10 @@
 // refresh rate. On a 120 Hz ProMotion display the two beat against each other
 // and every animation judders; on any display it means presenting at a moment
 // the compositor did not ask for.
+//
+// Linux (v0.11.0) has no display link: createDisplayLink() returns nullptr for
+// every view (src/gpu/linux/DisplayLink.cpp), and the FramePump stays on its
+// fallback timer. displayLinkTargetClassName() is "" there.
 
 namespace funkgui
 {

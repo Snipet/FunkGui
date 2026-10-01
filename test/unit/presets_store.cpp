@@ -2,7 +2,8 @@
 //
 // fg.presets.store: PresetStore (presets/PresetStore.h; FCompressor docs/design/01-core-contracts.md §9.2, K2 #19) —
 //   ENV       ProductConfig::dbEnvVar replaces the database path, read afresh by every store; unset or empty gives
-//             ~/Library/Application Support/<productName>/Presets.db, which this test never opens;
+//             ~/Library/Application Support/<productName>/Presets.db (Linux: ~/.config/<productName>/Presets.db),
+//             which this test never opens;
 //   ROUND     every field of a user and a factory preset, attributes included, survives save, overwrite, the
 //             mutations and a reopen; floats bit for bit; revision() moves once per change and never on a refusal;
 //   WAL       the file is schema v2 in WAL mode, a second connection sees commits, pollExternalChanges() sees another
@@ -245,8 +246,14 @@ int main(int argc, char** argv)
     // ENV
     // =================================================================================================================
     T::unsetEnv(kEnv);
+    // ~/Library/Application Support/FunkGuiTest/ on macOS; on Linux (v0.11.0) the XDG configuration directory.
+   #if JUCE_LINUX || JUCE_BSD
+    const auto realDefault = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                                 .getChildFile("FunkGuiTest/Presets.db");
+   #else
     const auto realDefault = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
                                  .getChildFile("Application Support/FunkGuiTest/Presets.db");
+   #endif
     const bool realFolderBefore = realDefault.getParentDirectory().exists();
     P.eq("env.unset_is_default", FP::PresetStore::defaultLocation(kConfig) == realDefault, 1);
     T::setEnv(kEnv, "");

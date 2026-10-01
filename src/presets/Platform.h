@@ -2,8 +2,8 @@
 
 // FunkPresets-private. The two places the preset layer needs the operating system: reading a float in the "C" locale,
 // and folding text for keys. Everything else in presets/ is portable C++ and JUCE. Both live in Platform.cpp so that
-// <xlocale.h>, CoreFoundation and <windows.h> are included by one translation unit only (<windows.h> defines min, max
-// and small as macros). (HardwareReverb Source/presets/Platform.h.)
+// <xlocale.h>, CoreFoundation, <windows.h> and <glib.h> are included by one translation unit only (<windows.h> defines
+// min, max and small as macros). (HardwareReverb Source/presets/Platform.h.)
 
 #include <juce_core/juce_core.h>
 

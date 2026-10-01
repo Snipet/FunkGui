@@ -1,7 +1,8 @@
 # FunkGui's own tests (FCompressor docs/design/02-funkgui-and-ui.md §3.11; SPRINTS.md D18). Written once in Sprint 0:
 # later cards add test files, never edit this one.
 #
-# Self-registration (mirrors FCompressor's FCMP_PROBE, 03 §2.9). Any test/**/*.cpp or test/**/*.mm whose FIRST line is
+# Self-registration (mirrors FCompressor's FCMP_PROBE, 03 §2.9). Any test/**/*.cpp or test/**/*.mm (*.mm and
+# *_apple.cpp: Apple only; *_linux.cpp: Linux only) whose FIRST line is
 #
 #   // FUNKGUI_TEST name=fg.<x> timeout=<s> gpu=<0|1>[ links=<harness|core|gpu|presets>][ exe=<tool>[ args="<text>"]][ labels=<l>[,<l>…]]
 #
@@ -168,6 +169,15 @@ function(_fg_add_test name timeout gpu links exe args labels source)
 endfunction()
 
 file(GLOB_RECURSE _fg_test_files CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp ${CMAKE_CURRENT_SOURCE_DIR}/*.mm)
+# Platform tests (v0.11.0): *.mm and *_apple.cpp files are Apple's, *_linux.cpp files Linux's. A test that checks the
+# same thing on both keeps one name (fg.smoke.gpu is test/smoke/smoke_gpu.mm on macOS and smoke_gpu_linux.cpp on
+# Linux); one whose golden differs by platform gets its own (fg.font.probe and fg.font.probe-linux).
+if(NOT APPLE)
+  list(FILTER _fg_test_files EXCLUDE REGEX "(\\.mm|_apple\\.cpp)$")
+endif()
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  list(FILTER _fg_test_files EXCLUDE REGEX "_linux\\.cpp$")
+endif()
 list(SORT _fg_test_files)
 foreach(_f IN LISTS _fg_test_files)
   file(READ ${_f} _head LIMIT 1024)
@@ -240,12 +250,15 @@ if(NOT FUNKGUI_HARNESS_ONLY)
   target_link_libraries(fg_header_flags PRIVATE FunkGui::core FunkGui::harness)
   set(_fg_headers_args --cxx ${CMAKE_CXX_COMPILER} --flags ${CMAKE_BINARY_DIR}/fg-headers.flags
                        --root ${PROJECT_SOURCE_DIR})
-  if(CMAKE_OSX_SYSROOT)
+  if(APPLE AND CMAKE_OSX_SYSROOT)
     list(APPEND _fg_headers_args --sdk ${CMAKE_OSX_SYSROOT})
   endif()
-  if(CMAKE_OSX_DEPLOYMENT_TARGET)
+  if(APPLE AND CMAKE_OSX_DEPLOYMENT_TARGET)
     list(APPEND _fg_headers_args --min-macos ${CMAKE_OSX_DEPLOYMENT_TARGET})
   endif()
+  foreach(_f IN LISTS FUNKGUI_JUCE804_WORKAROUND)    # cmake/FunkGuiPlatform.cmake, where the compiler needs it
+    list(APPEND _fg_headers_args --extra-flag ${_f})
+  endforeach()
   if(FUNKGUI_WITH_BGFX)
     target_link_libraries(fg_header_flags PRIVATE FunkGui::gpu)
     list(APPEND _fg_headers_args --bgfx)

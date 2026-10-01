@@ -13,7 +13,7 @@
 #include <string_view>
 #include <vector>
 
-#include <xlocale.h>                                     // after <cstdio>/<cstdlib>: fprintf_l, strtof_l (macOS)
+#include <funkgui/core/CLocale.h>                        // fprintfC, strtofC: the C locale on macOS and Linux
 
 // Dump v2 (02 §3.8), a superset of the snapshot's SdfCanvas::end() dump (v1, gpu/SdfCanvas.cpp:290-319), and the tag
 // name registry (canvas/Tags.h) it spells tags with.
@@ -136,10 +136,6 @@ namespace funkgui
 
     namespace
     {
-        // The C locale, for number formatting and parsing that no setlocale() in the host can change: the *_l
-        // functions take a null locale_t as the C locale (xlocale(3)).
-        constexpr locale_t kCLocale = nullptr;
-
         const char* clockName(const FrameInfo& i) noexcept
         {
             return i.fixedClock ? "fixed" : (i.displayLinked ? "displaylink" : "timer");
@@ -155,11 +151,11 @@ namespace funkgui
             return std::to_string(static_cast<unsigned>(t));
         }
 
-        bool writeAxis(std::FILE* f, locale_t loc, const char* axisName, bool has, const AxisMap& m)
+        bool writeAxis(std::FILE* f, const char* axisName, bool has, const AxisMap& m)
         {
             if (!has)
-                return fprintf_l(f, loc, " %s -", axisName) >= 0;
-            return fprintf_l(f, loc, " %s %.9g %.9g %.9g %.9g %s", axisName, dbl(m.px0), dbl(m.px1), dbl(m.v0),
+                return fprintfC(f, " %s -", axisName) >= 0;
+            return fprintfC(f, " %s %.9g %.9g %.9g %.9g %s", axisName, dbl(m.px0), dbl(m.px1), dbl(m.v0),
                              dbl(m.v1), m.log ? "log" : "lin") >= 0;
         }
     }
@@ -168,47 +164,46 @@ namespace funkgui
     {
         if (f == nullptr)
             return false;
-        const locale_t loc = kCLocale;
         bool ok = true;
         const auto put = [&ok](int rc) { ok = ok && rc >= 0; };
 
-        put(fprintf_l(f, loc, "funkgui-dump 2\n"));
-        put(fprintf_l(f, loc, "clear %02x%02x%02x\n", info.clear.r, info.clear.g, info.clear.b));
-        put(fprintf_l(f, loc,
-                      "view %d %d dpi %.9g theme %d frame %u dt %.9g clock %s fps %.1f rate %s seconds %.9g "
-                      "gamma %.9g\n",
-                      info.logicalW, info.logicalH, dbl(info.dpi), info.theme, static_cast<unsigned>(info.frame),
-                      dbl(info.dt), clockName(info), dbl(info.fps), info.fullRate ? "full" : "idle", dbl(info.seconds),
-                      dbl(info.textGamma)));
+        put(fprintfC(f, "funkgui-dump 2\n"));
+        put(fprintfC(f, "clear %02x%02x%02x\n", info.clear.r, info.clear.g, info.clear.b));
+        put(fprintfC(f,
+                     "view %d %d dpi %.9g theme %d frame %u dt %.9g clock %s fps %.1f rate %s seconds %.9g "
+                     "gamma %.9g\n",
+                     info.logicalW, info.logicalH, dbl(info.dpi), info.theme, static_cast<unsigned>(info.frame),
+                     dbl(info.dt), clockName(info), dbl(info.fps), info.fullRate ? "full" : "idle", dbl(info.seconds),
+                     dbl(info.textGamma)));
 
-        put(fprintf_l(f, loc, "glyphs missing %u", static_cast<unsigned>(missingGlyphs)));
+        put(fprintfC(f, "glyphs missing %u", static_cast<unsigned>(missingGlyphs)));
         for (const uint32_t cp : missingFirst)
             if (cp != 0)
-                put(fprintf_l(f, loc, " U+%04X", static_cast<unsigned>(cp)));
-        put(fprintf_l(f, loc, "\n"));
+                put(fprintfC(f, " U+%04X", static_cast<unsigned>(cp)));
+        put(fprintfC(f, "\n"));
 
         if (info.overflows > 0)
-            put(fprintf_l(f, loc, "overflow %u\n", static_cast<unsigned>(info.overflows)));
+            put(fprintfC(f, "overflow %u\n", static_cast<unsigned>(info.overflows)));
 
         for (const AxisRec& a : axes)
         {
-            put(fprintf_l(f, loc, "axis %s", tagText(a.tag).c_str()));
-            ok = ok && writeAxis(f, loc, "x", a.hasX, a.x) && writeAxis(f, loc, "y", a.hasY, a.y);
-            put(fprintf_l(f, loc, "\n"));
+            put(fprintfC(f, "axis %s", tagText(a.tag).c_str()));
+            ok = ok && writeAxis(f, "x", a.hasX, a.x) && writeAxis(f, "y", a.hasY, a.y);
+            put(fprintfC(f, "\n"));
         }
 
         for (const Prim& p : prims)
         {
-            put(fprintf_l(f, loc,
-                          "p %.9g %.9g %.9g %.9g  c0 %08x c1 %08x  d0 %.9g %.9g %.9g %.9g  e0 %.9g %.9g  "
-                          "d1 %.9g %.9g %.9g %.9g  d2 %.9g %.9g %.9g %.9g",
-                          dbl(p.x0), dbl(p.y0), dbl(p.x1), dbl(p.y1), static_cast<unsigned>(p.c0),
-                          static_cast<unsigned>(p.c1), dbl(p.d0[0]), dbl(p.d0[1]), dbl(p.d0[2]), dbl(p.d0[3]),
-                          dbl(p.e0[0]), dbl(p.e0[1]), dbl(p.d1[0]), dbl(p.d1[1]), dbl(p.d1[2]), dbl(p.d1[3]),
-                          dbl(p.d2[0]), dbl(p.d2[1]), dbl(p.d2[2]), dbl(p.d2[3])));
+            put(fprintfC(f,
+                         "p %.9g %.9g %.9g %.9g  c0 %08x c1 %08x  d0 %.9g %.9g %.9g %.9g  e0 %.9g %.9g  "
+                         "d1 %.9g %.9g %.9g %.9g  d2 %.9g %.9g %.9g %.9g",
+                         dbl(p.x0), dbl(p.y0), dbl(p.x1), dbl(p.y1), static_cast<unsigned>(p.c0),
+                         static_cast<unsigned>(p.c1), dbl(p.d0[0]), dbl(p.d0[1]), dbl(p.d0[2]), dbl(p.d0[3]),
+                         dbl(p.e0[0]), dbl(p.e0[1]), dbl(p.d1[0]), dbl(p.d1[1]), dbl(p.d1[2]), dbl(p.d1[3]),
+                         dbl(p.d2[0]), dbl(p.d2[1]), dbl(p.d2[2]), dbl(p.d2[3])));
             if (p.tag != tags::none)
-                put(fprintf_l(f, loc, "  t %s", tagText(p.tag).c_str()));
-            put(fprintf_l(f, loc, "\n"));
+                put(fprintfC(f, "  t %s", tagText(p.tag).c_str()));
+            put(fprintfC(f, "\n"));
             if (!ok)
                 return false;
         }
@@ -247,7 +242,7 @@ namespace funkgui
             std::memcpy(buf, t.data(), t.size());
             buf[t.size()] = 0;
             char* end = nullptr;
-            v = strtof_l(buf, &end, kCLocale);
+            v = strtofC(buf, &end);
             return end == buf + t.size();
         }
 

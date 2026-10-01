@@ -1,5 +1,6 @@
 #include <funkgui/panel/CaptureConfig.h>
 
+#include <funkgui/core/CLocale.h>
 #include <funkgui/core/Env.h>
 #include <funkgui/core/Theme.h>
 
@@ -7,8 +8,6 @@
 #include <climits>
 #include <cmath>
 #include <cstdlib>
-
-#include <xlocale.h>                                     // after <cstdlib>: strtol_l, strtof_l (macOS)
 
 // CaptureConfig::fromEnv (02 §5.1 "Diagnostics environment"; G7). Every value is read once through funkgui::env(), so
 // the names are FUNKGUI_ENV_PREFIX + the suffix (FCMP_CANVAS_DUMP in FCompressor, FUNKGUI_CANVAS_DUMP in FunkGui's own
@@ -26,7 +25,6 @@ namespace funkgui
 {
     namespace
     {
-        constexpr locale_t kCLocale = nullptr;           // the *_l functions take a null locale_t as the C locale
         constexpr int kMinZoomPercent = 25, kMaxZoomPercent = 400;
 
         bool parseInt(const char* s, int lo, int hi, int& out)
@@ -35,7 +33,7 @@ namespace funkgui
                 return false;
             char* end = nullptr;
             errno = 0;
-            const long v = strtol_l(s, &end, 10, kCLocale);
+            const long v = strtolC(s, &end, 10);            // the C locale
             if (errno != 0 || end == s || *end != '\0' || v < lo || v > hi)
                 return false;
             out = static_cast<int>(v);
@@ -48,7 +46,7 @@ namespace funkgui
                 return false;
             char* end = nullptr;
             errno = 0;
-            const float v = strtof_l(s, &end, kCLocale);
+            const float v = strtofC(s, &end);
             if (errno != 0 || end == s || *end != '\0' || !std::isfinite(v) || !(v > lo) || v > hi)
                 return false;
             out = v;

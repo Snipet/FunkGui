@@ -27,6 +27,22 @@ namespace funkgui
             return o;
         }
 
+        // The store's file when <ENV_PREFIX>PREFS_DIR is not set: JUCE's default for these options on macOS,
+        // ~/Library/Application Support/<folder>/preferences.settings. On Linux JUCE's default is ~/<folder>/, a
+        // visible folder in the home directory, so FunkGui uses the configuration directory JUCE resolves instead,
+        // ~/.config, where FunkPresets keeps its database too (v0.11.0). JUCE 8.0.4 looks for an XDG_CONFIG_HOME line
+        // in ~/.config/user-dirs.dirs, which holds none, and never reads the environment variable: a relocated
+        // $XDG_CONFIG_HOME is not followed yet.
+        juce::File defaultStoreFile()
+        {
+           #if JUCE_LINUX || JUCE_BSD
+            return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                       .getChildFile(FUNKGUI_PREFS_FOLDER).getChildFile("preferences.settings");
+           #else
+            return storeOptions().getDefaultFile();
+           #endif
+        }
+
         // The store's keys ignore case (juce::PropertiesFile::Options::ignoreCaseOfKeyNames), so "Theme" is the theme.
         bool isThemeKey(const char* key)
         {
@@ -65,7 +81,7 @@ namespace funkgui
 
     juce::File UiPreferences::defaultFile()
     {
-        return storeOptions().getDefaultFile();
+        return defaultStoreFile();
     }
 
     UiPreferences::UiPreferences()
@@ -80,7 +96,7 @@ namespace funkgui
             file_ = std::make_unique<juce::PropertiesFile>(
                 juce::File(juce::String(dir)).getChildFile("preferences.settings"), o);
         else
-            file_ = std::make_unique<juce::PropertiesFile>(o);
+            file_ = std::make_unique<juce::PropertiesFile>(defaultStoreFile(), o);
         theme_ = juce::jlimit(0, Theme::kCount - 1,
                               file_->getIntValue(kThemeKey, 0));
     }
