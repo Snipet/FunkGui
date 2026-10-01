@@ -199,7 +199,7 @@ int main(int argc, char** argv)
         P.eq("host.reload_unchanged_no_bump", prefs.revision() == rev + 1 && shared->reloads == 2, 1);
     }
     {
-        // The theme's own reading: the properties file's getIntValue, kept (leading white space, then digits).
+        // The theme's own reading: the properties file's getIntValue (atoi), kept: white space, a sign, digits.
         const auto themeOf = [&](const char* text)
         {
             shared->values["theme"] = text;
@@ -209,6 +209,7 @@ int main(int argc, char** argv)
         P.eq("host.theme_text_plain", themeOf("1"), 1);
         P.eq("host.theme_text_trailing", themeOf("1abc"), 1);
         P.eq("host.theme_text_leading_space", themeOf(" \t1"), 1);
+        P.eq("host.theme_text_plus_sign", themeOf("+1"), 1);
         P.eq("host.theme_text_not_a_number", themeOf("abc"), 0);
         P.eq("host.theme_text_empty", themeOf(""), 0);
         P.eq("host.theme_text_too_big_clamps", themeOf("99"), last);

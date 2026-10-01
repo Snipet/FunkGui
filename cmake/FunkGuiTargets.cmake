@@ -51,6 +51,16 @@ add_library(FunkGuiHarness INTERFACE)
 add_library(FunkGui::harness ALIAS FunkGuiHarness)
 target_include_directories(FunkGuiHarness INTERFACE ${PROJECT_SOURCE_DIR}/include)
 target_compile_features(FunkGuiHarness INTERFACE cxx_std_20)
+# The harness exports the same include root as FunkGui::core, so it carries the same answer to FUNKGUI_HAS_JUCE
+# (include/funkgui/core/HasJuce.h): a target that links only the harness must not read a JUCE-free build as a JUCE one.
+# Not in a harness-only configuration, which has no core.
+if(NOT FUNKGUI_HARNESS_ONLY)
+  if(FUNKGUI_WITH_JUCE)
+    target_compile_definitions(FunkGuiHarness INTERFACE FUNKGUI_HAS_JUCE=1)
+  else()
+    target_compile_definitions(FunkGuiHarness INTERFACE FUNKGUI_HAS_JUCE=0)
+  endif()
+endif()
 
 #=======================================================================================================================
 # Consumer functions (02 §1.5, §1.6, §1.8; 03 §1.2). Defined in every configuration.

@@ -7,6 +7,7 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <map>
 #include <memory>
@@ -59,21 +60,13 @@ namespace funkgui
             return ec == std::errc{} && end == last;
         }
 
-        // The theme's own reading, kept as it always was: juce::String::getIntValue's (the properties file's
-        // getIntValue), which skips leading white space, takes an optional '-' and then digits up to the first
-        // character that is not one, and wraps instead of failing. "3abc" is 3, "abc" is 0; the clamp follows.
+        // The theme's own reading, kept as it always was: the properties file's getIntValue, which for JUCE's UTF-8
+        // strings is atoi. Leading white space, an optional '+' or '-', then digits up to the first character that is
+        // not one; nothing readable is 0. "3abc" is 3, "+1" is 1, "abc" is 0; the clamp follows. (atoi is strtol
+        // narrowed to int on the platforms this ran on, which is what this does.)
         int lenientInt(const std::string& t) noexcept
         {
-            size_t i = 0;
-            while (i < t.size() && (t[i] == ' ' || (t[i] >= '\t' && t[i] <= '\r')))
-                ++i;
-            const bool negative = i < t.size() && t[i] == '-';
-            if (negative)
-                ++i;
-            uint32_t v = 0;
-            for (; i < t.size() && t[i] >= '0' && t[i] <= '9'; ++i)
-                v = v * 10u + static_cast<uint32_t>(t[i] - '0');
-            return static_cast<int>(negative ? 0u - v : v);
+            return static_cast<int>(std::strtol(t.c_str(), nullptr, 10));
         }
 
         // The store without JUCE, and anyone's sandbox: nothing outside the process can change it.
