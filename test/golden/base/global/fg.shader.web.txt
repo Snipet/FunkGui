@@ -1,0 +1,6 @@
+# funkgui-golden 2  probe=fg.shader.web  scope=global
+# key	value	tolerance
+shader.vs_ui.es300.hash	11af222eb51e65ba	exact
+shader.vs_ui.es300.bytes	1143	exact
+shader.fs_ui.es300.hash	f0b63cd8d9b77842	exact
+shader.fs_ui.es300.bytes	7312	exact

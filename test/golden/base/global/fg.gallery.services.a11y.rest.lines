@@ -1,0 +1,9 @@
+ 2 MENU                     16,16,56,20
+ 2 OPEN                     80,16,56,20
+ 2 OPEN MANY                144,16,96,20
+ 2 SAVE                     248,16,56,20
+ 2 COPY                     312,16,56,20
+ 7 HOST                     16,52,448,12         value=MENUS   FILE CHOOSER   CLIPBOARD   COMMAND KEY CMD [ro]
+ 7 MENU                     16,68,448,12         value=-   TICK ON 2 [ro]
+ 7 FILES                    16,84,448,12         value=- [ro]
+ 7 COPY                     16,100,448,12        value=- [ro]
