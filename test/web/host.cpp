@@ -51,6 +51,14 @@
 //    cap; a hidden document draws nothing and closes the gestures; stop() stops both and start() starts them again.
 // 7. A context loss forced with WEBGL_lose_context: frame() ticks the Panel, submits nothing and counts the frame as
 //    lost; after the restore the host draws again, the same pixels byte for byte.
+// 8. The product's hook (WebHostConfig::beforeTick, v0.14.0; FCompressor docs/sprints/web-d.md G-F). Driven by
+//    frame(): the hook is called exactly once in every frame that ticks the Panel, before that tick, so the tick sees
+//    what the hook brought in the same frame; a frame that ticks without drawing (no canvas) calls it all the same; a
+//    frame of a hidden document, which ticks nothing, does not; it runs inside the frame (a frame() from it is
+//    refused); the teardown does not call it, and the host takes it along; an empty hook is nothing. Then under the
+//    clock (counts, never times): one call before each tick at the idle rate and at full rate and none from the idle
+//    timer; none while the document is hidden, none after stop(), again after start(), none after the host is
+//    destroyed.
 
 #include "../../src/web/WebServices.h"
 #include "../gallery/GalleryPanel.h"
@@ -513,6 +521,9 @@ namespace
         KeyEvent     keyEv;
         int   moves = 0, downs = 0, drags = 0, ups = 0, doubles = 0, exits = 0, wheels = 0, keys = 0;
         int   ticks = 0, idles = 0, closes = 0;
+        int   brought = 0;                           // what a beforeTick hook brought in: it counts its calls here
+        int   broughtSeen = 0;                       // `brought` as the last tick saw it
+        int   fedTicks = 0;                          // the ticks that came after as many calls as ticks, theirs made
         float firstDt = 0.0f, lastDt = 0.0f, smallestDt = 1.0e9f, largestDt = 0.0f;
         float markedDt = -1.0f;                      // the dt of the first tick after markDt(); -1 until it comes
         double lastIdleNow = -1.0;
@@ -536,6 +547,9 @@ namespace
                 firstDt = dt;
             ++ticks;
             lastDt = dt;
+            ++allTicks_;
+            fedTicks += brought == allTicks_ ? 1 : 0;            // one hook call a tick, and this tick's was made
+            broughtSeen = brought;
             if (marked_)
                 markedDt = dt;
             marked_ = false;
@@ -626,6 +640,7 @@ namespace
     private:
         int  w_, h_;
         bool marked_ = false;
+        int  allTicks_ = 0;                          // `ticks`, which a test may reset, without the resets
     };
 
     // shift | cmd << 1 | alt << 2 | ctrl << 3
@@ -1587,6 +1602,108 @@ namespace
         prefs.setInt(kZoomKey, 100);
     }
 
+    // ---- 8. the product's hook, driven by frame(): no real time -----------------------------------------------------
+    void hook()
+    {
+        Recorder panel(240, 160);
+        auto token = std::make_shared<int>(0);       // held by the hook: who else holds it holds the hook
+        WebHost* self = nullptr;
+        bool reenter = false;                        // the next call asks its host for a frame, once
+        WebHost::FrameResult inner{ true, true };    // what that frame() from inside the hook answered
+        WebHostConfig config = pinned(100);
+        config.beforeTick = [&, token] {
+            ++panel.brought;
+            if (std::exchange(reenter, false))
+                inner = self->frame(stamp);
+        };
+        auto host = std::make_unique<WebHost>(panel, std::move(config));
+        self = host.get();
+        const auto counts = [&] {
+            return std::to_string(panel.brought) + " calls, " + std::to_string(panel.ticks) + " ticks, "
+                 + std::to_string(panel.fedTicks) + " of them after exactly their own call";
+        };
+
+        // ---- once per frame that ticks, before the tick
+        check(host->ok() && panel.brought == 0 && panel.ticks == 0,
+              "constructing a host with a beforeTick hook calls it no more than it ticks: not at all");
+        const WebHost::FrameResult first = frame(*host);
+        check(first.submitted && panel.ticks == 1 && panel.brought == 1 && panel.broughtSeen == 1,
+              "frame() calls the hook once, before the tick: the Panel's tick saw what the hook brought in the same "
+              "frame (" + std::to_string(panel.brought) + " call, " + std::to_string(panel.broughtSeen)
+                  + " seen by the tick)");
+        panel.wantFull = true;                       // whatever rate the Panel asks for, and after input
+        frame(*host);
+        frame(*host);
+        panel.wantFull = false;
+        fg_host_pointer("pointermove", 30.0, 30.0, 0, 0, 0);
+        fg_host_key("ArrowRight", 0);
+        const bool inputAlone = panel.moves == 1 && panel.keys == 1 && panel.brought == 3;
+        frame(*host);
+        frame(*host);
+        check(panel.ticks == 5 && panel.brought == 5 && panel.fedTicks == 5 && panel.broughtSeen == 5 && inputAlone,
+              "and so in every frame, exactly once: after 5 frames " + counts() + "; a pointer move and a key reach "
+              "the Panel without it");
+
+        // ---- inside the frame
+        reenter = true;
+        const WebHost::FrameResult outer = frame(*host);
+        check(outer.submitted && !reenter && !inner.submitted && !inner.wantsFullRate && panel.ticks == 6
+                  && panel.brought == 6,
+              "the hook runs inside the frame: a frame() from it is refused, with no second call and no second tick ("
+                  + counts() + ")");
+
+        // ---- no tick, no hook
+        const uint32_t drawn = host->diagnostics().frames;
+        int calls = panel.brought, ticks = panel.ticks;
+        fg_host_hidden(1);
+        const bool drewOnce = frame(*host).submitted, drewTwice = frame(*host).submitted;
+        const int hiddenCalls = panel.brought - calls, hiddenTicks = panel.ticks - ticks;
+        fg_host_hidden(0);
+        check(!drewOnce && !drewTwice && hiddenCalls == 0 && hiddenTicks == 0
+                  && host->diagnostics().frames == drawn,
+              "a frame of a hidden document, which ticks nothing, does not call the hook: "
+                  + std::to_string(hiddenCalls) + " calls and " + std::to_string(hiddenTicks) + " ticks in 2 frames");
+        frame(*host);
+        check(panel.ticks == 7 && panel.brought == 7 && panel.fedTicks == 7,
+              "shown again, the next frame calls it once, before its tick (" + counts() + ")");
+
+        // ---- the teardown
+        const long held = token.use_count();
+        calls = panel.brought;
+        ticks = panel.ticks;
+        host.reset();
+        check(held == 2 && token.use_count() == 1 && panel.brought == calls && panel.ticks == ticks,
+              "~WebHost does not call the hook and takes it along: nothing holds it after the host (held by "
+                  + std::to_string(held - 1) + " before, " + std::to_string(token.use_count() - 1) + " after; "
+                  + std::to_string(panel.brought - calls) + " calls in the teardown)");
+
+        // ---- a frame that ticks without drawing
+        {
+            Recorder undrawn(240, 160);
+            WebHostConfig noCanvas = pinned(100);
+            noCanvas.canvasSelector = "#funkgui-no-such-canvas";
+            noCanvas.beforeTick = [&undrawn] { ++undrawn.brought; };
+            WebHost blind(undrawn, std::move(noCanvas));
+            const bool drew = frame(blind).submitted, drewAgain = frame(blind).submitted;
+            check(!blind.ok() && !drew && !drewAgain && undrawn.ticks == 2 && undrawn.brought == 2
+                      && undrawn.fedTicks == 2,
+                  "a host with no canvas ticks without drawing, and calls the hook before each tick all the same ("
+                      + std::to_string(undrawn.brought) + " calls, " + std::to_string(undrawn.ticks) + " ticks)");
+        }
+
+        // ---- an empty hook
+        {
+            Recorder plain(240, 160);
+            WebHostConfig empty = pinned(100);
+            empty.beforeTick = std::function<void()>{};          // what the config holds when nothing is set
+            WebHost quiet(plain, std::move(empty));
+            const WebHost::FrameResult r = frame(quiet);
+            check(quiet.ok() && r.submitted && plain.ticks == 1 && plain.brought == 0
+                      && quiet.diagnostics().frames == 1,
+                  "an empty hook is nothing: frame() ticks the Panel once and draws");
+        }
+    }
+
     // ---- 6. the clock -----------------------------------------------------------------------------------------------
     struct Clock
     {
@@ -1595,6 +1712,7 @@ namespace
         int    stage = 0;
         double stageStart = 0.0;
         int    ticksAt = 0, idlesAt = 0;             // at the start of the stage
+        int    broughtAt = 0, fedAt = 0;             // the hook's calls and the ticks after their own, likewise
         int    closesMark = 0, reloadsMark = 0;      // before the action a stage judges
         int    attempts = 0;
         int    looks = 0, looksUnrequested = 0;      // stage 0's polls, and those that found no animation frame asked
@@ -1616,6 +1734,8 @@ namespace
         c.stageStart = emscripten_performance_now();
         c.ticksAt = c.panel->ticks;
         c.idlesAt = c.panel->idles;
+        c.broughtAt = c.panel->brought;
+        c.fedAt = c.panel->fedTicks;
     }
 
     void clockStep(void*)
@@ -1624,6 +1744,8 @@ namespace
         Recorder& panel = *c.panel;
         const double elapsed = emscripten_performance_now() - c.stageStart;
         const int ticked = panel.ticks - c.ticksAt;
+        // The hook's calls in this stage, and the ticks that came after exactly their own call.
+        const int called = panel.brought - c.broughtAt, fed = panel.fedTicks - c.fedAt;
         bool next = true;                            // poll again
         switch (c.stage)
         {
@@ -1658,6 +1780,10 @@ namespace
                           && std::fabs(panel.lastIdleNow * 1000.0 - emscripten_performance_now()) < 500.0,
                       "Panel::idle runs from the host's timer with the performance clock: "
                           + std::to_string(panel.idles - c.idlesAt) + " calls");
+                check(called == ticked && fed == ticked,
+                      "the hook follows the clock, once before each tick, and the idle timer does not call it: "
+                          + std::to_string(called) + " calls for " + std::to_string(ticked) + " frames ("
+                          + std::to_string(fed) + " ticks after exactly their own call)");
                 clockEnter(1);
                 break;
             case 1:                                  // a nudge: wait for an idle frame, then move the pointer
@@ -1693,6 +1819,10 @@ namespace
                       "a Panel that wants full rate gets it, and no more than the cap: " + std::to_string(ticked)
                           + " frames in " + num(elapsed) + " ms (60 Hz would be " + num(elapsed * 0.06) + ")");
                 check(c.host->lastFrame().info.fullRate, "and its frames say that full rate was asked for");
+                check(called == ticked && fed == ticked,
+                      "the hook is called at that rate, once before each tick: " + std::to_string(called)
+                          + " calls for " + std::to_string(ticked) + " frames (" + std::to_string(fed)
+                          + " ticks after exactly their own call)");
                 panel.wantFull = false;
                 c.closesMark = panel.closes;
                 fg_host_hidden(1);
@@ -1709,6 +1839,9 @@ namespace
                 check(ticked == 0 && panel.ticks == c.ticksAt && !direct.submitted && panel.closes == c.closesMark + 1,
                       "a hidden document closes the Panel's gestures and draws nothing: " + std::to_string(ticked)
                           + " frames in " + num(elapsed) + " ms, and frame() ticks nothing");
+                check(panel.brought == c.broughtAt,
+                      "nor is the hook called while the document is hidden, by the clock or by frame(): "
+                          + std::to_string(panel.brought - c.broughtAt) + " calls");
                 c.reloadsMark = store.reloads;
                 c.attempts = 1;
                 panel.markDt();
@@ -1761,6 +1894,7 @@ namespace
                       "stop() cancels the frame it had requested, stops the idle calls and closes the gestures: "
                           + std::to_string(ticked) + " frames and " + std::to_string(panel.idles - c.idlesAt)
                           + " idle calls in " + num(elapsed) + " ms");
+                check(called == 0, "and the hook is not called after stop(): " + std::to_string(called) + " calls");
                 c.host->stop();                      // idempotent
                 check(panel.closes == c.closesMark + 1, "a second stop() does nothing");
                 panel.wantFull = false;
@@ -1775,6 +1909,10 @@ namespace
                     break;
                 check(c.host->running() && panel.ticks > 0 && sameBits(panel.firstDt, kDt),
                       "start() starts them again, the first frame's dt 1/60 s once more");
+                check(called == ticked && fed == ticked && called > 0,
+                      "and the hook with them, before each tick: " + std::to_string(called) + " calls for "
+                          + std::to_string(ticked) + " frames (" + std::to_string(fed)
+                          + " ticks after exactly their own call)");
                 panel.wantFull = true;               // destroyed with a frame requested and the idle timer running
                 fg_host_pointer("pointermove", 60.0, 30.0, 0, 0, 0);
                 clockEnter(9);
@@ -1790,6 +1928,8 @@ namespace
                     break;
                 check(ticked == 0 && panel.idles == c.idlesAt,
                       "a host destroyed while its clock runs leaves no frame and no idle call behind");
+                check(called == 0, "and no call of its hook: " + std::to_string(called) + " calls in " + num(elapsed)
+                                       + " ms");
                 next = false;
                 c.panel.reset();
                 lossStart();
@@ -1806,6 +1946,7 @@ namespace
         c.panel = std::make_unique<Recorder>(240, 160);
         WebHostConfig config = pinned(100);
         config.capture.fixedDt = 0.0f;               // the browser's clock
+        config.beforeTick = [] { ++clockRun.panel->brought; };
         c.host = std::make_unique<WebHost>(*c.panel, std::move(config));
         c.host->start();
         clockEnter(kWarmUp);
@@ -1920,6 +2061,7 @@ namespace
         sizingAndInput();
         zoom();
         requests();
+        hook();
         clockStart();                                // continues in clockStep, then lossStart, then the verdict
     }
 }
