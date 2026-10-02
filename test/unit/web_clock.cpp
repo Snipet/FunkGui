@@ -7,14 +7,15 @@
 // timestamp, and a timer for the waits FrameCadence asks for.
 //   dt.*      the first frame's dt is 1/60 s; after that the time since the last frame, clamped to 1 ms .. 100 ms;
 //             reset() makes the next frame a first frame
-//   fps.*     measured over one-second windows, 0 before the first has passed
+//   fps.*     measured over one-second windows, 0 before the first has passed: not at 990 ms, at 1000 ms
 //   full.*    full rate on 60, 75, 90, 120, 144, 165 and 240 Hz displays: every vsync up to 75 Hz, an even divisor
 //             near 60 Hz above, evenly spaced
 //   idle.*    12 frames a second on every display, without asking for every vsync in between
 //   nudge.*   a nudge during an idle wait is drawn at the next vsync and lasts until the frame's own request
 //   hidden.*  nothing is due while the page is hidden
 //   wait.*    how long a host sleeps before its next requestAnimationFrame
-//   rate.*    wantedFullRate(): the request before the frame, FramePump's rule
+//   rate.*    wantedFullRate(): the request before the frame, FramePump's rule; a frame stamped before the last one
+//             (the clock went back) is due at once
 //   zoom.*    cleanZoomSteps, nearestZoomStep, zoomedSize and fitZoom against the cases of fg.editorhost.zoom
 //             (config.*, fit.*), which needs a GPU build and a display
 // Spec rows only.
@@ -139,6 +140,18 @@ int main(int argc, char** argv)
         Browser idle(60.0);
         idle.run(100.0, 3200.0);
         P.near("fps.twelve_when_idle", idle.cadence.fps(), 12.0, 0.2);
+
+        // The window is one second, on both sides: a frame every 250 ms from 1000 ms, then at 1990 and at 2000 ms.
+        FrameCadence c;
+        for (const double t : { 1000.0, 1250.0, 1500.0, 1750.0, 1990.0 })
+            c.advance(t);
+        P.near("fps.zero_990ms_after_the_first_frame", c.fps(), 0.0, 0.0);
+        c.advance(2000.0);
+        P.near("fps.counted_at_1000ms", c.fps(), 5.0, 0.0);
+        c.advance(2990.0);
+        P.near("fps.kept_990ms_into_the_next_window", c.fps(), 5.0, 0.0);
+        c.advance(3000.0);
+        P.near("fps.next_window_at_1000ms", c.fps(), 2.0, 0.0);
     }
 
     // ---- full rate: capped near 60 Hz, evenly spaced ----------------------------------------------------------------
@@ -238,6 +251,17 @@ int main(int argc, char** argv)
         P.eq("rate.nudge_is_full", c.wantedFullRate(), 1);
         c.requestRate(false);
         P.eq("rate.request_ends_the_nudge", c.wantedFullRate(), 0);
+
+        // A timestamp before the last frame's (a host driven by hand with a stamp ahead of the clock, then started):
+        // the frame is due at once at every rate, not when the clock has caught up. Hidden still draws nothing.
+        FrameCadence back;
+        back.advance(5000.0);
+        P.eq("rate.clock_gone_back_is_due_unset", back.due(4000.0, false), 1);
+        back.requestRate(false);
+        P.eq("rate.clock_gone_back_is_due_idle", back.due(4000.0, false), 1);
+        back.requestRate(true);
+        P.eq("rate.clock_gone_back_is_due_full", back.due(4000.0, false), 1);
+        P.eq("rate.clock_gone_back_hidden_is_not_due", back.due(4000.0, true), 0);
     }
 
     // ---- zoom -------------------------------------------------------------------------------------------------------

@@ -7,7 +7,10 @@
 //   python3 -m http.server 8137 --bind 127.0.0.1 --directory <build>/test/web      http://127.0.0.1:8137/host.html
 //
 // The verdict is the sink page's (test/web/page.cpp): document.title is "RUNNING" until the end, then "PASS" or
-// "FAIL: <the first thing that failed>"; every line goes to console.log and to the page's <pre>. PASS means all of:
+// "FAIL: <the first thing that failed>"; every line goes to console.log and to the page's <pre>. A failure of the
+// page's own hooks (host.html: an uncaught error, an unhandled rejection, an abort; a host's listeners, animation
+// frames and timers run outside this file's calls, so a trap in one arrives there) is kept and is part of the verdict
+// as a failed claim is: no PASS replaces it. PASS means all of:
 //
 // 1. Parity. Per gallery case (tools/GalleryApp/GalleryLive.cpp's, less the two a web host cannot share: the overflow
 //    of bgfx's transient buffer, and the services section, which draws the file chooser a web host does not report;
@@ -22,10 +25,12 @@
 //    config's margins, and a window resize refits; a scale that changes resizes the buffer alone.
 // 3. Input. Synthetic DOM events on the canvas at zoom 150 reach a recording Panel at the exact logical position,
 //    with the modifiers, the popup rule and the click count of web/WebInput.h, in JUCE's order (up, then doubleClick);
-//    a drag goes on outside the canvas; the middle button and a second pointer are ignored; a press that cannot be
-//    captured ends when the pointer leaves; the wheel arrives in JUCE's units; keys arrive by EditorHost's table;
-//    preventDefault is what the Panel returned for a wheel and a key and always for contextmenu; the canvas's CSS
-//    cursor follows Panel::cursor().
+//    a press asks the canvas to capture the event's pointer, and a drag goes on outside the canvas; the middle button
+//    and a second pointer are ignored; a press that cannot be captured ends when the pointer leaves; a press whose
+//    release never reaches the page (the pointer that pressed moves with no button down or presses again, the canvas
+//    loses the capture, the document is hidden) ends where it last was; the wheel arrives in JUCE's units; keys
+//    arrive by EditorHost's table; preventDefault is what the Panel returned for a wheel and a key and always for
+//    contextmenu; the canvas's CSS cursor follows Panel::cursor().
 // 4. HostServices. services() is menus | clipboard; chooseFiles refuses and drops its callback; commandKeyIsMeta() is
 //    the browser's platform; the theme and zoom calls answer as EditorHost's. showMenu, dismissMenus and copyText
 //    reach the web services with the request, the Panel's LOGICAL width whatever the zoom, and the callback, and what
@@ -33,11 +38,17 @@
 //    event's handler. The services here are a recording double: this file defines funkgui::web::WebServices, the seam
 //    of src/web/WebServices.h, in place of src/web/WebServices.cpp, so these rows hold whatever is behind it.
 // 5. Teardown. ~WebHost removes the listeners, then lets the services go, then closes the Panel's gestures, then
-//    reports setUiAttached(false), and destroys the sink last; nothing reaches the Panel afterwards.
-// 6. The clock (the only rows that depend on real time; their bounds are loose and one-sided where a busy machine
-//    could be late): start() draws at the idle rate from requestAnimationFrame and calls Panel::idle from its timer,
-//    a nudge is drawn before an idle frame would be, a Panel that wants full rate gets it and no more than the cap,
-//    a hidden document draws nothing and closes the gestures, stop() stops both and start() starts them again.
+//    reports setUiAttached(false), and destroys the sink last; nothing reaches the Panel afterwards, and none of the
+//    host's listeners is left on the window or the document (the page counts the calls of every resize and
+//    visibilitychange listener registered while it runs).
+// 6. What a host asks of its clock, driven by frame() with no real time: FrameInfo::fullRate is the request before
+//    the frame; a press, a wheel, a key and the document shown again each ask for full rate until the next frame; the
+//    preferences and a chosen zoom are followed by a frame of a hidden document, which ticks and draws nothing.
+//    Then the clock itself (the only rows that depend on real time; their bounds are loose and one-sided where a busy
+//    machine could be late): start() draws at the idle rate from requestAnimationFrame, with no animation frame
+//    requested while it waits, and calls Panel::idle from its timer; a nudge is drawn before an idle frame would be,
+//    and so is the first frame of a document shown again; a Panel that wants full rate gets it and no more than the
+//    cap; a hidden document draws nothing and closes the gestures; stop() stops both and start() starts them again.
 // 7. A context loss forced with WEBGL_lose_context: frame() ticks the Panel, submits nothing and counts the frame as
 //    lost; after the restore the host draws again, the same pixels byte for byte.
 
@@ -67,6 +78,7 @@
 #include <emscripten/em_macros.h>
 #include <emscripten/emscripten.h>
 #include <emscripten/eventloop.h>
+#include <emscripten/html5.h>
 
 #include <algorithm>
 #include <bit>
@@ -112,21 +124,74 @@ EM_JS(void, fg_host_line, (const char* text), {
 
 EM_JS(void, fg_host_title, (const char* text), { document.title = UTF8ToString(text); });
 
+// The page's state, and its watch on what the module under test asks of the browser from here on. Each call still
+// reaches the browser as it was made: the resize listeners of the window and the visibilitychange listeners of the
+// document are counted when they run (with their options, so the signal that removes them, passed on), the canvas's
+// setPointerCapture calls are listed, and the animation frames requested and not yet delivered or cancelled are kept.
 EM_JS(void, fg_host_setup, (const char* selector), {
-    globalThis.funkguiHostPage = { canvas: document.querySelector(UTF8ToString(selector)), dispatching: 0,
-                                   inner: null, ext: null };
+    const page = globalThis.funkguiHostPage = { canvas: document.querySelector(UTF8ToString(selector)),
+                                                dispatching: 0, inner: null, ext: null, heard: [0, 0], captures: [],
+                                                requested: new Set() };
+    const count = (target, type, slot) => {
+        const add = target.addEventListener;
+        target.addEventListener = function (name, listener, options) {
+            const counted = name === type && typeof listener === "function"
+                ? function (event) { page.heard[slot]++; return listener.call(this, event); }
+                : listener;
+            return add.call(this, name, counted, options);
+        };
+    };
+    count(window, "resize", 0);
+    count(document, "visibilitychange", 1);
+    const capture = page.canvas.setPointerCapture;
+    page.canvas.setPointerCapture = function (id) {
+        page.captures.push(id);
+        return capture.call(this, id);
+    };
+    const request = window.requestAnimationFrame, cancel = window.cancelAnimationFrame;
+    window.requestAnimationFrame = function (callback) {
+        const id = request.call(window, function (time) {
+            page.requested.delete(id);
+            return callback(time);
+        });
+        page.requested.add(id);
+        return id;
+    };
+    window.cancelAnimationFrame = function (id) {
+        page.requested.delete(id);
+        return cancel.call(window, id);
+    };
+});
+
+// How often a listener of the window's resize (0) or of the document's visibilitychange (1) has run.
+EM_JS(int, fg_host_heard, (int what), { return globalThis.funkguiHostPage.heard[what]; });
+
+// The canvas's setPointerCapture calls: how many, and the pointer id of the last (-1 before the first).
+EM_JS(int, fg_host_captures, (), { return globalThis.funkguiHostPage.captures.length; });
+EM_JS(int, fg_host_captured, (), {
+    const captures = globalThis.funkguiHostPage.captures;
+    return captures.length > 0 ? captures[captures.length - 1] : -1;
+});
+
+// The animation frames requested and neither delivered nor cancelled yet.
+EM_JS(int, fg_host_frames_requested, (), { return globalThis.funkguiHostPage.requested.size; });
+
+// The failure the page's own hooks kept (host.html), "" when there is none.
+EM_JS(void, fg_host_hook_failure, (char* out, int size), {
+    stringToUTF8(String(globalThis.funkguiFailure || ""), out, size);
 });
 
 // A synthetic PointerEvent on the canvas at (x, y) CSS px from its corner. mods: shift 1, ctrl 2, alt 4, meta 8;
-// 16 makes the pointer a second one (not primary). Returns whether the default was prevented.
+// 16 makes the pointer a second one (not primary), 32 another primary one (a pen, pointer id 7, where the mouse is
+// pointer id 1). Returns whether the default was prevented.
 EM_JS(int, fg_host_pointer, (const char* type, double x, double y, int button, int buttons, int mods), {
     const page = globalThis.funkguiHostPage;
     const box = page.canvas.getBoundingClientRect();
     const event = new PointerEvent(UTF8ToString(type), {
         clientX: box.left + x, clientY: box.top + y, button: button, buttons: buttons,
         shiftKey: (mods & 1) !== 0, ctrlKey: (mods & 2) !== 0, altKey: (mods & 4) !== 0, metaKey: (mods & 8) !== 0,
-        pointerId: (mods & 16) !== 0 ? 2 : 1, pointerType: "mouse", isPrimary: (mods & 16) === 0, bubbles: true,
-        cancelable: true });
+        pointerId: (mods & 16) !== 0 ? 2 : (mods & 32) !== 0 ? 7 : 1, pointerType: (mods & 32) !== 0 ? "pen" : "mouse",
+        isPrimary: (mods & 16) === 0, bubbles: true, cancelable: true });
     page.dispatching++;
     try {
         page.canvas.dispatchEvent(event);
@@ -219,15 +284,17 @@ EM_JS(int, fg_host_apple, (), {
     return /mac|iphone|ipad|ipod/i.test(String((data && data.platform) || navigator.platform)) ? 1 : 0;
 });
 
-// The window's inner size as the page reads it: (w, h) overrides it, (0, 0) gives the browser's back.
+// The window's inner size as the page reads it: (w, h) overrides it, (0, 0) gives the browser's back, and a negative
+// pair makes it a window with no size (0 x 0: what a frame that is not displayed reads).
 EM_JS(void, fg_host_inner, (int width, int height), {
     const page = globalThis.funkguiHostPage;
     if (!page.inner)
         page.inner = { w: Object.getOwnPropertyDescriptor(window, "innerWidth"),
                        h: Object.getOwnPropertyDescriptor(window, "innerHeight") };
-    if (width > 0 && height > 0) {
-        Object.defineProperty(window, "innerWidth", { value: width, configurable: true, writable: true });
-        Object.defineProperty(window, "innerHeight", { value: height, configurable: true, writable: true });
+    if (width !== 0 && height !== 0) {
+        Object.defineProperty(window, "innerWidth", { value: Math.max(width, 0), configurable: true, writable: true });
+        Object.defineProperty(window, "innerHeight", { value: Math.max(height, 0), configurable: true,
+                                                       writable: true });
     } else {
         Object.defineProperty(window, "innerWidth", page.inner.w);
         Object.defineProperty(window, "innerHeight", page.inner.h);
@@ -264,7 +331,7 @@ namespace
     constexpr int    kWorst = 16;
     constexpr double kOverPerMille = 10.0;
 
-    constexpr int kShift = 1, kCtrl = 2, kAlt = 4, kMeta = 8, kSecondPointer = 16;      // fg_host_pointer's mods
+    constexpr int kShift = 1, kCtrl = 2, kAlt = 4, kMeta = 8, kSecondPointer = 16, kPen = 32;   // fg_host_pointer's
 
     constexpr const char* kZoomKey = "fgWebHostZoom";
     const std::vector<int> kSteps{ 100, 125, 150, 175 };
@@ -301,6 +368,11 @@ namespace
 
     void verdict()
     {
+        // What the page's hooks kept failed the run as a claim does, whatever the claims after it said.
+        char hook[512];
+        fg_host_hook_failure(hook, static_cast<int>(sizeof hook));
+        if (firstFailure.empty() && hook[0] != '\0')
+            firstFailure = hook;
         if (firstFailure.empty())
         {
             say("VERDICT  PASS");
@@ -442,12 +514,18 @@ namespace
         int   moves = 0, downs = 0, drags = 0, ups = 0, doubles = 0, exits = 0, wheels = 0, keys = 0;
         int   ticks = 0, idles = 0, closes = 0;
         float firstDt = 0.0f, lastDt = 0.0f, smallestDt = 1.0e9f, largestDt = 0.0f;
+        float markedDt = -1.0f;                      // the dt of the first tick after markDt(); -1 until it comes
         double lastIdleNow = -1.0;
         bool  wantFull = false, takeWheel = true, takeKey = true;
         Cursor shown = Cursor::normal;
         std::function<void()> onDown, onKey;         // what a widget does inside the event
 
         int events() const { return moves + downs + drags + ups + doubles + exits + wheels + keys; }
+        void markDt()
+        {
+            markedDt = -1.0f;
+            marked_ = true;
+        }
 
         void attach(funkgui::HostServices& h) override { host = &h; }
         int  width() const override { return w_; }
@@ -458,6 +536,9 @@ namespace
                 firstDt = dt;
             ++ticks;
             lastDt = dt;
+            if (marked_)
+                markedDt = dt;
+            marked_ = false;
             smallestDt = std::min(smallestDt, dt);
             largestDt = std::max(largestDt, dt);
         }
@@ -543,7 +624,8 @@ namespace
         }
 
     private:
-        int w_, h_;
+        int  w_, h_;
+        bool marked_ = false;
     };
 
     // shift | cmd << 1 | alt << 2 | ctrl << 3
@@ -867,13 +949,16 @@ namespace
               "and follows it to pointingHand: " + canvasText(0));
 
         fg_host_blur();
+        int captures = fg_host_captures();
         pointerAt("pointerdown", 37.5f, 12.25f, 0, 1, kShift);
         check(panel.downs == 1 && at(panel.down, 37.5f, 12.25f) && bits(panel.down.mods) == kModShift
                   && panel.down.clicks == 1 && !panel.down.popup,
               "a pointerdown with Shift is pointerDown there with shift alone, one click: " + where(panel.down));
         check(fg_host_focused() == 1 && canvasText(0) == "crosshair",
-              "the press focused the canvas (and capturing a synthetic pointer, which throws, stopped nothing); the "
-              "cursor is crosshair");
+              "the press focused the canvas; the cursor is crosshair");
+        check(fg_host_captures() == captures + 1 && fg_host_captured() == 1,
+              "and asked the canvas to capture the event's pointer, once: setPointerCapture("
+                  + std::to_string(fg_host_captured()) + "), the synthetic mouse's id");
         pointerAt("pointermove", 239.0f, 0.5f, 0, 1, kShift);
         check(panel.drags == 1 && panel.moves == 2 && at(panel.drag, 239.0f, 0.5f)
                   && bits(panel.drag.mods) == kModShift,
@@ -930,15 +1015,27 @@ namespace
         check(bits(panel.move.mods) == (apple ? (kModCmd | kModAlt) : kModAlt),
               std::string("Meta is ") + (apple ? "cmd" : "nothing") + " here, Alt is alt: " + where(panel.move));
 
+        // ---- another pointer's id is the one captured (the browser has no such pointer and throws: nothing stops)
+        journal.clear();
+        captures = fg_host_captures();
+        pointerAt("pointerdown", 200.0f, 140.0f, 0, 1, kPen);
+        const int penCaptured = fg_host_captured();
+        pointerAt("pointerup", 200.0f, 140.0f, 0, 0, kPen);
+        check(fg_host_captures() == captures + 1 && penCaptured == 7 && journalText() == "down up",
+              "a press of another primary pointer (a pen, id 7) is taken and captured by its own id: "
+              "setPointerCapture(" + std::to_string(penCaptured) + ")");
+
         // ---- what the host ignores
         int before = panel.events();
+        captures = fg_host_captures();
         pointerAt("pointerdown", 100.0f, 100.0f, 1, 4, 0);
         pointerAt("pointerup", 100.0f, 100.0f, 1, 0, 0);
-        check(panel.events() == before, "the middle button's press and release reach no Panel");
+        check(panel.events() == before && fg_host_captures() == captures,
+              "the middle button's press and release reach no Panel, and capture nothing");
         pointerAt("pointerdown", 100.0f, 100.0f, 0, 1, kSecondPointer);
         pointerAt("pointermove", 100.0f, 100.0f, 0, 1, kSecondPointer);
         pointerAt("pointerup", 100.0f, 100.0f, 0, 0, kSecondPointer);
-        check(panel.events() == before, "nor does a second pointer (not primary)");
+        check(panel.events() == before && fg_host_captures() == captures, "nor does a second pointer (not primary)");
         pointerAt("pointerup", 100.0f, 100.0f, 0, 0, 0);
         check(panel.events() == before, "nor a release without a press");
         check(fg_host_mouse("contextmenu") == 1 && panel.events() == before,
@@ -964,6 +1061,68 @@ namespace
         pointerAt("pointerdown", 20.0f, 20.0f, 0, 1, 0);
         pointerAt("pointercancel", 20.0f, 20.0f, 0, 0, 0);
         check(journalText() == "down up exit", "pointercancel ends a press the same way: " + journalText());
+
+        // ---- a press whose release never reaches the page (each press away from the one before: one click)
+        journal.clear();
+        int doubles = panel.doubles;
+        pointerAt("pointerdown", 60.0f, 60.0f, 0, 1, 0);
+        pointerAt("pointermove", 70.0f, 60.0f, 0, 1, 0);
+        pointerAt("pointermove", 84.0f, 60.0f, 0, 0, 0);          // no button down: it came up somewhere else
+        check(journalText() == "down drag up move" && at(panel.up, 70.0f, 60.0f) && at(panel.move, 84.0f, 60.0f)
+                  && panel.doubles == doubles && canvasText(0) == "ew-resize",
+              "a press whose pointer moves with no button down ends where it last was, with no double click, and "
+              "the move is a pointerMove: " + journalText() + ", up at " + where(panel.up));
+        journal.clear();
+        fg_host_blur();
+        captures = fg_host_captures();
+        pointerAt("pointerdown", 100.0f, 60.0f, 0, 1, 0);
+        const bool takenAgain = journalText() == "down" && fg_host_focused() == 1 && fg_host_captures() == captures + 1;
+        pointerAt("lostpointercapture", 100.0f, 60.0f, 0, 0, 0);
+        const std::string atLoss = journalText();
+        pointerAt("pointermove", 110.0f, 60.0f, 0, 0, 0);
+        check(takenAgain && atLoss == "down up" && at(panel.up, 100.0f, 60.0f) && journalText() == "down up move",
+              "the press after it is taken, focused and captured; the capture lost with the press open ends it the "
+              "same way, with no exit, and the hover after it is a pointerMove: " + journalText());
+        before = panel.events();
+        pointerAt("pointerup", 110.0f, 60.0f, 0, 0, 0);
+        pointerAt("pointerdown", 140.0f, 60.0f, 0, 1, 0);
+        pointerAt("pointerup", 140.0f, 60.0f, 0, 0, 0);
+        pointerAt("lostpointercapture", 140.0f, 60.0f, 0, 0, 0);  // as a browser sends it after every release
+        check(panel.events() == before + 2 && panel.doubles == doubles,
+              "the late release of such a press is ignored, and so is the capture lost after a release");
+        journal.clear();
+        pointerAt("pointerdown", 180.0f, 60.0f, 0, 1, 0);
+        fg_host_blur();
+        captures = fg_host_captures();
+        before = panel.events();
+        pointerAt("pointerdown", 20.0f, 100.0f, 0, 1, kPen);
+        const bool otherIgnored = panel.events() == before && fg_host_captures() == captures && fg_host_focused() == 0;
+        pointerAt("pointerdown", 220.0f, 60.0f, 0, 1, 0);         // its own release was lost, and nothing said so
+        check(otherIgnored && journalText() == "down up down" && at(panel.up, 180.0f, 60.0f)
+                  && at(panel.down, 220.0f, 60.0f) && panel.down.clicks == 1 && fg_host_focused() == 1
+                  && fg_host_captures() == captures + 1 && fg_host_captured() == 1,
+              "during a press another pointer's press is ignored, and the same pointer's ends the press it had "
+              "(where it last was) and is taken: " + journalText());
+        const int upsOpen = panel.ups;
+        pointerAt("pointermove", 20.0f, 100.0f, 0, 0, kPen);      // a pen hovering: not the pointer that pressed
+        const bool stillOpen = panel.ups == upsOpen;
+        pointerAt("pointerup", 220.0f, 60.0f, 0, 0, 0);
+        check(stillOpen && panel.ups == upsOpen + 1 && at(panel.up, 220.0f, 60.0f),
+              "and another pointer's move with no button down does not end it: its own release does");
+        journal.clear();
+        pointerAt("pointerdown", 20.0f, 140.0f, 0, 1, 0);
+        fg_host_hidden(1);
+        fg_host_event(1, "visibilitychange");
+        const std::string atHide = journalText();
+        fg_host_hidden(0);
+        fg_host_event(1, "visibilitychange");
+        pointerAt("pointermove", 30.0f, 140.0f, 0, 0, 0);
+        before = panel.events();
+        pointerAt("pointerup", 30.0f, 140.0f, 0, 0, 0);
+        check(atHide == "down up close" && at(panel.up, 20.0f, 140.0f) && journalText() == "down up close move"
+                  && panel.events() == before && panel.doubles == doubles,
+              "a press open when the document is hidden ends there, before the gestures are closed; the hover on "
+              "return is a pointerMove and the late release is ignored: " + journalText());
 
         // ---- the wheel
         panel.takeWheel = true;
@@ -1100,7 +1259,15 @@ namespace
               "a Panel that copies in a press, or opens a menu on a key, reaches the services inside the DOM event's "
               "handler (the browser's gesture rule)");
 
-        // ---- teardown, in the middle of a press
+        // ---- teardown, in the middle of a press. First the two listeners that are not on the canvas, while the host
+        // lives: each event runs one, this host's (the hosts before it left none behind).
+        int resizes = fg_host_heard(0), visibilities = fg_host_heard(1);
+        fg_host_event(0, "resize");
+        fg_host_event(1, "visibilitychange");
+        check(fg_host_heard(0) == resizes + 1 && fg_host_heard(1) == visibilities + 1,
+              "a resize of the window and a visibilitychange of the document each run one listener, this host's ("
+                  + std::to_string(fg_host_heard(0) - resizes) + ", " + std::to_string(fg_host_heard(1) - visibilities)
+                  + ")");
         pointerAt("pointerdown", 20.0f, 20.0f, 0, 1, 0);
         journal.clear();
         int eventsAtLetGo = -1;
@@ -1116,13 +1283,20 @@ namespace
         check(eventsAtLetGo == before, "the listeners were removed before the services were let go");
         check(seam.sinkMarkAtDestroy == 1 && fg_host_sink_mark() == 0,
               "the sink was destroyed last: the canvas still carried it when the services went, and is free of it now");
+        const int closes = panel.closes, reloads = store.reloads;
+        resizes = fg_host_heard(0);
+        visibilities = fg_host_heard(1);
         pointerAt("pointermove", 30.0f, 30.0f, 0, 1, 0);
         fg_host_key("a", 0);
         fg_host_wheel(60.0, 36.0, 0.0, 100.0, 0, 0);
         fg_host_event(0, "resize");
         fg_host_event(1, "visibilitychange");
-        check(panel.events() == before && panel.closes == 1 && seam.destroyed == 1,
+        check(panel.events() == before && panel.closes == closes && seam.destroyed == 1,
               "after the host nothing reaches the Panel");
+        check(fg_host_heard(0) == resizes && fg_host_heard(1) == visibilities && store.reloads == reloads,
+              "and none of its listeners is left on the window or the document: a resize runs "
+                  + std::to_string(fg_host_heard(0) - resizes) + " of them, a visibilitychange "
+                  + std::to_string(fg_host_heard(1) - visibilities) + ", and the preferences are not reloaded");
         seam.onLetGo = nullptr;
     }
 
@@ -1200,6 +1374,40 @@ namespace
             WebHost host(panel, std::move(config));
             check(panel.host->zoomPercent() == 150 && canvasIs(360.0, 240.0),
                   "a new host reads the preference and fits it to the window less the config's margins: 150 %");
+        }
+        {
+            // A window no larger than the margins has room for no step: the smallest one, as wherever none fits, and
+            // not the preference unfitted (which is for a window that is not known).
+            fg_host_inner(2000, 90);
+            Recorder panel(240, 160);
+            WebHostConfig config = pinned(0);
+            config.zoomSteps = kSteps;
+            config.zoomPrefKey = kZoomKey;           // holds 175
+            config.fitMarginX = 32;
+            config.fitMarginY = 92;
+            WebHost host(panel, std::move(config));
+            funkgui::HostServices& hs = *panel.host;
+            check(hs.zoomPercent() == 100 && canvasIs(240.0, 160.0) && !hs.zoomFits(175) && !hs.zoomFits(125),
+                  "a window lower than the config's margin (90 px under a margin of 92) takes the smallest step, 100 "
+                  "%, and no larger step fits: " + cssSize());
+            const auto resized = [&](int w, int h) {
+                fg_host_inner(w, h);
+                fg_host_event(0, "resize");
+                frame(host);
+                return hs.zoomPercent();
+            };
+            const int roomy = resized(2000, 1500), exact = resized(2000, 92), onePx = resized(2000, 93);
+            const int narrow = resized(20, 1500), narrowExact = resized(32, 1500);
+            check(roomy == 175 && exact == 100 && onePx == 100 && narrow == 100 && narrowExact == 100
+                      && canvasIs(240.0, 160.0) && !hs.zoomFits(175),
+                  "and so after a resize: 175 % with room, 100 % in a window as high as the margin, 1 px higher, "
+                  "narrower than the margin and as wide (" + std::to_string(roomy) + ", " + std::to_string(exact) + ", "
+                      + std::to_string(onePx) + ", " + std::to_string(narrow) + ", " + std::to_string(narrowExact)
+                      + ")");
+            const int unknown = resized(-1, -1);
+            check(unknown == 175 && hs.zoomFits(175),
+                  "a window with no size at all is not known, and nothing is fitted to it: the preference, 175 %");
+            fg_host_inner(2000, 1500);
         }
         {
             Recorder panel(240, 160);
@@ -1303,6 +1511,82 @@ namespace
         }
     }
 
+    // ---- 6. what a host asks of its clock, driven by frame(): no real time ------------------------------------------
+    void requests()
+    {
+        auto& prefs = UiPreferences::get();
+        fg_host_inner(2000, 1500);                   // a window every step fits
+        prefs.setInt(kZoomKey, 100);
+        Recorder panel(240, 160);
+        WebHostConfig config = pinned(0);
+        config.zoomSteps = kSteps;
+        config.zoomPrefKey = kZoomKey;
+        WebHost host(panel, std::move(config));
+        funkgui::HostServices& hs = *panel.host;
+        // One frame: the rate it says the clock was asked for before it (FrameInfo::fullRate). `wanted` is what the
+        // Panel asked after it.
+        bool wanted = false;
+        const auto asked = [&] {
+            wanted = frame(host).wantsFullRate;
+            return host.lastFrame().info.fullRate;
+        };
+
+        // ---- the request before the frame, not the frame's own
+        const bool first = asked(), idle = asked();
+        panel.wantFull = true;
+        const bool atStart = asked(), startWanted = wanted;      // asked before it: idle
+        const bool during = asked();
+        panel.wantFull = false;
+        const bool atEnd = asked(), endWanted = wanted;          // asked before it: full
+        const bool after = asked();
+        check(!first && !idle && !atStart && startWanted && during && atEnd && !endWanted && !after,
+              std::string("FrameInfo::fullRate is the request before the frame, not the frame's own: the first frame "
+                          "of a Panel that starts to want full rate says idle, the first after it stopped says full (")
+                  + (atStart ? "full" : "idle") + ", " + (atEnd ? "full" : "idle") + ")");
+
+        // ---- input asks for full rate until the next frame's own request, whatever the Panel wants
+        const auto nudged = [&](const char* what) {
+            const bool full = asked() && !wanted;
+            const bool then = asked();
+            if (!full || then)
+                say("         %s: the frame after it says %s, the next %s", what, full ? "full" : "idle",
+                    then ? "full" : "idle");
+            return full && !then;
+        };
+        fg_host_pointer("pointerdown", 200.0, 100.0, 0, 1, 0);
+        const bool byPress = nudged("a press");
+        fg_host_pointer("pointerup", 200.0, 100.0, 0, 0, 0);
+        const bool notByRelease = !asked();
+        fg_host_wheel(60.0, 36.0, 0.0, 100.0, 0, 0);
+        const bool byWheel = nudged("a wheel");
+        fg_host_key("ArrowRight", 0);
+        const bool byKey = nudged("a key");
+        fg_host_event(1, "visibilitychange");
+        const bool byShown = nudged("the document shown again");
+        check(byPress && notByRelease && byWheel && byKey,
+              std::string("a press, a wheel and a key each ask for full rate until the next frame, and a release "
+                          "does not (press ") + (byPress ? "full" : "idle") + ", release "
+                  + (notByRelease ? "idle" : "full") + ", wheel " + (byWheel ? "full" : "idle") + ", key "
+                  + (byKey ? "full" : "idle") + ")");
+        check(byShown, "and so does the document when it is shown again");
+
+        // ---- the preferences and the zoom come before the hidden gate
+        const int ticks = panel.ticks;
+        const uint32_t drawn = host.diagnostics().frames;
+        fg_host_hidden(1);
+        hs.setZoomPercent(150);
+        const bool chosenHidden = !frame(host).submitted && canvasIs(360.0, 240.0);
+        const std::string chosenSize = cssSize();
+        prefs.setInt(kZoomKey, 125);                 // another writer of the preference
+        const bool followedHidden = !frame(host).submitted && canvasIs(300.0, 200.0);
+        check(chosenHidden && followedHidden && panel.ticks == ticks && host.diagnostics().frames == drawn,
+              "a frame of a hidden document applies a zoom chosen since the last one (" + chosenSize
+                  + ") and follows the preference (" + cssSize() + ") before it stops: nothing ticked or drawn");
+        fg_host_hidden(0);
+        fg_host_inner(0, 0);
+        prefs.setInt(kZoomKey, 100);
+    }
+
     // ---- 6. the clock -----------------------------------------------------------------------------------------------
     struct Clock
     {
@@ -1313,6 +1597,8 @@ namespace
         int    ticksAt = 0, idlesAt = 0;             // at the start of the stage
         int    closesMark = 0, reloadsMark = 0;      // before the action a stage judges
         int    attempts = 0;
+        int    looks = 0, looksUnrequested = 0;      // stage 0's polls, and those that found no animation frame asked
+
     };
     Clock clockRun;
 
@@ -1327,7 +1613,7 @@ namespace
     {
         Clock& c = clockRun;
         c.stage = stage;
-        c.stageStart = emscripten_get_now();
+        c.stageStart = emscripten_performance_now();
         c.ticksAt = c.panel->ticks;
         c.idlesAt = c.panel->idles;
     }
@@ -1336,7 +1622,7 @@ namespace
     {
         Clock& c = clockRun;
         Recorder& panel = *c.panel;
-        const double elapsed = emscripten_get_now() - c.stageStart;
+        const double elapsed = emscripten_performance_now() - c.stageStart;
         const int ticked = panel.ticks - c.ticksAt;
         bool next = true;                            // poll again
         switch (c.stage)
@@ -1352,6 +1638,8 @@ namespace
                 clockEnter(0);
                 break;
             case 0:                                  // idle: 12 Hz frames from requestAnimationFrame, idle at 10 Hz
+                ++c.looks;
+                c.looksUnrequested += fg_host_frames_requested() == 0 ? 1 : 0;
                 if (elapsed < 900.0)
                     break;
                 check(ticked >= 3 && static_cast<double>(ticked) <= elapsed / web::FrameCadence::kIdleMinMs + 2.0
@@ -1359,8 +1647,15 @@ namespace
                       "an idle Panel is drawn at the idle rate: " + std::to_string(ticked) + " frames in "
                           + num(elapsed) + " ms (12 Hz would be " + num(elapsed * 0.012) + "), none sooner than "
                           + num(static_cast<double>(panel.smallestDt) * 1000.0) + " ms after the one before");
+                // The wait between two idle frames is a timer, 67 of every 83 ms, and no animation frame is asked for
+                // until it ends (measured: none at 5 to 9 looks of 10, by how long a requested frame was in coming
+                // on a busy machine). A wait measured on another clock than the frames' is never left, and a frame
+                // is then requested at every look: the bound is far from both.
+                check(c.looksUnrequested * 8 >= c.looks,
+                      "between idle frames the host waits on a timer, with no animation frame requested: none at "
+                          + std::to_string(c.looksUnrequested) + " of " + std::to_string(c.looks) + " looks");
                 check(panel.idles - c.idlesAt >= 3
-                          && std::fabs(panel.lastIdleNow * 1000.0 - emscripten_get_now()) < 500.0,
+                          && std::fabs(panel.lastIdleNow * 1000.0 - emscripten_performance_now()) < 500.0,
                       "Panel::idle runs from the host's timer with the performance clock: "
                           + std::to_string(panel.idles - c.idlesAt) + " calls");
                 clockEnter(1);
@@ -1397,7 +1692,7 @@ namespace
                 check(ticked >= 12 && static_cast<double>(ticked) <= elapsed / web::FrameCadence::kFullMinMs + 2.0,
                       "a Panel that wants full rate gets it, and no more than the cap: " + std::to_string(ticked)
                           + " frames in " + num(elapsed) + " ms (60 Hz would be " + num(elapsed * 0.06) + ")");
-                check(c.host->lastFrame().info.fullRate, "the frame's rate is the request before it: full");
+                check(c.host->lastFrame().info.fullRate, "and its frames say that full rate was asked for");
                 panel.wantFull = false;
                 c.closesMark = panel.closes;
                 fg_host_hidden(1);
@@ -1408,25 +1703,49 @@ namespace
             {
                 if (elapsed < 400.0)
                     break;
-                const WebHost::FrameResult direct = c.host->frame(emscripten_get_now());
+                // frame() stamps the clock even while hidden, at the idle rate: the frame after the document is shown
+                // is measured from here.
+                const WebHost::FrameResult direct = c.host->frame(emscripten_performance_now());
                 check(ticked == 0 && panel.ticks == c.ticksAt && !direct.submitted && panel.closes == c.closesMark + 1,
                       "a hidden document closes the Panel's gestures and draws nothing: " + std::to_string(ticked)
                           + " frames in " + num(elapsed) + " ms, and frame() ticks nothing");
                 c.reloadsMark = store.reloads;
+                c.attempts = 1;
+                panel.markDt();
                 fg_host_hidden(0);
                 fg_host_event(1, "visibilitychange");
                 clockEnter(5);
                 break;
             }
-            case 5:                                  // shown again: the preferences reloaded, a frame soon
+            case 5:                                  // shown again: the preferences reloaded, a frame at once
+            {
                 if (ticked == 0 && elapsed < kStageTimeoutMs)
                     break;
-                check(ticked > 0 && store.reloads == c.reloadsMark + 1 && panel.closes == c.closesMark + 1,
-                      "shown again, the host reloads the preferences and draws (" + num(elapsed) + " ms)");
+                if (c.attempts == 1)
+                    check(ticked > 0 && store.reloads == c.reloadsMark + 1 && panel.closes == c.closesMark + 1,
+                          "shown again, the host reloads the preferences and draws (" + num(elapsed) + " ms)");
+                const double shownDtMs = static_cast<double>(panel.markedDt) * 1000.0;
+                const bool soon = ticked > 0 && shownDtMs < kNudgedWithinMs;
+                if (!soon && c.attempts < 8)
+                {
+                    ++c.attempts;                    // a busy machine was late with the frame: hide, stamp, show again
+                    fg_host_hidden(1);
+                    fg_host_event(1, "visibilitychange");
+                    c.host->frame(emscripten_performance_now());
+                    panel.markDt();
+                    fg_host_hidden(0);
+                    fg_host_event(1, "visibilitychange");
+                    clockEnter(5);
+                    break;
+                }
+                check(soon, "and at once, as after input: its first frame " + num(shownDtMs) + " ms after the frame() "
+                                "before, where the idle wait alone lasts " + num(web::FrameCadence::kIdleWaitMs)
+                                + " ms (attempt " + std::to_string(c.attempts) + ")");
                 panel.wantFull = true;               // frames at every vsync: one is always requested when stop() comes
                 fg_host_pointer("pointermove", 50.0, 30.0, 0, 0, 0);
                 clockEnter(6);
                 break;
+            }
             case 6:                                  // stop() at full rate
                 if (ticked < 4 && elapsed < kStageTimeoutMs)
                     break;
@@ -1600,6 +1919,7 @@ namespace
         parity();
         sizingAndInput();
         zoom();
+        requests();
         clockStart();                                // continues in clockStep, then lossStart, then the verdict
     }
 }

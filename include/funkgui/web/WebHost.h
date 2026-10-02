@@ -24,20 +24,24 @@
 // device-pixel-content-box where the browser has one and it is current, else rounded), set by the sink. A page should
 // give the canvas no border and no padding. Zoom is EditorHost's (gpu/EditorHost.h "Zoom"): the capture pin; else
 // 100 % without steps; else the preference (a missing or unlisted value is the default) reduced to the largest step
-// that fits the window's inner size less the config's margins. The fit is evaluated when the zoom is chosen or read
-// and when the window is resized. HostServices::zoomPercent() answers a change at once and the next frame applies it.
+// that fits the window's inner size less the config's margins (the smallest step when none fits, and so in a window
+// no larger than the margins; no fit at all where the browser gives the window no size). The fit is evaluated when the
+// zoom is chosen or read and when the window is resized. HostServices::zoomPercent() answers a change at once and the
+// next frame applies it.
 //
 // Input (web/WebInput.h has the rules; they are JUCE's): the host's own DOM listeners on the canvas, under one
 // AbortController, deliver each event to the Panel synchronously, inside the DOM handler, so a Panel that copies to
 // the clipboard does so within the user's gesture. Pointer events with pointer capture (a drag keeps arriving outside
 // the canvas) and fractional client coordinates; the middle button is ignored; a release with a click count of two or
-// more is pointerUp and then doubleClick. preventDefault is called on a wheel or a keydown only when the Panel
-// consumed it (the page scrolls and the browser's shortcuts work otherwise), and always on contextmenu. Text comes
-// from keydown's `key` alone: no IME, no dead keys. The canvas is given tabindex 0 when it has none (it gets keys only
-// while focused, and a press focuses it), touch-action none, user-select none and no outline. Every event nudges the
-// clock and is followed by a cursor update (the canvas's CSS cursor). Not here: file drops (a Panel's paths mean
-// nothing in a browser), an accessibility mirror, and pointer lock (setUnboundedDrag only records the flag; capture
-// already gives positions outside the canvas).
+// more is pointerUp and then doubleClick. A press whose release never reaches the page (the capture was lost, the
+// pointer that pressed moves with no button down or presses again, the document is hidden) ends as a cancelled one:
+// pointerUp where the press last was, no doubleClick. preventDefault is called on a wheel or a keydown only when the
+// Panel consumed it (the page scrolls and the browser's shortcuts work otherwise), and always on contextmenu. Text
+// comes from keydown's `key` alone: no IME, no dead keys. The canvas is given tabindex 0 when it has none (it gets
+// keys only while focused, and a press focuses it), touch-action none, user-select none and no outline. Every event
+// nudges the clock and is followed by a cursor update (the canvas's CSS cursor). Not here: file drops (a Panel's
+// paths mean nothing in a browser), an accessibility mirror, and pointer lock (setUnboundedDrag only records the
+// flag; capture already gives positions outside the canvas).
 //
 // When the document is hidden the Panel's gestures are closed (a hidden tab's timers are throttled, so the 10 Hz idle
 // cannot close a wheel gesture there); when it is shown again the preferences are reloaded and the clock nudged.
@@ -45,8 +49,8 @@
 // HostServices: themeIndex() and the zoom calls as EditorHost; services() = menus | clipboard, forwarded to the web
 // services (src/web/WebServices.h: a menu in the DOM anchored with the Panel's logical width, navigator.clipboard);
 // chooseFiles refuses; commandKeyIsMeta() is the browser's platform (the compile-time default is never Apple's in a
-// wasm build); nowSeconds() is the performance clock, or the Panel's simulated clock under a pinned dt. No
-// ownerComponent().
+// wasm build); nowSeconds() is the performance clock (performance.now(), the clock of requestAnimationFrame's
+// timestamps), or the Panel's simulated clock under a pinned dt. No ownerComponent().
 //
 // Capture pins come from the config as a value, never from the environment (a browser has none): fixedDt, uiTheme,
 // uiZoom and uiScale (with uiScaleAfter). The other CaptureConfig fields are not read. A test drives frame() itself.
@@ -90,7 +94,8 @@ namespace funkgui
         std::vector<int> zoomSteps;                  // percent, ascending; values outside 25..400 are dropped
         int         defaultZoomPercent = 100;        // the step for a missing or unlisted preference
         const char* zoomPrefKey = nullptr;           // UiPreferences int key; nullptr = not persisted
-        // CSS px of page around the canvas: the zoom is fitted to the window's inner size less these.
+        // CSS px of page around the canvas: the zoom is fitted to the window's inner size less these (a window no
+        // larger than them takes the smallest step).
         int fitMarginX = 0, fitMarginY = 0;
 
         std::function<void(bool)> setUiAttached;     // telemetry gate keyed to the host's lifetime
@@ -172,7 +177,8 @@ namespace funkgui
 
         // The DOM's side (src/web/WebHost.cpp): called through function pointers from the listeners' JavaScript.
         static int  onPointer(void* self, int type, double clientX, double clientY, double left, double top,
-                              double width, double height, int button, int buttons, int domMods, double timeMs);
+                              double width, double height, int button, int buttons, int domMods, double timeMs,
+                              int pointerId);
         static int  onWheel(void* self, double clientX, double clientY, double left, double top, double width,
                             double height, double deltaX, double deltaY, int deltaMode, int domMods);
         static int  onKey(void* self, int domMods);
@@ -234,6 +240,7 @@ namespace funkgui
         web::ClickCounter clicks_;
         bool     pressed_ = false;                   // between a press the host took and its release
         int      pressedButton_ = 0;
+        int      pressedPointer_ = 0;                // its PointerEvent.pointerId
         bool     unbounded_ = false;
         PointerEvent lastPress_{};                   // the last event of the press: where a lost press ends
         Cursor   cursor_ = Cursor::normal;

@@ -14,7 +14,8 @@
 //   "uiZoom"), the clock is the browser's and the scale its device pixel ratio.
 // - The zoom is fitted to the window less the page around the canvas (what lies left of and above it, and as much
 //   again right of and below it).
-// - The line under the canvas is the host's diagnostics, twice a second.
+// - The line under the canvas is the host's diagnostics, twice a second. An uncaught error, an unhandled rejection or
+//   an abort is shown under it (index.html), in an element this file never writes: the first one stays.
 
 #include "../../test/gallery/GalleryPanel.h"
 

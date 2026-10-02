@@ -91,7 +91,8 @@ namespace funkgui::web
         // Frames per second over the last whole window; 0 until one has passed.
         constexpr float fps() const noexcept { return fps_; }
 
-        // How long to wait at `nowMs` before requesting the next animation frame, in ms; 0 = request it now.
+        // How long to wait at `nowMs` before requesting the next animation frame, in ms; 0 = request it now. `nowMs`
+        // is on the clock of the timestamps given to due() and advance(): performance.now() for a browser's frames.
         constexpr double waitMs(double nowMs) const noexcept
         {
             if (rate_ == 1 || !stamped_)

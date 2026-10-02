@@ -30,6 +30,12 @@
 //   inside try blocks: a synthetic event's pointer cannot be captured. A press that could not be captured ends when
 //   the pointer leaves the canvas (pointerUp at the last position of the press, then pointerExit), since its release
 //   would never arrive; pointercancel ends a press the same way. Neither is a double click.
+// - A release the page never sees. A captured press can lose its release too (the button comes up over another window
+//   or tab, the browser takes the capture away). Such a press ends as a cancelled one does, where it last was and
+//   with no double click, but with no pointerExit (the pointer may well be over the canvas): when the canvas loses the
+//   capture (lostpointercapture, which also follows every ordinary release and then finds no press), when the pointer
+//   that pressed moves with no button down or presses again (a pointer presses only with none of its buttons down),
+//   and when the document is hidden. Its late release, should it come, is a release without a press.
 // - Buttons. pointerdown is the first button to go down and pointerup the last to come up, so a press is one button
 //   from the Panel's side whatever else is pressed during it. A release without a press the host took is ignored.
 // - Click counts are ClickCounter's, over client px and the events' timeStamp. A move with no press counts 1.
@@ -44,7 +50,8 @@
 // - EM_JS bodies pass through the C preprocessor, which reads an apostrophe as the start of a character constant: no
 //   comments in them.
 
-using FunkGuiWebPointerFn = int (*)(void*, int, double, double, double, double, double, double, int, int, int, double);
+using FunkGuiWebPointerFn = int (*)(void*, int, double, double, double, double, double, double, int, int, int, double,
+                                    int);
 using FunkGuiWebWheelFn = int (*)(void*, double, double, double, double, double, double, double, double, int, int);
 using FunkGuiWebKeyFn = int (*)(void*, int);
 using FunkGuiWebResizeFn = void (*)(void*);
@@ -91,7 +98,7 @@ EM_JS(int, funkgui_web_host_install,
     const send = (type, e) => {
         const r = canvas.getBoundingClientRect();
         return pointer(host, type, e.clientX, e.clientY, r.left, r.top, r.width, r.height, e.button, e.buttons,
-                       mods(e), e.timeStamp);
+                       mods(e), e.timeStamp, e.pointerId);
     };
     canvas.addEventListener('pointerdown', (e) => {
         if (!e.isPrimary) return;
@@ -110,6 +117,7 @@ EM_JS(int, funkgui_web_host_install,
     canvas.addEventListener('pointerup', (e) => { if (e.isPrimary) send(2, e); }, { signal: signal });
     canvas.addEventListener('pointercancel', (e) => { if (e.isPrimary) send(3, e); }, { signal: signal });
     canvas.addEventListener('pointerleave', (e) => { if (e.isPrimary) send(4, e); }, { signal: signal });
+    canvas.addEventListener('lostpointercapture', (e) => { if (e.isPrimary) send(5, e); }, { signal: signal });
     canvas.addEventListener('contextmenu', (e) => { e.preventDefault(); }, { signal: signal });
     canvas.addEventListener('wheel', (e) => {
         const r = canvas.getBoundingClientRect();
@@ -190,7 +198,7 @@ namespace funkgui
         constexpr double kIdlePeriodMs = 100.0;      // Panel::idle at 10 Hz, as EditorHost's timer
 
         // The DOM listeners' event kinds and modifier bits (funkgui_web_host_install).
-        enum : int { kDown = 0, kMove = 1, kUp = 2, kCancel = 3, kLeave = 4 };
+        enum : int { kDown = 0, kMove = 1, kUp = 2, kCancel = 3, kLeave = 4, kLostCapture = 5 };
         constexpr int kDomShift = 1, kDomCtrl = 2, kDomAlt = 4, kDomMeta = 8;
         constexpr int kButtonsRight = 2;             // MouseEvent.buttons: the secondary button
     }
@@ -310,12 +318,14 @@ namespace funkgui
     }
 
     // After an animation frame: the next one at once while the Panel wants full rate, else after the cadence's wait
-    // (a timer, which a nudge cuts short).
+    // (a timer, which a nudge cuts short). The wait is taken from the frames' own clock, performance.now(), which is
+    // what requestAnimationFrame stamps its callbacks with: emscripten_get_now() is another clock in a build with
+    // threads (it adds performance.timeOrigin there), and against it no wait would ever be left.
     void WebHost::scheduleNext()
     {
         if (!running_ || frameRequest_ != 0 || waitTimer_ != 0)
             return;
-        const double wait = cadence_.waitMs(emscripten_get_now());
+        const double wait = cadence_.waitMs(emscripten_performance_now());
         if (wait > 0.0)
             waitTimer_ = emscripten_set_timeout(&WebHost::onWaitEnded, wait, this);
         else
@@ -502,7 +512,7 @@ namespace funkgui
     }
 
     int WebHost::onPointer(void* self, int type, double clientX, double clientY, double left, double top, double width,
-                           double height, int button, int buttons, int domMods, double timeMs)
+                           double height, int button, int buttons, int domMods, double timeMs, int pointerId)
     {
         auto& host = *static_cast<WebHost*>(self);
         const DomPoint at{ clientX, clientY, left, top, width, height };
@@ -510,11 +520,20 @@ namespace funkgui
         {
             case kDown:
             {
-                if (!web::takesButton(button) || host.pressed_)
-                    return 0;                        // the middle button; a press during a press
+                if (!web::takesButton(button))
+                    return 0;                        // the middle button
+                if (host.pressed_)
+                {
+                    if (pointerId != host.pressedPointer_)
+                        return 0;                    // another pointer's press during a press
+                    // A pointer presses only with none of its buttons down: the release of the press the host still
+                    // holds for it never reached the page. That press ends where it last was, and this one is taken.
+                    host.endPress(host.lastPress_, false);
+                }
                 host.nudgeFullRate();
                 host.pressed_ = true;
                 host.pressedButton_ = button;
+                host.pressedPointer_ = pointerId;
                 const int clicks = host.clicks_.down(timeMs, clientX, clientY, button);
                 host.lastPress_ = host.pointer(at, domMods, button == web::kButtonRight, clicks);
                 host.panel_.pointerDown(host.lastPress_);
@@ -525,6 +544,10 @@ namespace funkgui
             {
                 // The panel idles at a low rate; ask for the full one the moment the pointer arrives.
                 host.nudgeFullRate();
+                // The pointer that pressed has no button down any more: its release never reached the page. The press
+                // ends where it last was, and this is a move.
+                if (host.pressed_ && buttons == 0 && pointerId == host.pressedPointer_)
+                    host.endPress(host.lastPress_, false);
                 if (host.pressed_)
                 {
                     host.clicks_.moved(clientX, clientY);
@@ -555,6 +578,14 @@ namespace funkgui
                     host.endPress(host.lastPress_, false);
                 host.panel_.pointerExit();
                 host.updateCursor();
+                return 0;
+            }
+            case kLostCapture:
+            {
+                // The canvas lost the pressing pointer's capture with the press still open (after a release the
+                // press is closed already): no release will arrive. No exit: the pointer may be over the canvas.
+                if (host.pressed_ && pointerId == host.pressedPointer_)
+                    host.endPress(host.lastPress_, false);
                 return 0;
             }
             default: break;
@@ -604,6 +635,9 @@ namespace funkgui
         auto& host = *static_cast<WebHost*>(self);
         if (hidden != 0)
         {
+            // A button released while the tab is hidden is released over another one: the press ends here.
+            if (host.pressed_)
+                host.endPress(host.lastPress_, false);
             host.panel_.closeGestures();             // a hidden tab's timers are throttled: no idle call closes them
             return;
         }
@@ -637,7 +671,7 @@ namespace funkgui
 
     double WebHost::nowSeconds() const
     {
-        return capture_.fixedDt > 0.0f ? seconds_ : emscripten_get_now() * 0.001;
+        return capture_.fixedDt > 0.0f ? seconds_ : emscripten_performance_now() * 0.001;
     }
 
     void WebHost::beginBatch()
@@ -763,12 +797,17 @@ namespace funkgui
             zoomTarget_ = fitZoom(zoomChosen_);
     }
 
-    // The largest step <= chosen whose canvas fits the window less the page's margins around it.
+    // The largest step <= chosen whose canvas fits the window less the page's margins around it. A window the browser
+    // gives no size (a frame that is not displayed) is not known, and nothing is fitted to it (web::fitZoom's rule for
+    // a side <= 0); one that is known but no larger than the margins has room for no step, which is the smallest one,
+    // as wherever none fits: its area is kept at 1 px so that it is not taken for the unknown one.
     int WebHost::fitZoom(int chosen) const
     {
+        const int innerW = funkgui_web_host_inner_width(), innerH = funkgui_web_host_inner_height();
+        const bool known = innerW > 0 && innerH > 0;
         return web::fitZoom(zoomSteps_, chosen, logicalW_, logicalH_,
-                            funkgui_web_host_inner_width() - config_.fitMarginX,
-                            funkgui_web_host_inner_height() - config_.fitMarginY);
+                            known ? std::max(1, innerW - config_.fitMarginX) : 0,
+                            known ? std::max(1, innerH - config_.fitMarginY) : 0);
     }
 
     void WebHost::applyZoom()

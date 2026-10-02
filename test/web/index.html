@@ -23,9 +23,14 @@
   // A canvas that holds a 2D context can never give a WebGL2 one: the nearest a page gets to a browser without WebGL2.
   document.getElementById('funkgui-taken').getContext('2d');
 
-  // Anything that stops the run before its verdict is a failure, and says so in the title.
+  // A failure outside the run's own claims: whatever stops the run before its verdict, and an error raised where the
+  // run does not look (the sink's context listeners are called by the browser, so an exception or a trap in one
+  // arrives here and the run goes on). The first is kept: the title says FAIL from then on, and the run's verdict
+  // reads it (page.cpp, verdict()), so a PASS never replaces it.
+  var funkguiFailure = '';
   function funkguiFail(why) {
-    if (document.title === 'RUNNING') document.title = 'FAIL: ' + why;
+    if (!funkguiFailure) funkguiFailure = String(why);
+    if (!document.title.startsWith('FAIL')) document.title = 'FAIL: ' + funkguiFailure;
     console.log('FAIL     ' + why);
     document.getElementById('funkgui-log').textContent += 'FAIL     ' + why + '\n';
   }

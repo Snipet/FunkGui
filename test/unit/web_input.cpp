@@ -15,7 +15,7 @@
 //   wheel.*     the DOM's sign and units as JUCE's: 512 px = -1.0 smooth; a notch of three lines or one page =
 //               50 / 256, not smooth; never reversed, never inertial; no wheel on an axis is +0
 //   clicks.*    JUCE's click count: 400 ms, 800 ms for the second and third press before, 8 px in x and in y, the same
-//               button, at most 4, and 1 after a move of 4 px or a hold of more than 300 ms
+//               button, at most 4, and 1 after a move of 4 px (exactly 4 px is a move) or a hold of more than 300 ms
 //   cursor.*    the five CSS cursor keywords
 // Spec rows only.
 
@@ -270,10 +270,15 @@ int main(int argc, char** argv)
         drag.moved(53.9, 60.0);
         P.eq("clicks.moved_under_4px_keeps", drag.count(1150.0), 2);
         drag.moved(52.9, 62.9);                      // 4.1 px along the diagonal
-        P.eq("clicks.moved_4px_is_one", drag.count(1150.0), 1);
+        P.eq("clicks.moved_past_4px_is_one", drag.count(1150.0), 1);
         drag.moved(50.0, 60.0);                      // back at the press: still a drag
         P.eq("clicks.moved_back_is_still_one", drag.count(1150.0), 1);
         P.eq("clicks.press_after_a_drag", drag.down(1200.0, 50.0, 60.0, 0), 3);
+        ClickCounter edge;                           // JUCE's rule is a distance >= 4: 4 px exactly is a drag
+        edge.down(1000.0, 50.0, 60.0, 0);
+        edge.down(1100.0, 50.0, 60.0, 0);
+        edge.moved(54.0, 60.0);
+        P.eq("clicks.moved_exactly_4px_is_one", edge.count(1150.0), 1);
         ClickCounter hold;
         hold.down(1000.0, 50.0, 60.0, 0);
         hold.down(1100.0, 50.0, 60.0, 0);
