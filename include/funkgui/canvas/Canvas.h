@@ -80,7 +80,10 @@ namespace funkgui
         // atlas uvs) are interpolated to the new corners, so each sample inside draws as the uncropped primitive's did;
         // a primitive wholly outside is dropped, and one wholly inside is left bit for bit. It happens on the CPU, at
         // popClip(): the PrimList, the dump, the fingerprints, SoftRaster and BgfxSink see ordinary primitives, and no
-        // shader or vertex changes. The cut is a hard edge: put it on a device px (whole logical px at dpi 1 and 2).
+        // shader or vertex changes. The cut is a hard edge: put it on a device px with snapX/snapY (whole logical px
+        // are on one only at dpi 1 and 2, and a web host's dpi is physical height / logical height). An edge through
+        // device pixel centres in y is filled one row further down by WebGlSink than by SoftRaster and the native
+        // sinks (web/WebGlSink.h).
         // Clips nest kMaxClips deep; a push beyond that is ignored, and so is its pop. begin() drops the clips left
         // open and end() closes them. Axis records are never clipped.
         static constexpr int kMaxClips = 8;

@@ -1,0 +1,38 @@
+<!doctype html>
+<!-- The browser check of FunkGui::web (test/web/page.cpp says what it runs and what PASS means). The verdict is the
+     document's title: RUNNING, then PASS or "FAIL: <why>". Served from this directory by any static server on
+     127.0.0.1; tools/web/check-page.mjs does that and reads the title from headless Chrome. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RUNNING</title>
+<style>
+  body { margin: 16px; background: #101113; color: #d8d6d0; font: 12px/1.5 ui-monospace, Menlo, monospace; }
+  h1 { font-size: 13px; font-weight: normal; letter-spacing: 0.08em; }
+  canvas { display: block; margin: 0 0 12px 0; }
+  #funkgui-taken { display: none; }
+  pre { margin: 0; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>FUNKGUI::WEB: WEBGLSINK AGAINST SOFTRASTER</h1>
+<canvas id="funkgui-canvas" width="480" height="300"></canvas>
+<canvas id="funkgui-taken" width="8" height="8"></canvas>
+<pre id="funkgui-log"></pre>
+<script>
+  // A canvas that holds a 2D context can never give a WebGL2 one: the nearest a page gets to a browser without WebGL2.
+  document.getElementById('funkgui-taken').getContext('2d');
+
+  // Anything that stops the run before its verdict is a failure, and says so in the title.
+  function funkguiFail(why) {
+    if (document.title === 'RUNNING') document.title = 'FAIL: ' + why;
+    console.log('FAIL     ' + why);
+    document.getElementById('funkgui-log').textContent += 'FAIL     ' + why + '\n';
+  }
+  window.addEventListener('error', (e) => funkguiFail('uncaught error: ' + e.message));
+  window.addEventListener('unhandledrejection', (e) => funkguiFail('unhandled rejection: ' + e.reason));
+  var Module = { onAbort: (what) => funkguiFail('the module aborted: ' + what) };
+</script>
+<script src="funkgui_web_page.js" onerror="funkguiFail('funkgui_web_page.js did not load')"></script>
+</body>
+</html>

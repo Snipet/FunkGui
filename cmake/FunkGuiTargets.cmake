@@ -4,7 +4,7 @@
 # Frozen from FZ0 (add, never rename or remove): the targets FunkGui::{harness,core,gpu,presets} (FunkGuiHarness,
 # FunkGuiCore, FunkGuiGpu, FunkPresets), FunkGui, FunkGuiFonts, FunkGuiShaders, the tool targets, FUNKGUI_VERSION,
 # FUNKGUI_GENERATED_DIR, and the functions funkgui_configure_product, funkgui_compile_shaders, funkgui_add_font and
-# funkgui_add_tool.
+# funkgui_add_tool. Added in v0.12.0: FunkGuiShaderText (every configuration) and FunkGui::web (FunkGuiWeb, Emscripten).
 #
 # Every source list is a per-directory glob with CONFIGURE_DEPENDS, so later cards add files, never CMake edits
 # (03 §1.1, K3 #2):
@@ -16,6 +16,7 @@
 #   src/gpu/**                                                           -> FunkGuiGpu   (.cpp and .mm; *.mm on
 #                                                                           Apple only, src/gpu/linux/** on Linux only)
 #   src/presets/**                                                       -> FunkPresets  (empty placeholder until then)
+#   src/web/**                                                           -> FunkGuiWeb   (v0.12.0; Emscripten only)
 #   tools/*.cpp                                                          -> tool FunkGui<Stem> (FrameRender.cpp ->
 #                                                                           funkgui_framerender); tools/*/CMakeLists.txt
 #                                                                           are added as subdirectories
@@ -214,10 +215,12 @@ function(_funkgui_internal_target target)
   endif()
   # Emscripten (v0.12.0, the `web` preset): FunkGui's own executables are run by node (CTest's emulator), so they see
   # the host's file system and environment (goldens, candidates and sandboxes are host paths), return main()'s exit
-  # code, and may grow their heap.
+  # code, and may grow their heap. Not one a browser loads (the target property FUNKGUI_BROWSER, set before this call:
+  # test/web's page), which has no file system and whose runtime outlives main().
   if(EMSCRIPTEN)
     get_target_property(_type ${target} TYPE)
-    if(_type STREQUAL "EXECUTABLE")
+    get_target_property(_browser ${target} FUNKGUI_BROWSER)
+    if(_type STREQUAL "EXECUTABLE" AND NOT _browser)
       target_link_options(${target} PRIVATE -sNODERAWFS=1 -sEXIT_RUNTIME=1 -sALLOW_MEMORY_GROWTH=1)
     endif()
   endif()
@@ -282,6 +285,25 @@ function(funkgui_add_tool name)
   set_property(GLOBAL APPEND PROPERTY FUNKGUI_TOOL_TARGETS ${name})
 endfunction()
 
+#=======================================================================================================================
+# FunkGuiShaderText (v0.12.0): the UI program as GLSL ES 3.00 text, <funkgui/shaders/ui.es300.h> in
+# ${FUNKGUI_GENERATED_DIR}, for the WebGL2 sink (FunkGui::web, below). cmake/FunkGuiShaderText.cmake writes it from
+# shaders/{vs_ui,fs_ui,varying.def}.sc with CMake alone (no shaderc, no bgfx, no JUCE), so the target exists in every
+# configuration and on every host, and fg.shader.web pins the same bytes in all of them. Nothing depends on it but
+# FunkGui::web and that test: no other build runs it.
+#=======================================================================================================================
+set(_fg_text_header ${FUNKGUI_GENERATED_DIR}/funkgui/shaders/ui.es300.h)
+set(_fg_text_inputs ${PROJECT_SOURCE_DIR}/shaders/vs_ui.sc ${PROJECT_SOURCE_DIR}/shaders/fs_ui.sc
+                    ${PROJECT_SOURCE_DIR}/shaders/varying.def.sc)
+file(MAKE_DIRECTORY ${FUNKGUI_GENERATED_DIR}/funkgui/shaders)
+add_custom_command(OUTPUT ${_fg_text_header}
+  COMMAND ${CMAKE_COMMAND} -DFUNKGUI_SHADER_DIR=${PROJECT_SOURCE_DIR}/shaders -DFUNKGUI_SHADER_OUT=${_fg_text_header}
+          -P ${PROJECT_SOURCE_DIR}/cmake/FunkGuiShaderText.cmake
+  DEPENDS ${_fg_text_inputs} ${PROJECT_SOURCE_DIR}/cmake/FunkGuiShaderText.cmake
+  COMMENT "FunkGui: shaders/*.sc -> GLSL ES 3.00 text"
+  VERBATIM)
+add_custom_target(FunkGuiShaderText DEPENDS ${_fg_text_header})
+
 if(FUNKGUI_HARNESS_ONLY)
   return()                                   # DSP-only consumers: FunkGui::harness and the functions, nothing else
 endif()
@@ -295,9 +317,13 @@ if(FUNKGUI_WITH_JUCE)
 else()
   list(APPEND _fg_core_modules nojuce)               # v0.12.0: the JUCE-free counterparts of src/juce/
 endif()
+set(_fg_other_modules gpu presets)
+if(EMSCRIPTEN)
+  list(APPEND _fg_other_modules web)                 # v0.12.0: the WebGL2 sink; no other build globs src/web/
+endif()
 set(_fg_core_sources "")
 set(_fg_all_sources "")
-foreach(_m IN LISTS _fg_core_modules ITEMS gpu presets)
+foreach(_m IN LISTS _fg_core_modules _fg_other_modules)
   file(GLOB_RECURSE _cpp CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/src/${_m}/*.cpp)
   file(GLOB_RECURSE _mm CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/src/${_m}/*.mm)
   if(_mm AND NOT _m STREQUAL "gpu")
@@ -532,7 +558,26 @@ if(FUNKGUI_WITH_PRESETS)
   endif()
 endif()
 
-# FunkGui (umbrella): FunkGuiCore, plus FunkGuiGpu when enabled.
+#=======================================================================================================================
+# FunkGuiWeb (FunkGui::web, v0.12.0): the WebGL2 sink over the JUCE-free core, the browser's counterpart of
+# FunkGui::gpu. Emscripten only (FunkGui's own `web` preset, or a consumer on Emscripten's toolchain; JUCE is never
+# under it, see the top-level CMakeLists.txt). INTERFACE, like the other library targets: its sources compile in the
+# consumer, which links with WebGL2 and nothing older and without the get-proc-address tables (the sink calls
+# Emscripten's GLES3 bindings directly). The shader text is generated before any consumer compiles: a dependency of an
+# INTERFACE library is followed by whatever links it.
+#=======================================================================================================================
+if(EMSCRIPTEN)
+  add_library(FunkGuiWeb INTERFACE)
+  add_library(FunkGui::web ALIAS FunkGuiWeb)
+  target_sources(FunkGuiWeb INTERFACE ${_fg_sources_web})
+  target_include_directories(FunkGuiWeb INTERFACE ${FUNKGUI_GENERATED_DIR})
+  target_link_libraries(FunkGuiWeb INTERFACE FunkGuiCore)
+  target_link_options(FunkGuiWeb INTERFACE -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sGL_ENABLE_GET_PROC_ADDRESS=0)
+  add_dependencies(FunkGuiWeb FunkGuiShaderText)
+endif()
+
+# FunkGui (umbrella): FunkGuiCore, plus FunkGuiGpu when enabled. (FunkGui::web is linked by name: its link options
+# are a browser's, and FunkGui's own wasm tests run under node.)
 add_library(FunkGui INTERFACE)
 target_link_libraries(FunkGui INTERFACE FunkGuiCore)
 if(TARGET FunkGuiGpu)
@@ -542,12 +587,15 @@ endif()
 #=======================================================================================================================
 # FunkGuiCoreCheck (v0.12.0): FunkGui's own build without JUCE compiles every core source once, as a static library in
 # `all`, under FunkGui's warnings (-Werror): the proof that the core needs no JUCE, on the host compiler (the `nojuce`
-# preset) and under Emscripten (the `web` preset), whatever tools and tests are built. Top level only; never a
-# consumer's.
+# preset) and under Emscripten (the `web` preset), whatever tools and tests are built. Under Emscripten it compiles
+# FunkGui::web's sources as well. Top level only; never a consumer's.
 #=======================================================================================================================
 if(PROJECT_IS_TOP_LEVEL AND NOT FUNKGUI_WITH_JUCE)
   add_library(FunkGuiCoreCheck STATIC)
   target_link_libraries(FunkGuiCoreCheck PRIVATE FunkGui::core)
+  if(TARGET FunkGuiWeb)
+    target_link_libraries(FunkGuiCoreCheck PRIVATE FunkGui::web)
+  endif()
   funkgui_configure_product(FunkGuiCoreCheck PRODUCT FunkGui OBJC_PREFIX FunkGui ENV_PREFIX FUNKGUI_
                             PREFS_FOLDER FunkGui)
   _funkgui_internal_target(FunkGuiCoreCheck)

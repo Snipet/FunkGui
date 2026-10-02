@@ -11,7 +11,8 @@
 #   what it links: harness (FunkGui::harness only, no JUCE), core (+ FunkGui::core; the default when gpu=0), gpu
 #   (+ FunkGui::gpu and the shaders; the default when gpu=1) or presets (core + FunkGui::presets and SQLite; G8, S11;
 #   skipped without FUNKGUI_WITH_PRESETS). Every test executable gets ${FUNKGUI_GENERATED_DIR} on its include path and,
-#   when gpu=1, builds after FunkGuiShaders.
+#   when gpu=1, builds after FunkGuiShaders. One that includes <funkgui/shaders/ui.es300.h> (v0.12.0: the GLSL ES text,
+#   generated in every configuration) builds after FunkGuiShaderText.
 # - With exe=<tool target>, the file is a registration stub and is not compiled: the test runs
 #   `<tool> fg.<x> <args> <harness flags>`. With exe=<path of a script in this repository> it runs `<script> <args>`
 #   (a plain test: its exit code is its result). In args, @SOURCE_DIR@, @BINARY_DIR@ and @SANDBOX@ expand to the
@@ -32,7 +33,9 @@
 #
 # Emscripten (v0.12.0, the `web` preset): the tests are wasm32 executables run by node (CMAKE_CROSSCOMPILING_EMULATOR,
 # which Emscripten's toolchain file finds), as --arch wasm32, against the same base goldens (an overlay would be
-# test/golden/wasm32/). They are the JUCE-free tests: Emscripten builds only with FUNKGUI_WITH_JUCE=OFF.
+# test/golden/wasm32/). They are the JUCE-free tests: Emscripten builds only with FUNKGUI_WITH_JUCE=OFF. node has no
+# WebGL, so nothing here draws with FunkGui::web: test/web/ builds a page for a browser instead (its own CMakeLists.txt,
+# added below under Emscripten), which `funkgui_tests` builds and tools/web/check-page.mjs runs in headless Chrome.
 #
 # Labels: verify, fg, plus gpu (needs FUNKGUI_WITH_BGFX), or live (not in verify). A harness test passes CTest when its
 # own RESULT line reports pass, golden_drift or golden_missing: drift and missing goldens are candidates, not failures
@@ -171,6 +174,10 @@ function(_fg_add_test name timeout gpu links exe args labels source)
     target_include_directories(${_target} PRIVATE ${FUNKGUI_GENERATED_DIR})
     if(gpu)
       funkgui_compile_shaders(${_target})
+    endif()
+    file(STRINGS "${source}" _wants_text LIMIT_COUNT 1 REGEX "^#include <funkgui/shaders/ui\\.es300\\.h>")
+    if(_wants_text)
+      add_dependencies(${_target} FunkGuiShaderText)    # the generated header exists before the test compiles
     endif()
     set_target_properties(${_target} PROPERTIES EXCLUDE_FROM_ALL TRUE)
     _funkgui_internal_target(${_target} ${source})
@@ -317,6 +324,11 @@ if(NOT FUNKGUI_HARNESS_ONLY)
   if(NOT _fg_can_run)
     set_tests_properties(fg.headers PROPERTIES DISABLED TRUE)
   endif()
+endif()
+
+# ---- test/web: the browser page that draws through FunkGui::web (v0.12.0; Emscripten only) --------------------------
+if(TARGET FunkGuiWeb)
+  add_subdirectory(web)
 endif()
 
 get_property(_fg_names GLOBAL PROPERTY FUNKGUI_TEST_NAMES)
