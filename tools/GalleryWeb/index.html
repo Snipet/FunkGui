@@ -1,0 +1,46 @@
+<!doctype html>
+<!-- FunkGui's gallery as a web page (tools/GalleryWeb/GalleryWeb.cpp says what it runs): one gallery section live in
+     a WebHost on the canvas below. ?section=<name> chooses it (the links reload the page), ?theme=, ?zoom=, ?dt= and
+     ?scale= pin the theme, the zoom in percent, the frame's dt in seconds and the device scale. Under the canvas: the
+     host's diagnostics, rewritten twice a second, and under them the first error of the page's life, which stays.
+     Served from this directory by any static server: python3 -m http.server 8138 --bind 127.0.0.1 --directory <this
+     directory>. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FunkGui gallery</title>
+<style>
+  body { margin: 16px; background: #101113; color: #d8d6d0; font: 12px/1.5 ui-monospace, Menlo, monospace; }
+  nav { margin: 0 0 12px 0; letter-spacing: 0.08em; text-transform: uppercase; }
+  nav a { color: #8d8b86; text-decoration: none; margin: 0 14px 0 0; white-space: nowrap; }
+  nav a:hover { color: #d8d6d0; }
+  nav a.current { color: #d8d6d0; border-bottom: 1px solid #d8d6d0; }
+  canvas { display: block; margin: 0 0 12px 0; }
+  pre { margin: 0; white-space: pre-wrap; letter-spacing: 0.04em; }
+  #funkgui-error { color: #e8795e; }
+</style>
+</head>
+<body>
+<nav id="funkgui-sections"></nav>
+<canvas id="funkgui-canvas" width="480" height="300"></canvas>
+<pre id="funkgui-status">LOADING</pre>
+<pre id="funkgui-error"></pre>
+<script>
+  // An error has an element of its own, which nothing rewrites: an exception or a trap in a listener or an animation
+  // frame leaves the runtime, and with it the status line's timer, running. The first error is kept (the ones after a
+  // trap are its consequences; all of them are in the console). An error while the page loads ends the loading.
+  function funkguiFail(why) {
+    console.log('FAIL     ' + why);
+    const error = document.getElementById('funkgui-error');
+    if (!error.textContent) error.textContent = String(why).toUpperCase();
+    const status = document.getElementById('funkgui-status');
+    if (status.textContent === 'LOADING') status.textContent = '';
+  }
+  window.addEventListener('error', (e) => funkguiFail('uncaught error: ' + e.message));
+  window.addEventListener('unhandledrejection', (e) => funkguiFail('unhandled rejection: ' + e.reason));
+  var Module = { onAbort: (what) => funkguiFail('the module aborted: ' + what) };
+</script>
+<script src="funkgui_gallery_web.js" onerror="funkguiFail('funkgui_gallery_web.js did not load')"></script>
+</body>
+</html>

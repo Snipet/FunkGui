@@ -7,6 +7,13 @@
 //   cmake --workflow --preset web-verify && tools/web/check-page.mjs build-web/test/web
 //   ctest --test-dir build-web -L live --output-on-failure
 //
+// Another page of that directory (v0.13.0): --page <stem> opens <stem>.html, whose module is funkgui_web_<stem>.js and
+// .wasm (or <stem>.js and .wasm), and is otherwise the same run with the same verdict protocol: the title RUNNING, then
+// PASS or "FAIL: <why>", and the log in the element funkgui-log. CTest runs WebHost's page (test/web/host.cpp) as
+// fg.web.host:
+//
+//   tools/web/check-page.mjs build-web/test/web --page host
+//
 // What it does: serves <dir> with `python3 -m http.server` on 127.0.0.1 (a free port), starts Chrome headless with its
 // own throwaway profile, opens index.html through the DevTools protocol, waits until document.title is "PASS" or
 // starts with "FAIL", prints the page's log (its <pre>), and stops Chrome and the server whatever happened.
@@ -14,6 +21,7 @@
 // browser went away, no verdict within the timeout). Nothing else exits 0: the code is 2 until a PASS was read.
 // Nothing is installed or downloaded; node (which Emscripten needs anyway) is the only interpreter besides python3.
 //
+//   --page <stem>         the page to open: <stem>.html (default: index.html, the sink's page)
 //   --chrome <path>       the browser (default: $CHROME, else Google Chrome's usual place on macOS, else
 //                         google-chrome, chromium or chromium-browser on PATH)
 //   --chrome-flag <flag>  an extra Chrome flag (repeatable). Without any, the GPU path is ANGLE on Metal on macOS and
@@ -32,8 +40,8 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-const usage = 'usage: tools/web/check-page.mjs <dir with index.html> [--chrome <path>] [--chrome-flag <flag>]... '
-            + '[--timeout <seconds>]';
+const usage = 'usage: tools/web/check-page.mjs <dir with index.html> [--page <stem>] [--chrome <path>] '
+            + '[--chrome-flag <flag>]... [--timeout <seconds>]';
 
 function refuse(why) {
   console.error(`check-page: ${why}`);
@@ -41,19 +49,26 @@ function refuse(why) {
 }
 
 // ---- arguments ------------------------------------------------------------------------------------------------------
-let dir = '', chrome = process.env.CHROME || '', timeoutS = 90;
+let dir = '', chrome = process.env.CHROME || '', timeoutS = 90, page = '';
 const flags = [];
 for (let i = 2; i < process.argv.length; ++i) {
   const a = process.argv[i];
   if (a === '--chrome') chrome = process.argv[++i] || '';
+  else if (a === '--page') page = process.argv[++i] || '';
   else if (a === '--chrome-flag') flags.push(process.argv[++i] || '');
   else if (a === '--timeout') timeoutS = Number(process.argv[++i]);
   else if (a.startsWith('-') || dir) refuse(usage);
   else dir = a;
 }
 if (!dir || !(timeoutS > 0)) refuse(usage);
+if (process.argv.includes('--page') && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(page)) refuse(usage);
 dir = resolve(dir);
-for (const f of ['index.html', 'funkgui_web_page.js', 'funkgui_web_page.wasm'])
+// The page and its module. Without --page: the sink's page, as before. With it: <stem>.html and the module the build
+// names funkgui_web_<stem> (or <stem> itself).
+const html = page ? `${page}.html` : 'index.html';
+const modules = page ? [`funkgui_web_${page}`, page] : ['funkgui_web_page'];
+const module = modules.find((m) => existsSync(join(dir, `${m}.js`))) || modules[0];
+for (const f of [html, `${module}.js`, `${module}.wasm`])
   if (!existsSync(join(dir, f)))
     refuse(`${dir} has no ${f}: build the web preset first (cmake --workflow --preset web-verify)`);
 
@@ -135,7 +150,7 @@ async function main() {
   children.push(server);
   const serving = await lineFrom(server, /Serving HTTP on 127\.0\.0\.1 port (\d+)/);
   if (!serving) refuseRunning('python3 -m http.server did not start');
-  const url = `http://127.0.0.1:${serving[1]}/index.html`;
+  const url = `http://127.0.0.1:${serving[1]}/${html}`;
 
   profile = mkdtempSync(join(tmpdir(), 'funkgui-web-page-'));
   const browser = spawn(chrome, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`,

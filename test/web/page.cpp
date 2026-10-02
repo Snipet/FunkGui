@@ -7,7 +7,9 @@
 //   python3 -m http.server 8137 --bind 127.0.0.1 --directory <build>/test/web      http://127.0.0.1:8137/index.html
 //
 // The verdict is machine-readable and exact about what ran: document.title is "RUNNING" until the end, then "PASS" or
-// "FAIL: <the first thing that failed>"; every line goes to console.log and to the page's <pre>. PASS means all of:
+// "FAIL: <the first thing that failed>"; every line goes to console.log and to the page's <pre>. A failure of the
+// page's own hooks (index.html: an uncaught error, an unhandled rejection, an abort) is kept and is part of the
+// verdict as a failed check is: no PASS replaces it. PASS means all of:
 //
 // 1. The atlas is the committed bake (FontService, baked from the embedded face).
 // 2. A sink on a selector that names no canvas, on a malformed selector and on a canvas that cannot give a WebGL2
@@ -100,6 +102,11 @@ EM_JS(void, fg_page_line, (const char* text), {
 });
 
 EM_JS(void, fg_page_title, (const char* text), { document.title = UTF8ToString(text); });
+
+// The failure the page's own hooks kept (index.html), "" when there is none.
+EM_JS(void, fg_page_hook_failure, (char* out, int size), {
+    stringToUTF8(String(globalThis.funkguiFailure || ""), out, size);
+});
 
 // Counts the context events of the canvas (after the sink's own listeners: it registered first).
 EM_JS(void, fg_page_watch, (const char* selector), {
@@ -201,6 +208,11 @@ namespace
 
     void verdict()
     {
+        // What the page's hooks kept failed the run as a check does, whatever the checks after it said.
+        char hook[512];
+        fg_page_hook_failure(hook, static_cast<int>(sizeof hook));
+        if (firstFailure.empty() && hook[0] != '\0')
+            firstFailure = hook;
         if (firstFailure.empty())
         {
             say("VERDICT  PASS");
