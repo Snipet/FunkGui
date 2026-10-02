@@ -1,0 +1,140 @@
+<!doctype html>
+<!-- The browser check of FunkGui::web's services: the DOM menu, the clipboard, the localStorage preferences
+     (test/web/services.cpp says what it runs and what PASS means). The verdict is the document's title: RUNNING, then
+     PASS or "FAIL: <why>". Served from this directory by any static server on 127.0.0.1; tools/web/check-page.mjs does
+     that and reads the title from headless Chrome. After the verdict the canvas is for a hand: a click on it opens a
+     menu there, and its Copy item writes the clipboard inside a real gesture, which no script can make. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RUNNING</title>
+<style>
+  body { margin: 16px; background: #101113; color: #d8d6d0; font: 12px/1.5 ui-monospace, Menlo, monospace; }
+  h1 { font-size: 13px; font-weight: normal; letter-spacing: 0.08em; }
+  canvas { display: block; margin: 0 0 12px 0; background: #16171a; outline: none; }
+  /* What a host page might say about every div: the menu must not take any of it (it is styled from all: initial). */
+  div { margin: 7px; padding: 3px; color: #ff00ff; font-style: italic; text-transform: uppercase; }
+  pre { margin: 0; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>FUNKGUI::WEB: THE MENU, THE CLIPBOARD, THE PREFERENCES</h1>
+<canvas id="funkgui-canvas" width="480" height="300" tabindex="0"></canvas>
+<pre id="funkgui-log"></pre>
+<script>
+  // Anything that stops the run before its verdict is a failure, and says so in the title.
+  function funkguiFail(why) {
+    if (document.title === 'RUNNING') document.title = 'FAIL: ' + why;
+    console.log('FAIL     ' + why);
+    document.getElementById('funkgui-log').textContent += 'FAIL     ' + why + '\n';
+  }
+  window.addEventListener('error', (e) => funkguiFail('uncaught error: ' + e.message));
+  window.addEventListener('unhandledrejection', (e) => funkguiFail('unhandled rejection: ' + e.reason));
+  var Module = { onAbort: (what) => funkguiFail('the module aborted: ' + what) };
+
+  // What services.cpp looks at and does to the page: the menu as the document has it, events as a script can make
+  // them (none is a user's gesture), and the three things a browser may refuse, made to refuse on demand.
+  const fg = {
+    canvas: () => document.getElementById('funkgui-canvas'),
+    canvasKeys: 0,
+    menus: () => Array.from(document.querySelectorAll('[role=menu]')),
+    menu: () => document.querySelector('[role=menu]'),
+    item: (id) => document.querySelector('[role=menu] > [data-id="' + id + '"]'),
+    separator: () => document.querySelector('[role=menu] > [role=separator]'),
+    // One line per row of the menu, top to bottom: role|id|text|aria-checked|aria-disabled|tick, or --- .
+    rows: () => Array.from(fg.menu().children).map((el) => el.getAttribute('role') === 'separator' ? '---'
+        : [el.getAttribute('role'), el.getAttribute('data-id'), el.textContent, el.getAttribute('aria-checked') || '-',
+           el.getAttribute('aria-disabled') || '-', el.querySelector('svg') ? 'tick' : '-'].join('|')).join('\n'),
+    style: (el, property) => (el ? getComputedStyle(el)[property] : '(no element)'),
+    lit: () => fg.menu().getAttribute('aria-activedescendant') || '',
+    litId: () => { const el = document.getElementById(fg.lit()); return el ? Number(el.getAttribute('data-id')) : 0; },
+    faces: () => Array.from(document.fonts).filter((f) => f.family.replace(/["']/g, '') === 'funkgui-menu'),
+    key: (target, key) => {
+      const e = new KeyboardEvent('keydown', { key: key, bubbles: true, cancelable: true });
+      target.dispatchEvent(e);
+      return e.defaultPrevented ? 1 : 0;
+    },
+    press: (target) => target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true })),
+    hover: (target) => target.dispatchEvent(new PointerEvent('pointermove', { bubbles: true })),
+    stale: null,
+    // What a page's own focus handling can do: the item is clicked while showMenu is still running, at the moment
+    // the menu takes the focus (once; whether focus events are delivered depends on the window, the call does not).
+    clickInsideShow: (id) => {
+      const real = HTMLElement.prototype.focus;
+      HTMLElement.prototype.focus = function (options) {
+        real.call(this, options);
+        if (this.getAttribute('role') !== 'menu') return;
+        HTMLElement.prototype.focus = real;
+        this.querySelector('[data-id="' + id + '"]').click();
+      };
+    },
+
+    // navigator.clipboard.writeText, watched: what was written and what the browser made of it.
+    writes: [], outcome: 'none', readBack: 'none', onOutcome: null,
+    watchClipboard: () => {
+      if (!navigator.clipboard || !navigator.clipboard.writeText) return 0;
+      const real = navigator.clipboard.writeText.bind(navigator.clipboard);
+      navigator.clipboard.writeText = (text) => {
+        fg.writes.push(text);
+        fg.outcome = 'pending';
+        const written = real(text);
+        written.then(() => { fg.outcome = 'fulfilled'; }, (e) => { fg.outcome = 'rejected (' + e.name + ')'; })
+               .then(() => { if (fg.onOutcome) fg.onOutcome(); });
+        return written;
+      };
+      return 1;
+    },
+    read: () => {
+      fg.readBack = 'pending';
+      try {
+        navigator.clipboard.readText().then((text) => { fg.readBack = 'text:' + text; },
+                                            (e) => { fg.readBack = 'refused (' + e.name + ')'; });
+      } catch (e) {
+        fg.readBack = 'refused (' + e.name + ')';
+      }
+    },
+    // A page without navigator.clipboard (not a secure context), and document.execCommand watched.
+    execs: [],
+    hideClipboard: (hidden) => {
+      if (hidden) {
+        Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+        const real = document.execCommand.bind(document);
+        document.execCommand = (command) => {
+          const el = document.activeElement;
+          const area = el && el.tagName === 'TEXTAREA';
+          const result = real(command);
+          fg.execs.push({ command: command, result: result,
+                          selected: area ? el.value.substring(el.selectionStart, el.selectionEnd) : null });
+          return result;
+        };
+      } else {
+        delete navigator.clipboard;
+        delete document.execCommand;
+      }
+      return navigator.clipboard ? 1 : 0;
+    },
+
+    // localStorage: a private window that refuses writes, and a browser that forbids storage altogether.
+    stored: (key) => { const v = localStorage.getItem(key); return v === null ? '(none)' : v; },
+    clearStored: (prefix) => {
+      for (const key of Object.keys(localStorage)) if (key.startsWith(prefix)) localStorage.removeItem(key);
+    },
+    setItem: Storage.prototype.setItem,
+    refuseWrites: (refuse) => {
+      Storage.prototype.setItem = refuse ? () => { throw new DOMException('refused', 'QuotaExceededError'); }
+                                         : fg.setItem;
+    },
+    storageProperty: Object.getOwnPropertyDescriptor(window, 'localStorage'),
+    forbidStorage: (forbid) => {
+      if (forbid) Object.defineProperty(window, 'localStorage', {
+        get: () => { throw new DOMException('forbidden', 'SecurityError'); }, configurable: true });
+      else if (fg.storageProperty) Object.defineProperty(window, 'localStorage', fg.storageProperty);
+      else delete window.localStorage;
+    },
+  };
+  // A host's canvas listens for keys; while a menu is open none may arrive.
+  fg.canvas().addEventListener('keydown', () => { fg.canvasKeys++; });
+</script>
+<script src="funkgui_web_services.js" onerror="funkguiFail('funkgui_web_services.js did not load')"></script>
+</body>
+</html>
