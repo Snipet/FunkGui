@@ -5,9 +5,8 @@
 // JUCE. Private to src/web (FunkGui::web, Emscripten only): WebHost owns one for its whole life and forwards
 // HostServices::showMenu, dismissMenus and copyText to it; a product never includes this header.
 //
-// Frozen for Sprint C by the lead: it is the seam between the two cards. G-D (WebHost) calls it as declared; G-E
-// implements it in WebServices.cpp (the base commit carries a stub there that refuses everything) and owns what lies
-// behind `Impl`. A change to a declaration is an interface-change request in a handoff, never an edit.
+// It was the seam between the two cards of Sprint C (WebHost calls it as declared; WebServices.cpp implements it), which
+// is why the class is this small and everything else lies behind `Impl`.
 //
 // The rules are HostServices' own (panel/HostServices.h, "Web Sprint B additions"): a callback runs on the main
 // thread, at most once, never inside the call that took it, and never after dismissMenus(), after letGo() or after
@@ -35,10 +34,14 @@ namespace funkgui::web
 
         // HostServices::showMenu. `logicalWidth` is the Panel's width in its own px: the canvas's CSS width over it is
         // the CSS px per Panel px (the UI zoom times any page scaling), so request.anchor times that factor is the
-        // anchor in CSS px from the canvas's top-left corner. The menu takes request.theme's colours and the bundled
-        // face. True: the menu is open and `done` will run once, from a later event of the page (the item's click or
-        // key, or a dismissal: a press outside it, Escape, the window losing focus or being resized), with the chosen
-        // id or 0. False: refused, `done` dropped unrun.
+        // anchor in CSS px from the canvas's top-left corner. The menu takes request.theme's colours, the bundled
+        // face and the native menu's metrics (MenuLook over JUCE's LookAndFeel_V4), which do not follow the UI zoom.
+        // True: the menu is open and `done` will run once, from a later event of the page, with the chosen id (an
+        // item's click or key; a release over an item the pointer moved onto with the opening button still held, as
+        // JUCE chooses) or with 0 (a press outside the menu, Escape, the window losing focus or being resized, a
+        // scroll that moves the canvas). A press on the canvas that dismisses the menu goes no further, as the
+        // native menu swallows it; a press elsewhere in the page still reaches its target. False: refused, `done`
+        // dropped unrun.
         bool showMenu(const MenuRequest& request, MenuCallback done, float logicalWidth);
 
         // HostServices::dismissMenus: closes the menu this object is showing, if any; its callback does not run.

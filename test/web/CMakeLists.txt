@@ -63,3 +63,6 @@ add_test(NAME fg.web.host
          COMMAND ${PROJECT_SOURCE_DIR}/tools/web/check-page.mjs ${CMAKE_CURRENT_BINARY_DIR} --page host
          WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 set_tests_properties(fg.web.host PROPERTIES LABELS "fg;live" TIMEOUT 180)
+
+# ---- funkgui_web_services / fg.web.services (v0.13.0): the services behind the seam, on a page of their own ---------
+include(${CMAKE_CURRENT_SOURCE_DIR}/services.cmake)

@@ -21,6 +21,7 @@
 
 #include <funkgui/core/Theme.h>
 #include <funkgui/web/WebHost.h>
+#include <funkgui/web/WebPrefs.h>
 
 #include <emscripten/em_js.h>
 #include <emscripten/em_macros.h>
@@ -138,6 +139,9 @@ int main()
     config.capture.fixedDt = static_cast<float>(numberParam("dt", 1.0e-6, 1.0, 0.0));
     config.capture.uiScale = static_cast<float>(numberParam("scale", 0.25, 8.0, 0.0));
 
+    // The preferences (theme, zoom) live in the browser's localStorage, so they survive the reload a section link
+    // makes. Installed before the Panel exists: a Panel may read a preference as it is built.
+    funkgui::installLocalStoragePrefs(nullptr);
     panel = std::make_unique<G::GalleryPanel>(*section);
     host = std::make_unique<funkgui::WebHost>(*panel, std::move(config));
     host->start();
