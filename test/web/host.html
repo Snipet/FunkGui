@@ -1,0 +1,35 @@
+<!doctype html>
+<!-- The browser check of FunkGui's WebHost (test/web/host.cpp says what it runs and what PASS means). The verdict is
+     the document's title: RUNNING, then PASS or "FAIL: <why>". Served from this directory by any static server on
+     127.0.0.1; tools/web/check-page.mjs <dir> --page host does that and reads the title from headless Chrome.
+     The canvas sits at whole CSS px (16, 48), so that a synthetic event's client position less the canvas's corner is
+     exact; the hosts under test size it, and the log starts below the largest of them. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RUNNING</title>
+<style>
+  body { margin: 16px; background: #101113; color: #d8d6d0; font: 12px/1.5 ui-monospace, Menlo, monospace; }
+  h1 { margin: 0; font-size: 13px; line-height: 16px; font-weight: normal; letter-spacing: 0.08em; }
+  canvas { display: block; position: absolute; left: 16px; top: 48px; }
+  pre { margin: 760px 0 0 0; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>FUNKGUI::WEB: WEBHOST AGAINST HEADLESSHOST AND SOFTRASTER</h1>
+<canvas id="funkgui-canvas" width="480" height="300"></canvas>
+<pre id="funkgui-log"></pre>
+<script>
+  // Anything that stops the run before its verdict is a failure, and says so in the title.
+  function funkguiFail(why) {
+    if (document.title === 'RUNNING') document.title = 'FAIL: ' + why;
+    console.log('FAIL     ' + why);
+    document.getElementById('funkgui-log').textContent += 'FAIL     ' + why + '\n';
+  }
+  window.addEventListener('error', (e) => funkguiFail('uncaught error: ' + e.message));
+  window.addEventListener('unhandledrejection', (e) => funkguiFail('unhandled rejection: ' + e.reason));
+  var Module = { onAbort: (what) => funkguiFail('the module aborted: ' + what) };
+</script>
+<script src="funkgui_web_host.js" onerror="funkguiFail('funkgui_web_host.js did not load')"></script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+<!doctype html>
+<!-- FunkGui's gallery as a web page (tools/GalleryWeb/GalleryWeb.cpp says what it runs): one gallery section live in
+     a WebHost on the canvas below. ?section=<name> chooses it (the links reload the page), ?theme=, ?zoom=, ?dt= and
+     ?scale= pin the theme, the zoom in percent, the frame's dt in seconds and the device scale. Served from this
+     directory by any static server: python3 -m http.server 8138 --bind 127.0.0.1 --directory <this directory>. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FunkGui gallery</title>
+<style>
+  body { margin: 16px; background: #101113; color: #d8d6d0; font: 12px/1.5 ui-monospace, Menlo, monospace; }
+  nav { margin: 0 0 12px 0; letter-spacing: 0.08em; text-transform: uppercase; }
+  nav a { color: #8d8b86; text-decoration: none; margin: 0 14px 0 0; white-space: nowrap; }
+  nav a:hover { color: #d8d6d0; }
+  nav a.current { color: #d8d6d0; border-bottom: 1px solid #d8d6d0; }
+  canvas { display: block; margin: 0 0 12px 0; }
+  pre { margin: 0; white-space: pre-wrap; letter-spacing: 0.04em; }
+</style>
+</head>
+<body>
+<nav id="funkgui-sections"></nav>
+<canvas id="funkgui-canvas" width="480" height="300"></canvas>
+<pre id="funkgui-status">LOADING</pre>
+<script>
+  function funkguiFail(why) {
+    console.log('FAIL     ' + why);
+    document.getElementById('funkgui-status').textContent = String(why).toUpperCase();
+  }
+  window.addEventListener('error', (e) => funkguiFail('uncaught error: ' + e.message));
+  window.addEventListener('unhandledrejection', (e) => funkguiFail('unhandled rejection: ' + e.reason));
+  var Module = { onAbort: (what) => funkguiFail('the module aborted: ' + what) };
+</script>
+<script src="funkgui_gallery_web.js" onerror="funkguiFail('funkgui_gallery_web.js did not load')"></script>
+</body>
+</html>
