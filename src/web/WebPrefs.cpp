@@ -16,12 +16,15 @@
 // quota refuses the write. The rule itself (the mirror, the prefix, what reload reports) is the header's.
 
 // (EM_JS defines a C symbol: file scope. Its body passes through the C preprocessor.)
-EM_JS_DEPS(funkgui_web_prefs_deps, "$UTF8ToString,$stringToUTF8,$lengthBytesUTF8");
+EM_JS_DEPS(funkgui_web_prefs_deps, "$UTF8ToString");
 
 // Every key that starts with `prefix`, with its value, as UTF-8 into `out`: key, NUL, value, NUL, and so on. Returns
-// the bytes that takes, written only when `capacity` holds them and one more (the caller asks again with room when it
-// does not), or -1 when the storage cannot be read. A key or value that itself holds a NUL is not a preference written
-// here: it is left out.
+// the bytes that takes, written (and one NUL more) only when `capacity` holds them and that one (the caller asks again
+// with room when it does not), or -1 when the storage cannot be read. A key or value that itself holds a NUL is not a
+// preference written here: it is left out. The text is encoded once, so the count is of the bytes that are written:
+// a lone surrogate, which another script of the origin may have stored and which has no UTF-8 of its own, comes out
+// as U+FFFD, three bytes. (Emscripten 6.0.3 counts one as four bytes in lengthBytesUTF8 and skips the unit after it,
+// and writes three in stringToUTF8 and then that unit: a count from the one is not the size of the other.)
 EM_JS(int, funkgui_web_prefs_read, (const char* prefix, char* out, int capacity), {
     try {
         const storage = globalThis.localStorage;
@@ -35,10 +38,12 @@ EM_JS(int, funkgui_web_prefs_read, (const char* prefix, char* out, int capacity)
             const value = storage.getItem(key);
             if (value !== null && !value.includes(nul)) found.push(key + nul + value + nul);
         }
-        const text = found.join(String());
-        const bytes = lengthBytesUTF8(text);
-        if (bytes < capacity) stringToUTF8(text, out, capacity);
-        return bytes;
+        const text = new TextEncoder().encode(found.join(String()));
+        if (text.length < capacity) {
+            HEAPU8.set(text, out);
+            HEAPU8[out + text.length] = 0;
+        }
+        return text.length;
     } catch (e) {
         return -1;
     }
@@ -71,12 +76,12 @@ namespace funkgui
                     if (bytes < 0)
                         return false;
                     const bool fitted = static_cast<std::size_t>(bytes) < text.size();
-                    text.resize(static_cast<std::size_t>(bytes) + (fitted ? 0u : 1u));
+                    text.resize(static_cast<std::size_t>(bytes) + 1u);   // the text and the NUL the glue ends it with
                     if (fitted)
                         break;
                 }
                 Entries found;
-                const char* const end = text.data() + text.size();   // every key and value ends in its NUL before it
+                const char* const end = text.data() + text.size() - 1;   // every key and value ends in a NUL before it
                 for (const char* p = text.data(); p < end;)
                 {
                     std::string key(p);

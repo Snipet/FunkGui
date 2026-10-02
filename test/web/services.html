@@ -2,8 +2,9 @@
 <!-- The browser check of FunkGui::web's services: the DOM menu, the clipboard, the localStorage preferences
      (test/web/services.cpp says what it runs and what PASS means). The verdict is the document's title: RUNNING, then
      PASS or "FAIL: <why>". Served from this directory by any static server on 127.0.0.1; tools/web/check-page.mjs does
-     that and reads the title from headless Chrome. After the verdict the canvas is for a hand: a click on it opens a
-     menu there, and its Copy item writes the clipboard inside a real gesture, which no script can make. -->
+     that and reads the title from headless Chrome. After the verdict the canvas is for a hand: a press on it opens a
+     menu there (click an item, or keep the button down, move onto one and let go), and its Copy item writes the
+     clipboard inside a real gesture, which no script can make. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -22,14 +23,22 @@
 <canvas id="funkgui-canvas" width="480" height="300" tabindex="0"></canvas>
 <pre id="funkgui-log"></pre>
 <script>
-  // Anything that stops the run before its verdict is a failure, and says so in the title.
+  // Anything the page itself catches is a failure of the run, whether or not the run goes on: an uncaught error (a
+  // listener that throws inside a dispatched event stops nothing), an unhandled rejection, an abort. The first one
+  // is kept in funkguiFailed, which services.cpp reads before it says PASS, and the title is FAIL from then on.
+  var funkguiFailed = '';
+  var funkguiUnhandled = 0;      // unhandled rejections seen (services.cpp has a row on it)
   function funkguiFail(why) {
-    if (document.title === 'RUNNING') document.title = 'FAIL: ' + why;
+    if (!funkguiFailed) funkguiFailed = why;
+    if (!document.title.startsWith('FAIL')) document.title = 'FAIL: the page: ' + why;
     console.log('FAIL     ' + why);
     document.getElementById('funkgui-log').textContent += 'FAIL     ' + why + '\n';
   }
   window.addEventListener('error', (e) => funkguiFail('uncaught error: ' + e.message));
-  window.addEventListener('unhandledrejection', (e) => funkguiFail('unhandled rejection: ' + e.reason));
+  window.addEventListener('unhandledrejection', (e) => {
+    funkguiUnhandled++;
+    funkguiFail('unhandled rejection: ' + e.reason);
+  });
   var Module = { onAbort: (what) => funkguiFail('the module aborted: ' + what) };
 
   // What services.cpp looks at and does to the page: the menu as the document has it, events as a script can make
@@ -54,8 +63,24 @@
       target.dispatchEvent(e);
       return e.defaultPrevented ? 1 : 0;
     },
+    // True when the press was not cancelled.
     press: (target) => target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true })),
     hover: (target) => target.dispatchEvent(new PointerEvent('pointermove', { bubbles: true })),
+    // What a host's canvas gets while it holds the pointer captured: the event is the canvas's whatever the pointer
+    // is over, and only its point says where that is. `over` is an element (its centre) or [x, y] in the window; an
+    // element that is not there (its menu has gone) gets nothing.
+    captured: (type, over) => {
+      if (!over) return;
+      let at = over;
+      if (over instanceof Element) {
+        const r = over.getBoundingClientRect();
+        at = [r.left + r.width / 2, r.top + r.height / 2];
+      }
+      fg.canvas().dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, clientX: at[0],
+                                                         clientY: at[1] }));
+    },
+    canvasPresses: 0, canvasReleases: 0, headingPresses: 0, scrolls: 0,
+    heading: () => document.querySelector('h1'),
     stale: null,
     // What a page's own focus handling can do: the item is clicked while showMenu is still running, at the moment
     // the menu takes the focus (once; whether focus events are delivered depends on the window, the call does not).
@@ -77,13 +102,18 @@
       navigator.clipboard.writeText = (text) => {
         fg.writes.push(text);
         fg.outcome = 'pending';
-        const written = real(text);
-        written.then(() => { fg.outcome = 'fulfilled'; }, (e) => { fg.outcome = 'rejected (' + e.name + ')'; })
-               .then(() => { if (fg.onOutcome) fg.onOutcome(); });
-        return written;
+        const settled = (how) => { fg.outcome = how; if (fg.onOutcome) fg.onOutcome(); };
+        const written = fg.refuseClipboard ? Promise.reject(new DOMException('the page refuses', 'NotAllowedError'))
+                                           : real(text);
+        // The caller gets a promise of its own, settled as the browser settles its: the handlers here are on the
+        // browser's, so whether a refusal is handled is the caller's doing alone.
+        return new Promise((fulfil, refuse) => written.then(
+            (v) => { settled('fulfilled'); fulfil(v); },
+            (e) => { settled('rejected (' + e.name + ')'); refuse(e); }));
       };
       return 1;
     },
+    refuseClipboard: false,      // the next writes are refused, as a browser refuses one outside a gesture
     read: () => {
       fg.readBack = 'pending';
       try {
@@ -131,9 +161,29 @@
       else if (fg.storageProperty) Object.defineProperty(window, 'localStorage', fg.storageProperty);
       else delete window.localStorage;
     },
+    // A storage of the page's own in place of localStorage (forbidStorage(false) puts the real one back), holding
+    // `entries`, [key, value] pairs, in that order: the order of a browser's keys is its own business.
+    fakeStorage: (entries) => {
+      const fake = { get length() { return entries.length; },
+                     key: (i) => (i < entries.length ? entries[i][0] : null),
+                     getItem: (key) => { const e = entries.find((x) => x[0] === key); return e ? e[1] : null; },
+                     setItem: () => { throw new DOMException('read-only', 'QuotaExceededError'); } };
+      Object.defineProperty(window, 'localStorage', { get: () => fake, configurable: true });
+    },
+    fill: (entries) => { for (const e of entries) localStorage.setItem(e[0], e[1]); },
+    // Sixty preferences k00 to k59, 100 to 159, and what a list of entries takes as UTF-8 with a NUL after each
+    // key and value (a lone surrogate, which has no UTF-8 of its own, counted as U+FFFD).
+    sixty: (prefix) => Array.from({ length: 60 }, (x, i) => [prefix + 'k' + String(i).padStart(2, '0'),
+                                                             String(100 + i)]),
+    bytes: (entries) => entries.reduce((n, e) => n + new TextEncoder().encode(e[0] + e[1]).length + 2, 0),
   };
-  // A host's canvas listens for keys; while a menu is open none may arrive.
+  // A host's canvas listens for keys and for the pointer: while a menu is open no key may arrive, and no press that
+  // dismisses it. (Listeners as a host's are: on the canvas, not capturing.)
   fg.canvas().addEventListener('keydown', () => { fg.canvasKeys++; });
+  fg.canvas().addEventListener('pointerdown', () => { fg.canvasPresses++; });
+  fg.canvas().addEventListener('pointerup', () => { fg.canvasReleases++; });
+  fg.heading().addEventListener('pointerdown', () => { fg.headingPresses++; });
+  window.addEventListener('scroll', () => { fg.scrolls++; }, { capture: true });
 </script>
 <script src="funkgui_web_services.js" onerror="funkguiFail('funkgui_web_services.js did not load')"></script>
 </body>

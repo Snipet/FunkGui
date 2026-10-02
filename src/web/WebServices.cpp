@@ -23,28 +23,64 @@
 // - JavaScript calls C++ with two numbers, the serial and the id, never with a pointer: the open request is looked up
 //   among the live objects (a list through Impl), so an event that arrives after its object was destroyed finds
 //   nothing. The serial counts over all objects, so it names one request.
-// - The callback runs inside the page's event handler (the item's click, the key, the press outside), which is what
+// - The callback runs inside the page's event handler (the item's click or key, a release, a dismissal), which is what
 //   lets a callback that copies text still be inside the user's gesture. The menu has left the document by then, so a
 //   callback may show another. Should an event ever arrive while showMenu is still running (a focus listener of the
 //   page that clicks an item when the menu takes the focus), it is posted to a timer instead (HostServices' rule:
 //   never from inside the call that took it).
-// - The look is funkgui::MenuLook's on JUCE's LookAndFeel_V4, in CSS px: ground, ink100 text (a disabled item at half
-//   alpha), the highlighted row ink16, the bundled face at 14 px; V4's metrics for a 14 px font (rows of 18 px, the
-//   highlight inset by 1 px, text 18 px in, a separator of 10 px with a 1 px line at 0.3 alpha, a border of 2 px) and
-//   its tick shape. The window's edge is JUCE's outline off macOS (the text colour at 0.6 alpha) and a shadow: a page
-//   has no native window to set the menu off from a canvas of the same ground. Two things are not JUCE's. The card's
-//   14 px is the CSS font size, the em; JUCE's 14 is the face's height (ascent plus descent, 1.32 em for this face),
-//   and V4 draws a row's text no taller than the row over 1.3, so the native glyphs are about two thirds this size.
-//   And V2's faint stripe on every third row of the background (which V4 inherits) is left out: MenuLook says ground.
+// - The look is funkgui::MenuLook's on JUCE's LookAndFeel_V4, reproduced in CSS px: the native menu's metrics (the
+//   lead's decision at the review of this card; the manifest said a 14 px em). Where each number comes from:
+//     colours     MenuLook: ground, ink100 text, the highlighted row ink16; V4 draws a disabled item at half alpha.
+//     14          MenuLook::kMenuPx. It is a JUCE font height, the face's ascent plus descent, not its em.
+//     1.32        that height in em for the bundled face: hhea ascender 1020 and descender 300 over 1000 units per
+//                 em. JUCE's 14 is therefore an em of 10.606 px.
+//     18          a row: V4's getIdealPopupMenuItemSize, roundToInt(14 x 1.3). A separator is 10.
+//     9.324       the em the text is drawn at. V4's drawPopupMenuItem takes the row less 1 px a side (16 px: the
+//                 highlight's box, and here the line height) and caps the font at that over 1.3, a height of 12.308;
+//                 over 1.32 that is the CSS font size.
+//     the width   V4 measures a row at the uncapped 14 and draws it at 12.308: ceil(the label at 10.606 px) + 2 x 18,
+//                 a separator 50, and the window is the widest row + 2 x 2 (V2's border). So the root's width is
+//                 set, not shrunk to fit: the widest label as drawn times 14 / 12.308, rounded up, + 40.
+//     the text    1 + V4's side inset + 12 (the icon column, roundToInt(12.308)) from the left edge, centred in the
+//                 row's 16. The inset is 5, so the text is 18 px in; under a width of 100 px it is a 20th of the
+//                 width, rounded down.
+//     the tick    V4's shape fitted in the icon column less a fifth of it each side: 7.2 x 9.83, at 8.4 (the inset
+//                 + 3.4) and 4.08.
+//     separator   a 1 px line at 0.3 alpha, 5 px in from the window's sides, 4 px over it and 5 under.
+//     the edge    V2's border of 2 px, of which the outer one is V3's outline off macOS (the text colour at 0.6
+//                 alpha); the ground is V3's plain fill. With a shadow, on every platform: a page has no native
+//                 window to set the menu off from a canvas of the same ground.
+//   The menu does not scale with the canvas (the UI zoom), because the native one does not: JUCE scales a menu by its
+//   target component's transforms and the desktop's scale (MenuWindow, getApproximateScaleFactorForComponent), and
+//   EditorHost zooms by sizing the editor, not by a transform. What scales the native menu is the display's or the
+//   host's scale factor, and a page has that in its CSS px already. Not reproduced: JUCE leaves out a separator that
+//   leads, ends or repeats, and holds a menu to its parent's width less 24 px by squeezing the text.
 // - Placement is JUCE's for a target area: left edges aligned, under the anchor when it fits there or there is more
 //   room under than over, else over it; then kept inside the window (the document's client box), to whole CSS px.
+//   Where the root's position counts from is measured, not taken to be the window's corner: a transform, a filter or
+//   a contain on <body> makes it the containing block of a fixed element. An offset and a scale are followed, a
+//   rotation is not. A scroll that moves the canvas dismisses the menu, as a resize does; the menu's own scrolling
+//   and a scroll made before it opened (its event arrives a frame later) do not.
 // - Every element is styled inline from `all: initial`, so the page's style sheets do not reach the menu and nothing
 //   is added to them. The face is a FontFace made from the embedded data when the first object is constructed and
 //   dropped with the last; it is in document.fonts only while a menu is showing. Where it cannot be made or loaded
 //   the family list falls through to the system's monospaced face.
 // - Keys go to the menu while it is open (a listener on the window, capturing), as they go to a native menu's window:
-//   Up, Down, Return and Space, Escape; no other key reaches the canvas. A press outside the menu dismisses it and
-//   goes on to what it hit, as with JUCE. The focus returns to the canvas when the menu held it.
+//   Up, Down, Return and Space, Escape; no other key reaches the canvas. The focus returns to the canvas when the
+//   menu held it.
+// - A press outside the menu dismisses it. On the canvas that press goes no further, so the host never has it: JUCE
+//   does the same in the menu's target component, which HostServicesJuce makes the whole editor
+//   (MenuWindow::inputAttemptWhenModal dismisses asynchronously there, so that the click is not passed through and a
+//   click on what opened the menu does not open it again; the editor, still blocked, gets no mouseDown). A press
+//   elsewhere in the page goes on to what it hit, as a click outside the editor does.
+// - While the button that opened the menu is still down the menu follows the pointer, as JUCE's does. The host has
+//   captured the pointer on that press, so its moves and its release are the canvas's: listeners on the window find
+//   the row under the event's point. A release chooses the enabled item under it when the pointer has moved onto the
+//   menu since it opened and 250 ms have passed (MenuWindow's mouseUpCanTrigger and mouseHasBeenOver, and
+//   windowCreationTime + 250 in checkButtonState): the release of a plain click on what opened the menu chooses
+//   nothing, whatever row opened under it. The release is heard as it bubbles, after the canvas's own listener, so
+//   the Panel has the end of its press before the callback runs (natively the callback is posted). A press made
+//   after the menu opened chooses by its click, as before; its release chooses nothing.
 // - A selector that matches no element is a host with nowhere to show a menu: refused, like the other three.
 // - copyText: navigator.clipboard.writeText, its promise's rejection swallowed (the outcome arrives too late to
 //   report); where that API is missing (a page that is not a secure context), document.execCommand('copy') on a
@@ -52,6 +88,19 @@
 
 // One event of a menu: the request's serial and the chosen id, or 0 for a dismissal.
 typedef void (*FunkGuiWebMenuEvent)(unsigned serial, int id);
+
+namespace
+{
+    // The look's numbers that are computed (the comment above says where each comes from).
+    constexpr double kFontHeight = 14.0;                             // MenuLook::kMenuPx, a JUCE font height
+    constexpr double kHeightInEm = (1020.0 + 300.0) / 1000.0;        // the bundled face: ascent plus descent, in em
+    constexpr double kRowFactor = 1.3;                               // LookAndFeel_V4: a row is 1.3 font heights
+    constexpr int    kRowPx = static_cast<int>(kFontHeight * kRowFactor + 0.5);
+    constexpr double kDrawnHeight = (kRowPx - 2) / kRowFactor;       // 12.308: the cap on a row's text
+    constexpr double kFontPx = kDrawnHeight / kHeightInEm;           // 9.324: the CSS font size
+    constexpr double kMeasured = kFontHeight / kDrawnHeight;         // 1.1375: a label's width at 14 over its drawn one
+    static_assert(kRowPx == 18, "funkgui_web_menu_add writes the row as 18px and its inside as 16px");
+}
 
 // (EM_JS defines a C symbol: file scope. A body passes through the C preprocessor: no apostrophe in a comment, and no
 // empty string between apostrophes.)
@@ -76,9 +125,11 @@ EM_JS(void, funkgui_web_menu_face, (const unsigned char* data, int size, int use
     }
 });
 
-// A menu's root element, not yet in the document; 0 when the selector names no element. Colours are 0xRRGGBBAA.
+// A menu's root element, not yet in the document; 0 when the selector names no element. Colours are 0xRRGGBBAA;
+// `fontPx` is the CSS font size, `measured` what a label's drawn width is multiplied by for the menu's width.
 EM_JS(int, funkgui_web_menu_begin, (unsigned serial, const char* selector, unsigned ground, unsigned ink,
-                                    unsigned highlight, FunkGuiWebMenuEvent event), {
+                                    unsigned highlight, double fontPx, double measured,
+                                    FunkGuiWebMenuEvent event), {
     const state = Module['funkguiWebMenus'] || (Module['funkguiWebMenus'] = { menus: new Map(), face: null, users: 0 });
     const where = UTF8ToString(selector);
     let canvas = null;
@@ -105,7 +156,7 @@ EM_JS(int, funkgui_web_menu_begin, (unsigned serial, const char* selector, unsig
     s.backgroundColor = css(ground, 1);
     s.color = css(ink, 1);
     s.fontFamily = '"funkgui-menu", ui-monospace, Menlo, Consolas, monospace';
-    s.fontSize = '14px';
+    s.fontSize = fontPx + 'px';
     s.lineHeight = '16px';
     s.whiteSpace = 'nowrap';
     s.cursor = 'default';
@@ -115,7 +166,7 @@ EM_JS(int, funkgui_web_menu_begin, (unsigned serial, const char* selector, unsig
     s.overflowY = 'auto';
     s.outline = 'none';
 
-    const menu = { root: root, selector: where, items: [], active: -1, abort: null,
+    const menu = { root: root, selector: where, items: [], lines: 0, active: -1, abort: null, measured: measured,
                    lit: css(highlight, 1), dim: css(ink, 0.5), faint: css(ink, 0.3) };
     menu.report = (id) => getWasmTableEntry(event)(serial, id);
     menu.setActive = (index) => {
@@ -145,8 +196,9 @@ EM_JS(void, funkgui_web_menu_add, (unsigned serial, int flags, int id, const cha
     if (flags & 1) {
         el.setAttribute('role', 'separator');
         s.height = '1px';
-        s.margin = '4px 5px 5px 5px';
+        s.margin = '4px 4px 5px 4px';
         s.backgroundColor = menu.faint;
+        menu.lines++;
         menu.root.appendChild(el);
         return;
     }
@@ -159,9 +211,9 @@ EM_JS(void, funkgui_web_menu_add, (unsigned serial, int flags, int id, const cha
     if (!enabled) el.setAttribute('aria-disabled', 'true');
     el.setAttribute('data-id', String(id));
     el.textContent = UTF8ToString(label);
+    const text = el.firstChild;                       // null for an empty label
     s.position = 'relative';
     s.height = '18px';
-    s.padding = '0 21px 0 17px';
     s.borderTop = '1px solid transparent';
     s.borderBottom = '1px solid transparent';
     s.backgroundClip = 'padding-box';
@@ -169,9 +221,10 @@ EM_JS(void, funkgui_web_menu_add, (unsigned serial, int flags, int id, const cha
     s.color = enabled ? 'inherit' : menu.dim;
     s.whiteSpace = 'inherit';
     s.cursor = 'inherit';
+    let tick = null;
     if (ticked) {
         const ns = 'http://www.w3.org/2000/svg';
-        const tick = document.createElementNS(ns, 'svg');
+        tick = document.createElementNS(ns, 'svg');
         tick.setAttribute('viewBox', '0 0 7.3236 10');
         tick.setAttribute('aria-hidden', 'true');
         const shape = document.createElementNS(ns, 'path');
@@ -180,7 +233,6 @@ EM_JS(void, funkgui_web_menu_add, (unsigned serial, int flags, int id, const cha
         tick.appendChild(shape);
         const t = tick.style;
         t.position = 'absolute';
-        t.left = '7.4px';
         t.top = '3.1px';
         t.width = '7.2px';
         t.height = '9.8px';
@@ -192,8 +244,7 @@ EM_JS(void, funkgui_web_menu_add, (unsigned serial, int flags, int id, const cha
         e.stopPropagation();
         if (enabled) menu.report(id);
     });
-    el.addEventListener('pointermove', () => menu.setActive(enabled ? index : -1));
-    menu.items.push({ el: el, id: id, enabled: enabled });
+    menu.items.push({ el: el, id: id, enabled: enabled, label: text, tick: tick });
     menu.root.appendChild(el);
 });
 
@@ -204,40 +255,117 @@ EM_JS(void, funkgui_web_menu_show, (unsigned serial, double ax, double ay, doubl
     const menu = state.menus.get(serial);
     if (!menu) return;
     const root = menu.root;
-    let canvas = null;
-    try { canvas = document.querySelector(menu.selector); } catch (e) {}
-    const box = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0, width: 0 };
-    const scale = logicalWidth > 0 && box.width > 0 ? box.width / logicalWidth : 1;
     const page = document.documentElement;
-    const viewW = page.clientWidth || window.innerWidth;
-    const viewH = page.clientHeight || window.innerHeight;
+    const theCanvas = () => {
+        try { return document.querySelector(menu.selector); } catch (e) { return null; }
+    };
 
-    root.style.maxHeight = Math.max(40, viewH - 24) + 'px';
+    // Sized as V4 sizes a menu, and placed. Twice for a menu that opens before the face has loaded: the first time
+    // measures the fallback face.
+    const place = () => {
+        const canvas = theCanvas();
+        const box = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0, width: 0 };
+        const scale = logicalWidth > 0 && box.width > 0 ? box.width / logicalWidth : 1;
+        const viewW = page.clientWidth || window.innerWidth;
+        const viewH = page.clientHeight || window.innerHeight;
+        const s = root.style;
+        s.left = '0px';
+        s.top = '0px';
+        s.width = '100px';
+        s.height = '100px';
+        // The window px to one px of the root: 1, unless the page scales the block the root is fixed in.
+        const probe = root.getBoundingClientRect();
+        const sx = probe.width / 100 || 1;
+        const sy = probe.height / 100 || 1;
+        s.height = 'auto';
+        s.maxHeight = Math.max(40, (viewH - 24) / sy) + 'px';
+        let wide = menu.lines > 0 ? 50 : 0;
+        const range = document.createRange();
+        for (const it of menu.items) {
+            let drawn = 0;
+            if (it.label) {
+                range.selectNodeContents(it.label);
+                drawn = range.getBoundingClientRect().width / sx;
+            }
+            wide = Math.max(wide, Math.ceil(drawn * menu.measured) + 36);
+        }
+        wide += 4;
+        s.width = wide + 'px';
+        const inset = Math.min(5, Math.floor(wide / 20));   // the side inset of V4: the text and the tick start from it
+        for (const it of menu.items) {
+            it.el.style.padding = '0 ' + (inset + 3) + 'px 0 ' + (inset + 12) + 'px';
+            if (it.tick) it.tick.style.left = (inset + 2.4) + 'px';
+        }
+
+        // Where the root is with left and top at 0: the corner of the window, unless an ancestor is the containing
+        // block of fixed elements. The placement is in window px; the origin and the scale make it the root px.
+        const origin = root.getBoundingClientRect();
+        const w = origin.width;
+        const h = origin.height;
+        const top = box.top + ay * scale;
+        const bottom = top + ah * scale;
+        const under = viewH - bottom;
+        let x = box.left + ax * scale;
+        let y = (h < under - 30 || under >= top) ? bottom : top - h;
+        x = Math.max(1, Math.min(viewW - (w + 6), x));
+        y = Math.max(1, Math.min(viewH - (h + 6), y));
+        s.left = (Math.round(x) - origin.left) / sx + 'px';
+        s.top = (Math.round(y) - origin.top) / sy + 'px';
+        menu.at = { left: box.left, top: box.top };
+    };
+
     if (state.face) {
         try { document.fonts.add(state.face); } catch (e) {}
     }
     (document.body || page).appendChild(root);
-    const w = root.offsetWidth;
-    const h = root.offsetHeight;
-    const top = box.top + ay * scale;
-    const bottom = top + ah * scale;
-    const under = viewH - bottom;
-    let x = box.left + ax * scale;
-    let y = (h < under - 30 || under >= top) ? bottom : top - h;
-    x = Math.max(1, Math.min(viewW - (w + 6), x));
-    y = Math.max(1, Math.min(viewH - (h + 6), y));
-    root.style.left = Math.round(x) + 'px';
-    root.style.top = Math.round(y) + 'px';
+    place();
+    if (state.face && state.face.status !== 'loaded') {
+        state.face.loaded.then(() => { if (state.menus.get(serial) === menu) place(); }, () => {});
+    }
 
     menu.abort = new AbortController();
     const signal = menu.abort.signal;
+    const shown = performance.now();
+    let pressed = false;                              // a press was made after the menu opened
+    let over = false;                                 // the pointer has moved onto the menu since it opened
+    // The item an event is over that can be chosen: its index; -1 elsewhere on the menu, -2 off it. A captured
+    // pointer has the canvas for its target whatever it is over, so the point is looked up.
+    const rowUnder = (e) => {
+        let hit = e.target;
+        if (!(hit instanceof Node) || !root.contains(hit)) hit = document.elementFromPoint(e.clientX, e.clientY);
+        if (!(hit instanceof Node) || !root.contains(hit)) return -2;
+        return menu.items.findIndex((it) => it.enabled && it.el.contains(hit));
+    };
     window.addEventListener('pointerdown', (e) => {
-        if (!(e.target instanceof Node) || !root.contains(e.target)) menu.report(0);
+        pressed = true;
+        const target = e.target instanceof Node ? e.target : null;
+        if (target && root.contains(target)) return;
+        const canvas = theCanvas();
+        if (canvas && target && canvas.contains(target)) {
+            e.preventDefault();                       // the press that dismisses goes no further
+            e.stopPropagation();
+        }
+        menu.report(0);
     }, { capture: true, signal: signal });
+    window.addEventListener('pointermove', (e) => {
+        const row = rowUnder(e);
+        if (row !== -2) over = true;
+        menu.setActive(Math.max(row, -1));
+    }, { capture: true, signal: signal });
+    window.addEventListener('pointerup', (e) => {
+        if (pressed || !over || performance.now() - shown < 250) return;
+        const row = rowUnder(e);
+        if (row >= 0) menu.report(menu.items[row].id);
+    }, { signal: signal });
     window.addEventListener('blur', (e) => {
         if (e.target === window) menu.report(0);
     }, { signal: signal });
     window.addEventListener('resize', () => menu.report(0), { signal: signal });
+    window.addEventListener('scroll', () => {
+        const canvas = theCanvas();
+        const box = canvas ? canvas.getBoundingClientRect() : null;
+        if (!box || box.left !== menu.at.left || box.top !== menu.at.top) menu.report(0);
+    }, { capture: true, signal: signal });
     window.addEventListener('keydown', (e) => {
         e.stopPropagation();
         const key = e.key;
@@ -433,7 +561,7 @@ namespace funkgui::web
         const uint32_t serial = ++Impl::lastSerial;
         const Theme& th = request.theme;
         if (funkgui_web_menu_begin(serial, p.selector.c_str(), packed(th.ground), packed(th.ink100), packed(th.ink16),
-                                   &Impl::onEvent) == 0)
+                                   kFontPx, kMeasured, &Impl::onEvent) == 0)
             return false;                            // no canvas to show it beside
         for (const MenuItem& it : request.items)
         {
