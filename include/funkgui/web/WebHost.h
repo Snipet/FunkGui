@@ -101,6 +101,12 @@ namespace funkgui
         std::function<void(bool)> setUiAttached;     // telemetry gate keyed to the host's lifetime
         std::function<void()> beginBatch, endBatch;  // HostServices::beginBatch/endBatch; empty = no-op
 
+        // v0.14.0. Called once in every frame that ticks the Panel, just before Panel::tick: where a product brings
+        // in what the frame is about to show (FCompressor pulls its telemetry from the audio thread's module here, so
+        // a pull follows the host's own cadence: 60 Hz, 12 Hz idle, none while the document is hidden). It runs on
+        // the main thread, inside the frame, so it must not destroy or stop the host. Empty = nothing.
+        std::function<void()> beforeTick;
+
         // The capture pins, as a value (never CaptureConfig::fromEnv()): fixedDt, uiTheme, uiZoom, uiScale and
         // uiScaleAfter are honoured, with EditorHost's meaning; the rest is not read.
         CaptureConfig capture{};

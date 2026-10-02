@@ -394,8 +394,11 @@ namespace funkgui
         // 3. Follow the device pixel ratio (another display, the browser's own zoom).
         refreshDrawable();
 
-        // 4. Advance the Panel: seconds, never frames; the pinned dt when one is set.
+        // 4. Advance the Panel: seconds, never frames; the pinned dt when one is set. The product's hook first
+        //    (v0.14.0): what it brings in is what this tick sees.
         const float tickDt = capture_.fixedDt > 0.0f ? capture_.fixedDt : dt;
+        if (config_.beforeTick)
+            config_.beforeTick();
         panel_.tick(tickDt);
         seconds_ += static_cast<double>(tickDt);
         ++ticks_;
