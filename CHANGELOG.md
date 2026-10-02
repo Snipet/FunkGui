@@ -3,6 +3,42 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.13.0 — 2026-10-01 · MINOR: a web host
+
+Golden impact: **none**. New tests: `fg.web.input`, `fg.web.clock`, `fg.web.prefs` (JUCE-free: every preset, and
+wasm32 under node); `fg.web.host` and `fg.web.services` (the `web` preset, live: a browser, like `fg.web.page`). All
+additive: nothing a JUCE build compiles changes. (FCompressor ADR-93, web Sprint C.)
+
+- **`WebHost`** (`funkgui/web/WebHost.h`, `FunkGui::web`): `EditorHost`'s counterpart on a canvas, over a `Panel&` and
+  one `WebGlSink`. `EditorHost`'s frame order on single-shot `requestAnimationFrame` (60 Hz at full rate, 12 Hz idle,
+  a frame at the next vsync after input, nothing while the document is hidden) and a 10 Hz `Panel::idle`. The canvas
+  has the zoomed CSS size and a drawing buffer of that times the device pixel ratio; dpi = physical height / logical
+  height; the zoom is fitted to the window less the config's margins (the smallest step when nothing fits). Its own
+  DOM listeners: pointer capture, fractional coordinates, JUCE's modifiers (off Apple platforms Ctrl is the command
+  key and sets both flags), the popup rule, click counts, up-then-doubleClick, the wheel in JUCE's units,
+  `EditorHost`'s key table; `preventDefault` only for what the Panel consumed. A press whose release never reaches
+  the page (capture lost, the document hidden) is ended. `services()` = menus | clipboard: no file chooser, no IME, no
+  file drops, no accessibility mirror, no pointer lock. `commandKeyIsMeta()` is the browser's platform. The capture
+  pins come from `WebHostConfig`, not the environment.
+- **`web/WebInput.h`, `web/WebClock.h`**: those rules as plain header-only C++ (the conversions, the click counter,
+  the frame cadence, the zoom fit), tested natively and under node.
+- **Web services** (behind `WebHost`): a popup menu as DOM elements (`role=menu`; items, ticks, separators, disabled
+  items) in the request's Theme and the bundled face, with the native menu's metrics (`MenuLook` over JUCE's
+  `LookAndFeel_V4`: a 9.3 px em, 18 px rows), placed beside the anchor as JUCE places a `PopupMenu` and kept inside
+  the window. A click, Up/Down and Return or Space, or a release with the opening button held, choose; a press
+  outside, Escape, the window's blur or resize, or a scroll that moves the canvas dismiss; a press on the canvas that
+  dismisses the menu goes no further, as natively. Every `HostServices` callback rule holds, and nothing stays in the
+  document. `copyText` is `navigator.clipboard.writeText` (inside a user's gesture) with a fallback.
+- **`web/WebPrefs.h`**: `installLocalStoragePrefs(keyPrefix)`, a `UiPreferences` backend over localStorage with an
+  in-memory mirror (`WebPrefsBackend`, `WebStorage`); a write the browser refuses is kept for the page's life. Call it
+  before the Panel is made.
+- **`tools/GalleryWeb`**: the gallery as a web page over `WebHost` (`?section=`, `?theme=`, `?zoom=`, `?dt=`,
+  `?scale=`). `tools/web/check-page.mjs --page <stem>` runs a page of `test/web`; a failure raised by a page's own
+  error hooks is part of its verdict.
+- **Known differences from a native host:** Chrome gives no scroll-direction flag, so under natural scrolling a value
+  control turns the other way than natively on a Mac; a notched mouse wheel arrives in pixels and moves a stepped
+  control about two detents. Only Chrome on macOS has been run.
+
 ## v0.12.0 — 2026-10-01 · MINOR: FunkGui without JUCE, host services, a WebGL2 sink
 
 Golden impact: **none** on existing rows (no row moves on macOS or Linux with JUCE; the JUCE-free configurations run
