@@ -36,7 +36,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   endif()
 endif()
 
-project(FunkGui VERSION 0.13.0 LANGUAGES C CXX)       # VERSION changes only in tagging commits (02 §1.10)
+project(FunkGui VERSION 0.14.0 LANGUAGES C CXX)       # VERSION changes only in tagging commits (02 §1.10)
 
 # project() variables do not reach the parent scope; the consumer reads this (02 §1.7).
 set(FUNKGUI_VERSION ${PROJECT_VERSION} CACHE INTERNAL "FunkGui version")

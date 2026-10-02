@@ -3,6 +3,19 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.14.0 — 2026-10-02 · MINOR: a hook before each tick of a web host
+
+Golden impact: **none**. No new test: `fg.web.host` (the `web` preset, live) gains 15 claims. Additive: nothing a JUCE
+build compiles changes. (FCompressor ADR-93, web Sprint D.)
+
+- **`WebHostConfig::beforeTick`** (`funkgui/web/WebHost.h`): a function `WebHost::frame()` calls once in every frame
+  that ticks the Panel, just before `Panel::tick`, so the tick sees what the hook brought in the same frame. It follows
+  the host's cadence (60 Hz at full rate, 12 Hz idle); a frame that ticks without drawing calls it; a frame of a hidden
+  document, which ticks nothing, does not; the 10 Hz idle timer, input events and the destructor never call it, and
+  the clock calls nothing after `stop()`. It runs inside the frame (a `frame()` from it is refused) and must not stop
+  or destroy the host. Empty, the default, is nothing. FCompressor's editor module pulls its telemetry from the
+  AudioWorklet's engine here.
+
 ## v0.13.0 — 2026-10-01 · MINOR: a web host
 
 Golden impact: **none**. New tests: `fg.web.input`, `fg.web.clock`, `fg.web.prefs` (JUCE-free: every preset, and
