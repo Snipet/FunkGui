@@ -32,6 +32,10 @@ candidates into <build>/golden-candidates, and `adopt`, run by the lead from the
       This file's own checks, in a scratch directory (never the golden tree, never the allow variable).
 
 --only globs match "<scope>/<probe>" (e.g. global/fg.font.probe, modes/clean/dsp.static) or "<probe>", with * ? [].
+A scope is "global" or "<kind>/<key>": the Mode key under the kind its probe ran with (the harness's --kind, FSynth
+G1). A results JSON without a "kind" member is of the kind "modes", so "modes/<key>" is what every probe that never
+passes the flag keeps; with it a glob reads osc/analog/dsp.alias or 'fx/*/dsp.*'. adopt refuses a candidate whose
+scope has another shape, or whose results were written for another scope; the provisional check compares the key.
 Every subcommand but selftest accepts --allow-env, so a wrapper can pass it to all of them (FCompressor's
 Scripts/golden.py does); only adopt reads it. Golden rows never hold a non-finite number: a value spelled
 [+-]inf|infinity|nan|nan(...) (any case) is refused, and so is a numeric-tolerance value that reads as one (1e999),
@@ -55,6 +59,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 KEY_RE = re.compile(r"^[a-z0-9][a-z0-9._:+-]{0,119}$")
+KIND_RE = re.compile(r"^[a-z][a-z0-9]{0,15}$")               # the harness's detail::validKind (--kind)
+DEFAULT_KIND = "modes"                                        # a results JSON without a "kind" member
 ARCHES = ("arm64", "x86_64", "wasm32")
 BLOCKING = ("spec_fail", "harness_error")
 ADOPTABLE = ("pass", "golden_drift", "golden_missing")        # every other status (unreadable, ...) is refused
@@ -210,7 +216,25 @@ def test_name(result: dict) -> str:
 
 
 def scope_of(result: dict) -> str:
-    return "modes/" + result["mode"] if result.get("mode") else "global"
+    """global, or <kind>/<mode>; a missing (or empty) "kind" member reads as modes, the scope before --kind existed."""
+    if not result.get("mode"):
+        return "global"
+    return "%s/%s" % (result.get("kind") or DEFAULT_KIND, result["mode"])
+
+
+def scope_mode(scope: str) -> str:
+    """The Mode key of a candidate scope: the second of exactly two components, "" for global or any other shape."""
+    parts = scope.split("/")
+    return parts[1] if len(parts) == 2 else ""
+
+
+def valid_scope(scope: str) -> bool:
+    """global, or exactly <kind>/<key>, each as the harness writes it."""
+    if scope == "global":
+        return True
+    parts = scope.split("/")
+    return (len(parts) == 2 and KIND_RE.fullmatch(parts[0]) is not None
+            and re.fullmatch(r"[a-z0-9-]{1,64}", parts[1]) is not None)
 
 
 def load_results(build: Path) -> dict[str, dict]:
@@ -242,7 +266,7 @@ class Candidate:
 
     @property
     def mode(self) -> str:
-        return self.scope[len("modes/"):] if self.scope.startswith("modes/") else ""
+        return scope_mode(self.scope)                           # the key, whatever the kind
 
     @property
     def test(self) -> str:
@@ -604,6 +628,15 @@ def check_run(c: Candidate, res: dict | None, label: str) -> None:
     status = res.get("status")
     if status not in ADOPTABLE:
         raise Refused("%s: %sstatus %r is not adoptable (only %s)" % (c.label, label, status, ", ".join(ADOPTABLE)))
+    # The results are found by test name, <probe>.<mode>, which names no kind: a candidate under one kind must not be
+    # adopted on the word of a run under another.
+    try:
+        ran = scope_of(res)
+    except (KeyError, TypeError):
+        ran = None
+    if ran != c.scope:
+        raise Refused("%s: the %sresults of %s were written for the scope %r, not %r (another kind's run: run verify, "
+                      "which wipes the candidates, first)" % (c.label, label, c.test, ran, c.scope))
     held = (len(read_rows(c.txt)) if c.txt is not None else 0) + len(c.sidecars)
     want = res.get("golden_rows")
     if isinstance(want, bool) or not isinstance(want, int) or held != want:
@@ -628,6 +661,9 @@ def adopt(a: argparse.Namespace, environ) -> int:
     chosen = [c for c in discover(build) if selected(c, a.only)]
     if not chosen:
         raise Refused("no candidate in %s matches --only %s" % (build / "golden-candidates", a.only))
+    odd = sorted({c.scope for c in chosen if not valid_scope(c.scope)})
+    if odd:
+        raise Refused("candidate scope(s) %s: a scope is global or <kind>/<key> (the harness writes no other)" % odd)
     wrong = sorted({c.arch for c in chosen} - {"arm64"})
     if wrong:
         raise Refused("the primary build must hold arm64 candidates (found %s); pass an x86_64 build with --x86 "
@@ -754,9 +790,12 @@ def cmd_selftest(_: argparse.Namespace) -> int:
         check("rows.lookalikes_ok", len(read_rows(bad)) == 4)
 
         def build(name: str, arch: str, rows: str, status: str = "golden_drift", mode: str = "",
-                  probe: str = "p", extra: dict | None = None, sidecars: dict | None = None) -> Path:
+                  probe: str = "p", extra: dict | None = None, sidecars: dict | None = None,
+                  kind: str = "") -> Path:
+            """A build with one candidate and its results. kind: the probe ran with --kind (its results then carry the
+            member, and its candidate lies under <kind>/<mode>); without it the scope is modes/<mode>, as ever."""
             b = t / name
-            scope = "modes/" + mode if mode else "global"
+            scope = "%s/%s" % (kind or "modes", mode) if mode else "global"
             write_atomic(b / "golden-candidates" / arch / scope / (probe + ".txt"),
                          HEADER.format(probe=probe, scope=scope) + rows)
             for k, v in (sidecars or {}).items():
@@ -764,6 +803,8 @@ def cmd_selftest(_: argparse.Namespace) -> int:
             count = len([r for r in rows.split("\n") if r and not r.startswith("#")]) + len(sidecars or {})
             res = {"probe": probe, "mode": mode, "arch": arch, "status": status, "spec_pass": 1, "spec_fail": 0,
                    "golden_rows": count, "golden_fail": 1, "golden_new": 0, "golden_missing_rows": 0, "ms": 1}
+            if kind:
+                res["kind"] = kind
             res.update(extra or {})
             write_atomic(b / "probe-results" / (probe + ("." + mode if mode else "") + ".json"), json.dumps(res))
             return b
@@ -917,6 +958,96 @@ def cmd_selftest(_: argparse.Namespace) -> int:
               == {"a": Row("a", "1", Tol("exact"))})
         sh("git", "add", "-A")
         sh("git", "commit", "-q", "-m", "adopt 3")
+
+        # Kinds (FSynth G1; the harness's --kind): a scope is global or <kind>/<key>, and a results JSON without a
+        # "kind" member is of the kind "modes".
+        check("kind.scope_of", [scope_of(r) for r in ({"probe": "p", "mode": ""}, {"probe": "p"},
+                                                      {"probe": "p", "mode": "clean"},
+                                                      {"probe": "p", "mode": "clean", "kind": ""},
+                                                      {"probe": "p", "mode": "analog", "kind": "osc"},
+                                                      {"probe": "p", "mode": "", "kind": "osc"})]
+              == ["global", "global", "modes/clean", "modes/clean", "osc/analog", "global"])
+        check("kind.test_name_has_no_kind", test_name({"probe": "p", "mode": "analog", "kind": "osc"}) == "p.analog")
+        check("kind.scope_mode", [scope_mode(x) for x in ("global", "modes/clean", "osc/analog", "osc", "a/b/c", "")]
+              == ["", "clean", "analog", "", "", ""])
+        check("kind.valid_scope", all(valid_scope(x) for x in ("global", "modes/clean", "osc/analog", "fx/bus-g",
+                                                                "fn/lfo", "k0123456789abcde/x"))
+              and not any(valid_scope(x) for x in ("", "osc", "osc/", "/analog", "a/b/c", "Osc/analog", "0sc/analog",
+                                                   "o_c/analog", "osc/Analog", "k0123456789abcdef/x", "global/x/y")))
+        ko = build("kindosc", "arm64", "a\t1\texact\nb\t2\tabs:0.1\n", mode="analog", kind="osc",
+                   sidecars={"a11y": "x\n"})
+        ko_c = discover(ko)
+        check("kind.discover", [(c.arch, c.scope, c.probe, c.mode, c.test, c.label, sorted(c.sidecars)) for c in ko_c]
+              == [("arm64", "osc/analog", "p", "analog", "p.analog", "osc/analog/p", ["a11y"])])
+        check("kind.only_globs", len(ko_c) == 1
+              and all(selected(ko_c[0], [g]) for g in ("osc/analog/p", "osc/*/p", "osc/analog/*", "*/analog/p", "p"))
+              and not any(selected(ko_c[0], [g]) for g in ("modes/analog/p", "fx/*/p", "analog/p", "osc/analog")))
+        # Mode-scoped whatever the kind: the provisional list is required, and it is compared with the key.
+        refused("adopt.kind.provisional_unknown", lambda: adopt(ns(ko, only=("osc/analog/*",)), env),
+                "lists the provisional Modes")
+        registry(ko, ["analog"])
+        refused("adopt.kind.provisional_key", lambda: adopt(ns(ko, only=("osc/analog/*",)), env),
+                "Mode analog is provisional")
+        registry(ko, ["osc/analog", "osc"])                            # a key, never a scope
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = adopt(ns(ko, only=("osc/analog/*",)), env)
+        check("adopt.kind.exit", rc == 0)
+        check("adopt.kind.base", read_rows(root / "base" / "osc" / "analog" / "p.txt") ==
+              {"a": Row("a", "1", Tol("exact")), "b": Row("b", "2", Tol("abs", 0.1))})
+        check("adopt.kind.header", (root / "base" / "osc" / "analog" / "p.txt").read_text().startswith(
+            "# funkgui-golden 2  probe=p  scope=osc/analog\n"))
+        check("adopt.kind.sidecar", (root / "base" / "osc" / "analog" / "p.a11y.lines").read_text() == "x\n")
+        check("adopt.kind.modes_untouched", not (root / "base" / "modes" / "analog").exists())
+        check("golden_rows.kind", golden_rows(root, "arm64", "osc/analog", "p") ==
+              {"a": Row("a", "1", Tol("exact")), "b": Row("b", "2", Tol("abs", 0.1))})
+        sh("git", "add", "-A")
+        sh("git", "commit", "-q", "-m", "adopt kind")
+        # The results are found by <probe>.<mode>, which names no kind: a candidate under one kind is not adopted on
+        # the word of another kind's run, nor one under modes/ on the word of a run that passed --kind.
+        kx = build("kindmix", "arm64", "a\t1\texact\n", mode="analog", kind="osc")
+        registry(kx, [])
+        (kx / "probe-results" / "p.analog.json").write_text(json.dumps(
+            {"probe": "p", "mode": "analog", "kind": "fx", "arch": "arm64", "status": "golden_missing", "spec_pass": 1,
+             "spec_fail": 0, "golden_rows": 1, "golden_fail": 0, "golden_new": 1, "golden_missing_rows": 0, "ms": 1}))
+        refused("adopt.kind.results_of_another_kind", lambda: adopt(ns(kx, only=("osc/analog/*",)), env),
+                "written for the scope 'fx/analog', not 'osc/analog'")
+        km = build("kindmodes", "arm64", "a\t1\texact\n", mode="analog")
+        registry(km, [])
+        (km / "probe-results" / "p.analog.json").write_text(json.dumps(
+            {"probe": "p", "mode": "analog", "kind": "osc", "arch": "arm64", "status": "golden_missing",
+             "spec_pass": 1, "spec_fail": 0, "golden_rows": 1, "golden_fail": 0, "golden_new": 1,
+             "golden_missing_rows": 0, "ms": 1}))
+        refused("adopt.kind.results_with_kind_for_modes_scope", lambda: adopt(ns(km, only=("modes/analog/*",)), env),
+                "written for the scope 'osc/analog', not 'modes/analog'")
+        # A scope of another shape is nothing the harness writes.
+        for bad_scope in ("osc", "a/b/c", "Osc/analog"):
+            kb = t / ("kindbad-" + bad_scope.replace("/", "-"))
+            write_atomic(kb / "golden-candidates" / "arm64" / bad_scope / "p.txt",
+                         HEADER.format(probe="p", scope=bad_scope) + "a\t1\texact\n")
+            write_atomic(kb / "probe-results" / "p.json", json.dumps(
+                {"probe": "p", "mode": "", "arch": "arm64", "status": "golden_missing", "spec_pass": 1, "spec_fail": 0,
+                 "golden_rows": 1, "golden_fail": 0, "golden_new": 1, "golden_missing_rows": 0, "ms": 1}))
+            registry(kb, [])
+            refused("adopt.kind.scope_shape %r" % bad_scope, lambda kb=kb: adopt(ns(kb), env),
+                    "a scope is global or <kind>/<key>")
+        check("adopt.kind.refusals_left_tree_clean", git(repo, "status", "--porcelain").strip() == "")
+        # report and diff name a kind's candidate files under <kind>/<mode>.
+        kr = t / "kindrep"
+        for name, st, kind in (("dsp.a", "golden_missing", "osc"), ("dsp.b", "golden_drift", "fx"),
+                               ("dsp.c", "golden_missing", "")):
+            res = {"probe": name, "mode": "analog", "arch": "arm64", "status": st, "spec_pass": 1, "spec_fail": 0,
+                   "golden_rows": 1, "golden_fail": 1, "golden_new": 0, "golden_missing_rows": 0, "ms": 1}
+            if kind:
+                res["kind"] = kind
+            write_atomic(kr / "probe-results" / (name + ".analog.json"), json.dumps(res))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = cmd_report(argparse.Namespace(build=str(kr), golden_root=str(root), junit=None))
+        text = out.getvalue()
+        check("report.kind.paths", rc == 0
+              and str(Path("golden-candidates") / "arm64" / "osc" / "analog" / "dsp.a.txt") in text
+              and str(Path("golden-candidates") / "arm64" / "fx" / "analog" / "dsp.b.diff") in text
+              and str(Path("golden-candidates") / "arm64" / "modes" / "analog" / "dsp.c.txt") in text)
 
         # report: classification from results + JUnit
         rep = t / "rep"

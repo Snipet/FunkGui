@@ -1,5 +1,6 @@
 #include <funkgui/gpu/EditorHost.h>
 
+#include "Cursors.h"
 #include "HostServicesJuce.h"
 
 #include <funkgui/core/Config.h>
@@ -81,6 +82,25 @@
 // - A capture (CANVAS_DUMP) serves them like any other editor, as the views did: nothing asks for one unless UI_KEYS
 //   replays a key that does.
 // - ownerComponent() stays (HardwareReverb's PresetPanel anchors its own menus and choosers on it).
+//
+// FSynth G1, additive (HostServices.h; EditorHost.h "FSynth G1"). Choices where the design is silent:
+// - Cursors: the four new values map in updateCursor() beside the five. grabbing and notAllowed come from
+//   EditorCursors (src/gpu/Cursors.h): each editor holds a share of one set, so a cursor is made at its first request
+//   in the process, never per frame or per editor, and both are destroyed with the last editor, before JUCE's GUI
+//   shuts down.
+// - announce() posts nothing for an empty text. It posts under a capture too: JUCE itself does nothing unless an
+//   assistive client is running.
+// - a11yFocus(): the target is one id (0 = none), and a11yFocus(0) clears it. It grabs at once only when the bridge
+//   holds the item and the Panel's a11yRevision() is the synced one, because an item listed by the same key press
+//   has no component yet, and it never calls Panel::accessibility() itself: it runs inside the Panel's own input
+//   handler. syncAccessibility() does the rest in the frame. Before it reads the Panel, a target whose handler was
+//   grabbed and no longer holds JUCE's focus is dropped (the screen reader, or the keyboard focus, went elsewhere).
+//   After the bridge is synced, a target that is no longer listed is dropped, and one whose handler does not hold
+//   JUCE's focus is grabbed: it was never grabbed, or the sync itself took the focus away, which it does only by
+//   destroying a handler (a rebuild destroys every child; a new shape drops the item's handler, or that of an item
+//   it is nested in, and JUCE clears the focus with either). So the rule needs no count of rebuilds. "Grabbed" is
+//   what JUCE reports afterwards (hasFocus): a grab that JUCE refused (a modal component in the way) is tried again
+//   at the next sync. Without a peer JUCE gives no handler, nothing is grabbed, and the target waits.
 
 namespace funkgui
 {
@@ -167,6 +187,7 @@ namespace funkgui
           capture_(CaptureConfig::fromEnv()), canvas_(FontService::get().atlas())
     {
         jassert(panel_ != nullptr);                  // an EditorHost always runs a Panel
+        cursors_ = std::make_unique<EditorCursors>();   // FSynth G1: a share of the process's cursors, none made yet
         services_ = std::make_unique<HostServicesJuce>(*this);
         setOpaque(true);
         setWantsKeyboardFocus(true);
@@ -595,11 +616,57 @@ namespace funkgui
 
     void EditorHost::syncAccessibility()
     {
+        // FSynth G1: the focus target yields. Its handler was given JUCE's focus and no longer holds it, so the
+        // screen reader (or the keyboard focus) moved to another element: the target is dropped, not pulled back.
+        if (a11yFocusTarget_ != 0 && a11yFocusGrabbed_)
+        {
+            auto* c = a11y_.componentFor(a11yFocusTarget_);
+            auto* handler = c != nullptr ? c->getAccessibilityHandler() : nullptr;
+            if (handler == nullptr || !handler->hasFocus(false))
+            {
+                a11yFocusTarget_ = 0;
+                a11yFocusGrabbed_ = false;
+            }
+        }
+
         a11yItems_.clear();
         panel_->accessibility(a11yItems_);
         a11y_.sync(*this, a11yItems_, *panel_);
         a11yRevision_ = panel_->a11yRevision();
         a11ySyncedAt_ = wallSeconds();
+
+        // FSynth G1: the focus target after the sync. Not listed any more: dropped. Listed, and its handler does not
+        // hold the focus: grabbed. That is a target never grabbed yet (the item was listed by the call that asked for
+        // it, or there was no window) and one whose focus this sync took away by destroying a handler (a rebuild, or
+        // a new shape of the item or of an item around it). A target the screen reader left was dropped above.
+        if (a11yFocusTarget_ != 0)
+        {
+            if (a11y_.componentFor(a11yFocusTarget_) == nullptr)
+            {
+                a11yFocusTarget_ = 0;
+                a11yFocusGrabbed_ = false;
+            }
+            else
+            {
+                grabA11yFocus();
+            }
+        }
+    }
+
+    // JUCE's accessibility focus to the target's bridge child, unless it holds it already. The child never wants
+    // keyboard focus, so JUCE moves only its focused-handler pointer and tells the screen reader; the keys stay with
+    // the editor. No handler exists without a peer (juce_Component.cpp:2992-2995), and then nothing is grabbed.
+    void EditorHost::grabA11yFocus()
+    {
+        a11yFocusGrabbed_ = false;
+        auto* c = a11y_.componentFor(a11yFocusTarget_);
+        if (c == nullptr)
+            return;
+        if (auto* handler = c->getAccessibilityHandler())
+        {
+            handler->grabFocus();                    // nothing when it has the focus
+            a11yFocusGrabbed_ = handler->hasFocus(false);
+        }
     }
 
     bool EditorHost::writeA11yDump(const std::string& path) const
@@ -653,6 +720,12 @@ namespace funkgui
             case Cursor::upDown:       setMouseCursor(MC::UpDownResizeCursor); break;
             case Cursor::pointingHand: setMouseCursor(MC::PointingHandCursor); break;
             case Cursor::crosshair:    setMouseCursor(MC::CrosshairCursor); break;
+            // FSynth G1. grab and copy are standard on both platforms; the other two are the platform's
+            // (src/gpu/Cursors.h: the system's on macOS, standard cursors on Linux).
+            case Cursor::grab:         setMouseCursor(MC::DraggingHandCursor); break;
+            case Cursor::grabbing:     setMouseCursor(cursors_->shared->grabbing()); break;
+            case Cursor::copy:         setMouseCursor(MC::CopyingCursor); break;
+            case Cursor::notAllowed:   setMouseCursor(cursors_->shared->notAllowed()); break;
         }
     }
 
@@ -950,6 +1023,34 @@ namespace funkgui
     bool EditorHost::copyText(std::string_view utf8)
     {
         return services_->copyText(utf8);
+    }
+
+    // ---- FSynth G1: the clipboard read, speech, the screen reader's focus (HostServices.h) --------------------------
+
+    std::string EditorHost::clipboardText() const
+    {
+        return services_->clipboardText();
+    }
+
+    void EditorHost::announce(std::string_view text, Announce priority)
+    {
+        if (text.empty())
+            return;
+        using P = juce::AccessibilityHandler::AnnouncementPriority;
+        const P p = priority == Announce::low ? P::low : (priority == Announce::high ? P::high : P::medium);
+        // Does nothing when no assistive client runs, and nothing at all on Linux (JUCE 8.0.4 defines it empty there).
+        juce::AccessibilityHandler::postAnnouncement(juce::String::fromUTF8(text.data(), static_cast<int>(text.size())),
+                                                     p);
+    }
+
+    void EditorHost::a11yFocus(uint32_t itemId)
+    {
+        a11yFocusTarget_ = itemId;
+        a11yFocusGrabbed_ = false;
+        // At once when the bridge holds the item as the Panel lists it now; otherwise the next sync grabs
+        // (syncAccessibility). Never Panel::accessibility() from here: this runs inside the Panel's input handler.
+        if (itemId != 0 && panel_->a11yRevision() == a11yRevision_)
+            grabA11yFocus();
     }
 
     //==================================================================================================================

@@ -91,6 +91,47 @@ namespace funkgui::text
         allSelected = !buffer.empty();
     }
 
+    // FSynth G1. The pasted text is made one line first (a line break or a tab is a space), then printable ASCII, so
+    // what is inserted is one byte per character, as the buffer is.
+    bool LineEdit::paste(std::string_view text, int maxLength)
+    {
+        std::string line;
+        line.reserve(text.size());
+        for (size_t i = 0; i < text.size(); ++i)
+        {
+            const char c = text[i];
+            if (c == '\r' && i + 1 < text.size() && text[i + 1] == '\n')
+                continue;                                // CR LF is one line break: the LF writes the space
+            line += (c == '\r' || c == '\n' || c == '\t') ? ' ' : c;
+        }
+        const std::string insert = printable(line);
+        if (insert.empty() || maxLength <= 0)
+            return false;
+        const size_t limit = static_cast<size_t>(maxLength);
+
+        if (allSelected)
+        {
+            // The pre-filled text is selected: the paste replaces it all, as a typed character does.
+            buffer.assign(insert, 0, limit);
+            caret = static_cast<int>(buffer.size());
+            allSelected = false;
+            return true;
+        }
+
+        const size_t held = codepoints(buffer);
+        if (held >= limit)
+            return false;                                // no room: nothing changes
+        size_t at = caret <= 0 ? 0u : static_cast<size_t>(caret);
+        if (at > buffer.size())
+            at = buffer.size();
+        while (at > 0 && at < buffer.size() && continuation(buffer[at]))
+            --at;                                        // onto a character boundary, as edit() does
+        const size_t count = insert.size() < limit - held ? insert.size() : limit - held;
+        buffer.insert(at, insert, 0, count);
+        caret = static_cast<int>(at + count);
+        return true;
+    }
+
     bool LineEdit::key(const KeyEvent& e, int maxLength)
     {
         if (e.key == Key::enter || e.key == Key::escape)

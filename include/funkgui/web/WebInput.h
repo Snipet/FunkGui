@@ -246,7 +246,8 @@ namespace funkgui::web
 
     // ---- the cursor -------------------------------------------------------------------------------------------------
 
-    // The CSS cursor keyword for a Panel's Cursor (EditorHost's five).
+    // The CSS cursor keyword for a Panel's Cursor (EditorHost's five, and FSynth G1's four: a browser has a cursor for
+    // each of grab, grabbing, copy and not-allowed, so a web host shows all four natively).
     constexpr const char* cssCursor(Cursor c) noexcept
     {
         switch (c)
@@ -256,6 +257,10 @@ namespace funkgui::web
             case Cursor::upDown:       return "ns-resize";
             case Cursor::pointingHand: return "pointer";
             case Cursor::crosshair:    return "crosshair";
+            case Cursor::grab:         return "grab";
+            case Cursor::grabbing:     return "grabbing";
+            case Cursor::copy:         return "copy";
+            case Cursor::notAllowed:   return "not-allowed";
         }
         return "default";
     }

@@ -10,6 +10,18 @@
 // A11yBridge (02 §5.6; G7). HR's AccessibleItem (BgfxEditor.cpp:255-430) generalised: HR's items read the processor
 // and the editor directly, these read only the A11yItem the Panel last listed and write only through
 // Panel::a11yAction, so a Panel that works headless works under VoiceOver with no product code in the bridge.
+//
+// FSynth G1 (gpu/A11yBridge.h, "FSynth G1"): the six a11yrole constants, the table interface, the cell interface of a
+// table's rows and cells, the text value of an editableText item, handlerEpoch(). Choices where the header is silent:
+// - A role constant is compared with `==` before juceRole's switch over the ten enumerators, which stays as it was:
+//   a constant is never a `case` label (a11y/A11yItem.h).
+// - The table an item belongs to is found through its component parents: a row's table is the nearest `table` item
+//   above it, a cell's row is its parent item. A table finds its rows among its descendants (a row need not be the
+//   table's direct child) and a row's cells among that row's direct children.
+// - A span is asked for with a handler, and answered from that handler's component, so it needs no peer; the handler
+//   lookups (getRowHandler, getCellHandler, a cell's getTableHandler) go through Component::getAccessibilityHandler(),
+//   which is null while the editor has no window.
+// - A table's rows and cols below 0 read as 0. showCell on a handler that is no item of this table does nothing.
 
 namespace funkgui
 {
@@ -18,6 +30,13 @@ namespace funkgui
         juce::AccessibilityRole juceRole(A11yRole r) noexcept
         {
             using R = juce::AccessibilityRole;
+            // FSynth G1: the six role constants, before the switch over the enumerators.
+            if (r == a11yrole::group)        return R::group;
+            if (r == a11yrole::list)         return R::list;
+            if (r == a11yrole::table)        return R::table;
+            if (r == a11yrole::row)          return R::row;
+            if (r == a11yrole::cell)         return R::cell;
+            if (r == a11yrole::editableText) return R::editableText;
             switch (r)
             {
                 case A11yRole::slider:       return R::slider;
@@ -43,6 +62,14 @@ namespace funkgui
         bool hasRange(const A11yItem& it) noexcept
         {
             return it.role == A11yRole::slider || it.role == A11yRole::progressBar;
+        }
+
+        // FSynth G1: whether the item has the read-only text value. Any item without a range that has a spoken value,
+        // and an editableText item always (an empty text is still its value), so typing its first character or
+        // deleting its last does not replace the handler the screen reader's cursor is on.
+        bool hasTextValue(const A11yItem& it) noexcept
+        {
+            return !hasRange(it) && (it.role == a11yrole::editableText || !it.value.empty());
         }
 
         bool sameBits(double a, double b) noexcept
@@ -74,6 +101,7 @@ namespace funkgui
         }
 
         const A11yItem& item() const noexcept { return item_; }
+        uint32_t handlerEpoch() const noexcept { return handlerEpoch_; }       // FSynth G1: handlers dropped so far
 
         // The new state of the same item (same id, role and parent), with the accessibility events it calls for. A
         // change that alters the handler's shape (a value appearing or disappearing, checkable) drops the handler, so
@@ -83,13 +111,14 @@ namespace funkgui
             const bool valueChanged = !sameBits(next.v, item_.v) || next.value != item_.value
                                    || next.checked != item_.checked;
             const bool titleChanged = next.title != item_.title;
-            const bool reshaped = next.checkable != item_.checkable
-                               || (!hasRange(next) && next.value.empty() != item_.value.empty());
+            // FSynth G1: an editableText item keeps its text value whatever the text, so it is not reshaped by it.
+            const bool reshaped = next.checkable != item_.checkable || hasTextValue(next) != hasTextValue(item_);
             item_ = next;
             applyFields();
             if (reshaped)
             {
                 invalidateAccessibilityHandler();
+                ++handlerEpoch_;
                 return;
             }
             if (auto* h = getAccessibilityHandler())
@@ -128,12 +157,30 @@ namespace funkgui
 
         void act(A11yAction a, double v = 0.0) { panel_.a11yAction(item_.id, a, v); }
 
+        // FSynth G1: the item this one is nested in, the nearest table above it, and whether it is a cell of a row.
+        Item* parentItem() const noexcept { return dynamic_cast<Item*>(getParentComponent()); }
+        Item* enclosingTable() const noexcept
+        {
+            for (Item* p = parentItem(); p != nullptr; p = p->parentItem())
+                if (p->item_.role == a11yrole::table)
+                    return p;
+            return nullptr;
+        }
+        bool isCellOfRow() const noexcept
+        {
+            const Item* p = parentItem();
+            return p != nullptr && p->item_.role == a11yrole::row;
+        }
+
         struct RangedValue;
         struct TextValue;
+        struct Table;
+        struct Cell;
         struct Handler;
 
         Panel&   panel_;
         A11yItem item_;
+        uint32_t handlerEpoch_ = 0;                  // FSynth G1
     };
 
     // A slider or progress bar: {v, lo, hi, step} (index space for stepped sliders, F §8.2).
@@ -186,6 +233,105 @@ namespace funkgui
         Item& owner;
     };
 
+    // FSynth G1: a `table` item over {rows, cols}, the whole table's size; the rows and cells listed are found among
+    // the table's components, and one that is not listed has no handler.
+    struct A11yBridge::Item::Table final : juce::AccessibilityTableInterface
+    {
+        explicit Table(Item& o) : owner(o) {}
+
+        int getNumRows() const override { return std::max(owner.item_.rows, 0); }
+        int getNumColumns() const override { return std::max(owner.item_.cols, 0); }
+
+        const juce::AccessibilityHandler* getRowHandler(int row) const override
+        {
+            Item* r = findRow(owner, row);
+            return r != nullptr ? r->getAccessibilityHandler() : nullptr;
+        }
+
+        const juce::AccessibilityHandler* getCellHandler(int row, int column) const override
+        {
+            if (column < 0)
+                return nullptr;
+            if (Item* r = findRow(owner, row))
+                for (auto* child : r->getChildren())
+                    if (auto* c = dynamic_cast<Item*>(child); c != nullptr && c->item_.col == column)
+                        return c->getAccessibilityHandler();
+            return nullptr;
+        }
+
+        const juce::AccessibilityHandler* getHeaderHandler() const override { return nullptr; }
+
+        juce::Optional<Span> getRowSpan(const juce::AccessibilityHandler& h) const override
+        {
+            // The handler's own row when it is a row of this table, else the row it lies in (a cell, or an item
+            // nested in one). A row of a table nested inside this one is that table's, and is passed over.
+            for (const Item* it = itemOf(h); it != nullptr && it != &owner; it = it->parentItem())
+                if (it->item_.role == a11yrole::row && it->item_.row >= 0 && it->enclosingTable() == &owner)
+                    return Span{ it->item_.row, 1 };
+            return juce::nullopt;
+        }
+
+        juce::Optional<Span> getColumnSpan(const juce::AccessibilityHandler& h) const override
+        {
+            // The cell the handler is, or lies in: the item whose parent is a row of this table. A row has none.
+            for (const Item* it = itemOf(h); it != nullptr && it != &owner; it = it->parentItem())
+                if (it->isCellOfRow() && it->item_.col >= 0 && it->enclosingTable() == &owner)
+                    return Span{ it->item_.col, 1 };
+            return juce::nullopt;
+        }
+
+        void showCell(const juce::AccessibilityHandler& h) const override
+        {
+            // The product scrolls the item into view when it takes the focus action.
+            if (Item* it = itemOf(h); it != nullptr && it->enclosingTable() == &owner)
+                it->act(A11yAction::focus);
+        }
+
+        static Item* itemOf(const juce::AccessibilityHandler& h) noexcept
+        {
+            return dynamic_cast<Item*>(const_cast<juce::Component*>(&h.getComponent()));
+        }
+
+        // The listed row `row` of the table: among its descendants, never inside another table.
+        static Item* findRow(const Item& under, int row) noexcept
+        {
+            if (row < 0)
+                return nullptr;
+            for (auto* child : under.getChildren())
+            {
+                auto* c = dynamic_cast<Item*>(child);
+                if (c == nullptr || c->item_.role == a11yrole::table)
+                    continue;
+                if (c->item_.role == a11yrole::row)
+                {
+                    if (c->item_.row == row)
+                        return c;
+                    continue;
+                }
+                if (Item* found = findRow(*c, row))
+                    return found;
+            }
+            return nullptr;
+        }
+
+        Item& owner;
+    };
+
+    // FSynth G1: a row of a table, or a cell of such a row. It names its table; no disclosure (a flat table).
+    struct A11yBridge::Item::Cell final : juce::AccessibilityCellInterface
+    {
+        explicit Cell(Item& o) : owner(o) {}
+
+        int getDisclosureLevel() const override { return 0; }
+        const juce::AccessibilityHandler* getTableHandler() const override
+        {
+            Item* t = owner.enclosingTable();
+            return t != nullptr ? t->getAccessibilityHandler() : nullptr;
+        }
+
+        Item& owner;
+    };
+
     struct A11yBridge::Item::Handler final : juce::AccessibilityHandler
     {
         Handler(Item& o, juce::AccessibilityRole r, juce::AccessibilityActions a, Interfaces i)
@@ -227,9 +373,14 @@ namespace funkgui
 
         juce::AccessibilityHandler::Interfaces ifaces;
         if (hasRange(item_))
-            ifaces = juce::AccessibilityHandler::Interfaces(std::make_unique<RangedValue>(*this));
-        else if (!item_.value.empty())
-            ifaces = juce::AccessibilityHandler::Interfaces(std::make_unique<TextValue>(*this));
+            ifaces.value = std::make_unique<RangedValue>(*this);
+        else if (hasTextValue(item_))
+            ifaces.value = std::make_unique<TextValue>(*this);
+        // FSynth G1: a table's size and its listed rows and cells; a row of a table and a cell of a row name it.
+        if (role == a11yrole::table)
+            ifaces.table = std::make_unique<Table>(*this);
+        if (enclosingTable() != nullptr && (role == a11yrole::row || isCellOfRow()))
+            ifaces.cell = std::make_unique<Cell>(*this);
         return std::make_unique<Handler>(*this, juceRole(role), std::move(actions), std::move(ifaces));
     }
 
@@ -258,6 +409,14 @@ namespace funkgui
             if (c->item().id == id)
                 return c.get();
         return nullptr;
+    }
+
+    uint32_t A11yBridge::handlerEpoch(uint32_t id) const noexcept
+    {
+        for (const auto& c : children_)
+            if (c->item().id == id)
+                return c->handlerEpoch();
+        return 0;
     }
 
     bool A11yBridge::sameStructure(const std::vector<A11yItem>& items) const

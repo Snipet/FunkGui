@@ -105,6 +105,25 @@ namespace funkgui
         float dpi() const;
         int   missingGlyphs() const;                   // this frame's codepoints not in the atlas
 
+        // ---- FSynth G1 additions: curves as runs of capsule segments (src/canvas/CanvasCurves.cpp) -------------------
+        // Flattened with geom:: (core/Flatten.h) at the frame's dpi() and recorded through polyline(), so there is no
+        // new primitive kind, shader, dump field or SoftRaster branch, and BgfxSink and WebGlSink draw them as they
+        // draw any segment. The colour must be opaque (premix() it over the ground): translucent capsules bead where
+        // their ends overlap, as polyline() says. Angles are radians, 0 = +x, increasing clockwise on screen.
+        // On Linux, without JUCE and on a web host: the same source and the same primitives (platform-neutral).
+        //
+        // arc: geom::arcSegments(r, a0, a1, dpi()) capsules of `width` along the circle of radius r, from a0 to a1. A
+        // radius or a width that is not > 0 records nothing; no sweep records one zero-length capsule, a round dot.
+        void arc(Point centre, float r, float a0, float a1, float width, Col opaque);
+        // arcDotted: one round dot (a zero-length capsule of diameter dotW) every stepPx of arc length, from a0
+        // towards a1: at the lengths k * stepPx for every k with k * stepPx < r * |a1 - a0| (the half-open arc, as
+        // dotted()'s track), so a0 always carries a dot when the arc has any length and a1 never does. A radius, a
+        // step or a dot width that is not > 0 records nothing; at most 4096 dots.
+        void arcDotted(Point centre, float r, float a0, float a1, float stepPx, float dotW, Col opaque);
+        // cubic: the Bezier p[0..3] as geom::flattenCubic's pieces at dpi(), capsules of `width`. A null p or a width
+        // that is not > 0 records nothing.
+        void cubic(const Point p[4], float width, Col opaque);
+
     protected:
         // Appends one Prim stamped with the current tag and live flag and with d2[2] = kind (K3 #16): the HR
         // primitives (Canvas.cpp, G3) and the new ones (CanvasShapes.cpp, G4) both append through it.

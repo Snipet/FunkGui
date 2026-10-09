@@ -16,7 +16,7 @@
 //               50 / 256, not smooth; never reversed, never inertial; no wheel on an axis is +0
 //   clicks.*    JUCE's click count: 400 ms, 800 ms for the second and third press before, 8 px in x and in y, the same
 //               button, at most 4, and 1 after a move of 4 px (exactly 4 px is a move) or a hold of more than 300 ms
-//   cursor.*    the five CSS cursor keywords
+//   cursor.*    the nine CSS cursor keywords (five, and FSynth G1's four: grab, grabbing, copy, not-allowed)
 // Spec rows only.
 
 #include <funkgui/panel/Input.h>
@@ -292,6 +292,11 @@ int main(int argc, char** argv)
     P.eq("cursor.up_down", std::strcmp(web::cssCursor(Cursor::upDown), "ns-resize"), 0);
     P.eq("cursor.pointing_hand", std::strcmp(web::cssCursor(Cursor::pointingHand), "pointer"), 0);
     P.eq("cursor.crosshair", std::strcmp(web::cssCursor(Cursor::crosshair), "crosshair"), 0);
+    // FSynth G1: the four drag cursors, each a CSS keyword a browser shows natively.
+    P.eq("cursor.grab", std::strcmp(web::cssCursor(Cursor::grab), "grab"), 0);
+    P.eq("cursor.grabbing", std::strcmp(web::cssCursor(Cursor::grabbing), "grabbing"), 0);
+    P.eq("cursor.copy", std::strcmp(web::cssCursor(Cursor::copy), "copy"), 0);
+    P.eq("cursor.not_allowed", std::strcmp(web::cssCursor(Cursor::notAllowed), "not-allowed"), 0);
 
     return P.finish();
 }
