@@ -203,6 +203,13 @@ namespace funkgui
         return true;
     }
 
+    // FSynth G1: the read. One JUCE call, as the write above is; no fg test makes it (a test never touches the user's
+    // clipboard, and JUCE's X11 calls need an open display).
+    std::string HostServicesJuce::clipboardText() const
+    {
+        return juce::SystemClipboard::getTextFromClipboard().toStdString();
+    }
+
     void HostServicesJuce::letGo()
     {
         dismissMenus();

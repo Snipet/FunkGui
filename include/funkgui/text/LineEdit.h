@@ -48,6 +48,18 @@ namespace funkgui::text
         // whole text selected when it is not empty.
         void set(std::string_view text, int maxLength);
 
+        // FSynth G1 addition. Paste: inserts printable(text) at the caret, cut so the buffer stays within maxLength
+        // characters; while allSelected the pasted text replaces the whole buffer. A line break (CR LF as one, a lone
+        // CR, a lone LF) and a tab each become one space first; every other character outside ASCII 32..126 becomes
+        // '?', as printable() writes it. The caret ends after the last character inserted and the selection is
+        // dropped. Returns true when any character was inserted; a paste of nothing, or one that finds no room,
+        // returns false and changes nothing (the selection stays).
+        // LineEdit stays state-only: the product calls this with HostServices::clipboardText() on its paste chord,
+        // the command key with ch == 'v' (Cmd-V on macOS; Ctrl-V on Linux, where EditorHost sets Mods::cmd and
+        // Mods::ctrl together; HostServices::commandKeyIsMeta() says which key it is), which key() leaves to it. On a
+        // web host the chord reads an empty clipboard (HostServices::clipboardText) and pastes nothing.
+        bool paste(std::string_view text, int maxLength);
+
         std::string buffer;
         int  caret = 0;
         bool allSelected = false;

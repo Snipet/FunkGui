@@ -9,6 +9,7 @@
 #include <funkgui/a11y/A11yItem.h>
 #include <funkgui/canvas/Canvas.h>
 #include <funkgui/canvas/PrimList.h>
+#include <funkgui/core/Geometry.h>
 #include <funkgui/core/Theme.h>
 #include <funkgui/panel/HostServices.h>
 #include <funkgui/panel/Input.h>
@@ -63,6 +64,11 @@ namespace funkgui
             MenuRequest lastMenu{};                  // the items, the anchor, the theme
             FileRequest lastFiles{};                 // the mode, the title, the pattern, the suggested name
             std::string lastCopy{};                  // the text
+            // FSynth G1: file drops, speech and the screen reader's focus, each in call order.
+            int  drops = 0;                          // dropFiles calls, accepted or not
+            std::vector<std::string> announcements{};   // announce: every text that is not empty, any priority
+            uint32_t a11yFocusId = 0;                // a11yFocus: the last id asked for
+            int  a11yFocusCalls = 0;                 // a11yFocus calls
         } log;
 
         // G7c (v0.8.0): the UI zoom a Panel's ZOOM control reads and writes, simulated. HeadlessHost stays logical:
@@ -101,6 +107,44 @@ namespace funkgui
         // print the command key's name sets it.
         void setCommandKeyIsMeta(bool meta) { commandKeyIsMeta_ = meta; }
 
+        // ---- FSynth G1 additions: a drag a probe can draw half-way, file drops, the clipboard, the cursor -----------
+        // drag() stays atomic (move, down, drags, up). press, moveTo and release split it, so draw() can run between
+        // the steps and a probe can pin a frame in the middle of a drag:
+        //
+        //   host.press(40, 20);                 // pointerMove, pointerDown
+        //   host.moveTo(120, 60, 4);            // four pointerDrag events along the line
+        //   const PrimList& mid = host.draw();  // the Panel as it is while the hand is down
+        //   host.release();                     // pointerUp at (120, 60)
+        //
+        // press = pointerMove then pointerDown at (x, y) with the Mods (clicks 1; ctrl = a popup press, as click()).
+        // moveTo = `steps` events (at least 1) along the line from pointer() to (x, y), the last exactly at (x, y):
+        // pointerDrag with the press's Mods while pressed, pointerMove with none otherwise. release = pointerUp at
+        // pointer() with the press's Mods; nothing when not pressed. A second press while pressed releases first.
+        // press(x0, y0, m), moveTo(x1, y1, steps), release() send the events of drag(x0, y0, x1, y1, steps, m), bit
+        // for bit. click(), doubleClick() and drag() release an open press first (its pointerUp at pointer(), as
+        // release() sends it), then send their own events, which end with their own pointerUp; move() and wheel()
+        // leave a press open. A press still open when the host is destroyed is closed by Panel::closeGestures(), as
+        // a live one is. No input ticks the clock. The same on every platform, without JUCE and as wasm32.
+        void  press(float x, float y, Mods = {});
+        void  moveTo(float x, float y, int steps = 1);
+        void  release();
+        bool  pressed() const noexcept { return pressed_; }
+        Point pointer() const noexcept { return pointer_; }   // the last position a pointer or wheel event was sent at;
+                                                              // (0, 0) before any
+
+        // A file drag as EditorHost forwards one: Panel::filesInterest(paths); when that accepts,
+        // filesDragEnter(paths, x, y), filesDragMove(x, y) and filesDropped(paths). Returns filesInterest's answer; a
+        // refused drag sends nothing else. Counted in log.drops either way. It is not pointer input: pointer() and
+        // pressed() do not change.
+        bool  dropFiles(std::vector<std::string> paths, float x, float y);
+
+        // The in-memory clipboard that clipboardText() answers. setClipboard is the user copying somewhere else;
+        // copyText (v0.12.0) sets it too and is logged as before (log.copies, log.lastCopy). No system clipboard is
+        // touched, in either direction.
+        void  setClipboard(std::string text);
+
+        Cursor cursor() const;                       // Panel::cursor() as it stands after the last event
+
         // HostServices: records into log; nowSeconds() returns the simulated clock.
         void   setUnboundedDrag(bool on) override;
         void   showParamMenu(ParamPort&, float x, float y) override;
@@ -124,6 +168,11 @@ namespace funkgui
         bool   chooseFiles(const FileRequest&, FilesCallback) override;
         bool   copyText(std::string_view utf8) override;
         bool   commandKeyIsMeta() const override;
+        // FSynth G1: the in-memory clipboard (setClipboard above); speech and the screen reader's focus are logged
+        // (log.announcements; log.a11yFocusId, log.a11yFocusCalls) and nothing is spoken or moved.
+        std::string clipboardText() const override;
+        void   announce(std::string_view text, Announce priority) override;
+        void   a11yFocus(uint32_t itemId) override;
 
     private:
         // Private state: completed by the implementing card (G3); not part of the frozen API.
@@ -143,5 +192,9 @@ namespace funkgui
         bool     menuPending_ = false;
         bool     filesPending_ = false;
         bool     commandKeyIsMeta_ = false;          // the constructor sets HostServices' default
+        std::string clipboard_;                      // FSynth G1: setClipboard(), copyText()
+        Point    pointer_{};                         // the last position sent
+        Mods     pressMods_{};                       // the Mods of the press in progress
+        bool     pressed_ = false;                   // between press() and release()
     };
 }

@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <string_view>
 
 namespace funkgui
@@ -32,6 +33,10 @@ namespace funkgui
         void dismissMenus();
         bool chooseFiles(const FileRequest&, FilesCallback);
         bool copyText(std::string_view utf8);
+        // FSynth G1: HostServices::clipboardText, the read beside copyText. juce::SystemClipboard on both platforms:
+        // the general pasteboard on macOS; on Linux the X11 CLIPBOARD selection, then PRIMARY. Empty when the
+        // clipboard holds no text.
+        std::string clipboardText() const;
 
         // The host lets go of the Panel (the editor left its window, or is going): the menu is dismissed, the chooser
         // closed, and neither callback runs.
