@@ -1,0 +1,24 @@
+# funkgui-golden 2  probe=fg.gallery.curves  scope=global
+# key	value	tolerance
+rest.dpi1.geometry	337f1f9ddedfb211	exact
+rest.dpi1.text	3c5b29c7a11100e8	exact
+rest.dpi1.statics	261	exact
+rest.dpi1.live	0	exact
+rest.dpi1.texts	50	exact
+rest.dpi1.rrects	7	exact
+rest.dpi1.segments	204	exact
+rest.dpi1.areas	0	exact
+rest.dpi1.max_x	537.5	abs:0.01
+rest.dpi1.max_y	225.5	abs:0.01
+rest.dpi1.tag.slot_label	50	exact
+rest.dpi2.geometry	f19756ac4730bb61	exact
+rest.dpi2.text	e1c38800877023ac	exact
+rest.dpi2.statics	320	exact
+rest.dpi2.live	0	exact
+rest.dpi2.texts	50	exact
+rest.dpi2.rrects	7	exact
+rest.dpi2.segments	263	exact
+rest.dpi2.areas	0	exact
+rest.dpi2.max_x	537.5	abs:0.01
+rest.dpi2.max_y	225.5	abs:0.01
+rest.dpi2.tag.slot_label	50	exact
