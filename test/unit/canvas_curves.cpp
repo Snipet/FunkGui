@@ -19,11 +19,11 @@
 // - dist.*    distToPolyline against a dense sampling of the polyline.
 // - same.*    the same call twice gives the same bits.
 // - canvas.*  arc, arcDotted and cubic record only `segment` primitives, as many as Flatten.h says, in the colour,
-//             width and tag asked for; a dot is a capsule of no length. The tolerance, the last argument of each:
-//             arc defaults to kArcDevicePx (its piece counts pinned at dpi 1, 2 and 2.5) and records flattenArc's
-//             points at it, and at kFlattenDevicePx when asked; cubic defaults to kFlattenDevicePx and records
-//             flattenCubic's pieces at whatever it is given; arcDotted's dots lie on the circle within any tolerance
-//             and no tolerance moves them; a tolerance that is not > 0 records nothing.
+//             width and tag asked for; a dot is a capsule of no length. The tolerance, the last argument of arc and
+//             cubic: arc defaults to kArcDevicePx (its piece counts pinned at dpi 1, 2 and 2.5) and records
+//             flattenArc's points at it, and at kFlattenDevicePx when asked; cubic defaults to kFlattenDevicePx and
+//             records flattenCubic's pieces at whatever it is given; a tolerance that is not > 0 records nothing.
+//             arcDotted takes none: its dots lie on the circle, within a hundredth of kArcDevicePx at dpi 1, 2, 2.5.
 
 #include <funkgui/canvas/Canvas.h>
 #include <funkgui/canvas/Prim.h>
@@ -40,7 +40,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <cstring>
 #include <limits>
 #include <string>
 #include <vector>
@@ -653,36 +652,24 @@ int main(int argc, char** argv)
         canvas.arcDotted(centre, 32.0f, 2.0f, 1.0f, 8.0f, 1.5f, ink);
         P.eq("canvas.dotted.half_open", static_cast<int64_t>(canvas.end().prims.size()), 4);
 
-        // The dots are on the circle: within the rings' tolerance at every dpi, and no tolerance moves one (the
-        // default, kArcDevicePx and kFlattenDevicePx given, and a far finer one record the same bytes).
+        // The dots are on the circle: within a hundredth of the rings' tolerance (kArcDevicePx) at every dpi.
         {
             double worst = 0.0;
-            bool same = true;
             for (const float dpi : { 1.0f, 2.0f, 2.5f })
             {
                 const float quarter = static_cast<float>(0.5 * kPi);
                 canvas.begin(frame(dpi));
                 canvas.arcDotted(centre, 40.0f, 0.0f, quarter, 4.0f, 1.5f, ink);
-                const PrimList byDefault = canvas.end();
-                for (const Prim& d : byDefault.prims)
+                const PrimList quarterDots = canvas.end();
+                for (const Prim& d : quarterDots.prims)
                 {
                     const D c = asD(centre), q{ static_cast<double>((d.x0 + d.x1) * 0.5f),
                                                 static_cast<double>((d.y0 + d.y1) * 0.5f) };
                     worst = std::max(worst, std::fabs(distToSegment(c, c, q) - 40.0) * static_cast<double>(dpi)
                                                 / static_cast<double>(geom::kArcDevicePx));
                 }
-                for (const float tol : { geom::kArcDevicePx, geom::kFlattenDevicePx, 0.001f })
-                {
-                    canvas.begin(frame(dpi));
-                    canvas.arcDotted(centre, 40.0f, 0.0f, quarter, 4.0f, 1.5f, ink, tol);
-                    const PrimList given = canvas.end();
-                    same = same && !given.prims.empty() && given.prims.size() == byDefault.prims.size()
-                        && std::memcmp(given.prims.data(), byDefault.prims.data(), given.prims.size() * sizeof(Prim))
-                               == 0;
-                }
             }
             P.le("canvas.dotted.on_circle_over_ring_tolerance", worst, 0.01);
-            P.eq("canvas.dotted.no_tolerance_moves_a_dot", same, 1);
         }
 
         // Nothing for no radius, no width, no step, no curve; a dot for no sweep.
@@ -697,13 +684,12 @@ int main(int argc, char** argv)
         canvas.cubic(cable, 0.0f, ink);
         P.eq("canvas.nothing_recorded", static_cast<int64_t>(canvas.end().prims.size()), 0);
 
-        // Nor for a tolerance that is not > 0, whatever the call: not even the dot of an arc with no sweep.
+        // Nor for a tolerance that is not > 0, in arc or cubic: not even the dot of an arc with no sweep.
         canvas.begin(frame(2.0f));
         for (const float bad : { 0.0f, -0.1f, std::numeric_limits<float>::quiet_NaN() })
         {
             canvas.arc(centre, 20.0f, a0, a0 + turn270, 2.0f, ink, bad);
             canvas.arc(centre, 20.0f, 1.0f, 1.0f, 2.0f, ink, bad);
-            canvas.arcDotted(centre, 40.0f, 0.0f, 1.0f, 4.0f, 1.5f, ink, bad);
             canvas.cubic(cable, 2.5f, ink, bad);
         }
         P.eq("canvas.bad_tolerance_records_nothing", static_cast<int64_t>(canvas.end().prims.size()), 0);

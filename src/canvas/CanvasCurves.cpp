@@ -4,10 +4,11 @@
 
 #include <cmath>
 
-// The recorder's curves (canvas/Canvas.h, "FSynth G1 additions"): an arc, a dotted arc and a cubic Bezier, each
-// flattened by core/Flatten.h at the frame's dpi and the caller's tolerance and recorded through polyline() as capsule
-// segments. Nothing here is a new primitive: CanvasShapes.cpp's polyline() records the segments and asserts the
-// opaque colour, so the dump, the fingerprint, SoftRaster, BgfxSink and WebGlSink see what they have always seen.
+// The recorder's curves (canvas/Canvas.h, "FSynth G1 additions"): an arc and a cubic Bezier, each flattened by
+// core/Flatten.h at the frame's dpi and the caller's tolerance, and a dotted arc, whose dots sit on the circle itself;
+// all three are recorded through polyline() as capsule segments. Nothing here is a new primitive: CanvasShapes.cpp's
+// polyline() records the segments and asserts the opaque colour, so the dump, the fingerprint, SoftRaster, BgfxSink
+// and WebGlSink see what they have always seen.
 //
 // The points are Flatten.h's, and so is the rule that keeps them the same on macOS, Linux and wasm32: the sine and
 // the cosine of a dot's angle are taken in double and each rounded to float once; everything else is float + - * /.
@@ -46,11 +47,9 @@ namespace funkgui
         record(*this, pts, n, width, opaque);
     }
 
-    void Canvas::arcDotted(Point centre, float r, float a0, float a1, float stepPx, float dotW, Col opaque,
-                           float tolDevicePx)
+    void Canvas::arcDotted(Point centre, float r, float a0, float a1, float stepPx, float dotW, Col opaque)
     {
-        // The dots lie on the circle, within any tolerance: it is checked, as arc() checks it, and moves no dot.
-        if (!(r > 0.0f) || !(stepPx > 0.0f) || !(dotW > 0.0f) || !(tolDevicePx > 0.0f))
+        if (!(r > 0.0f) || !(stepPx > 0.0f) || !(dotW > 0.0f))
             return;
         const float length = r * std::fabs(a1 - a0);
         const float dir = a1 < a0 ? -1.0f : 1.0f;

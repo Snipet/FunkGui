@@ -21,10 +21,10 @@ namespace funkgui::geom
 {
     inline constexpr float kFlattenDevicePx = 0.6f;   // the largest chord error of a flattened curve, in device px
     inline constexpr int   kMaxCurvePoints  = 129;    // a flattened curve never exceeds 128 pieces
-    // The default tolerance of Canvas::arc and arcDotted, in device px (FSynth G1). A ring is small and its corners
-    // show, so it is drawn finer than a cable: FSynth research note H §2 "Rings" takes 0.1 px, 22 pieces for 270
-    // degrees at r 16 and dpi 1 (29 at r 15 and dpi 2). The functions below keep kFlattenDevicePx as their default;
-    // pass kArcDevicePx to count, cache or hit-test what Canvas::arc records with its default.
+    // The default tolerance of Canvas::arc, in device px (FSynth G1). A ring is small and its corners show, so it is
+    // drawn finer than a cable: FSynth research note H §2 "Rings" takes 0.1 px, 22 pieces for 270 degrees at r 16 and
+    // dpi 1 (29 at r 15 and dpi 2). The functions below keep kFlattenDevicePx as their default; pass kArcDevicePx to
+    // count, cache or hit-test what Canvas::arc records with its default.
     inline constexpr float kArcDevicePx     = 0.1f;
 
     // Recursive subdivision of the cubic Bezier p[0..3], halving a piece until both of its control points lie within

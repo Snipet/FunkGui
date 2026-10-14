@@ -399,9 +399,11 @@ namespace funkgui::gallery
                 c.rrect(kName.x, kName.y, kName.w, kName.h, 2.0f, th.ground, 1.0f, th.ink32);
                 label(c, "INIT PATCH", kName.x + 6.0f, kName.y + 4.0f, th.ink100);
                 {
-                    // The longest line (a connection's title and ", REMOVE") fits the panel in the micro style.
+                    // The focused item's title alone (the readout's own title is "Focus"). The longest line, the first
+                    // or second connection's title and ", AMOUNT" (the open state), fits kReadout (x 216 .. 452) in
+                    // the micro style: its glyphs end at x 423.77 at dpi 1 and 2 (", REMOVE" at 423.70).
                     const Canvas::Scope s(c, tags::slotSub, false);
-                    c.text(("FOCUS  " + upper(focusText())).c_str(), kReadout.x, kReadout.y, type::kMicro, th.ink32);
+                    c.text(upper(focusText()).c_str(), kReadout.x, kReadout.y, type::kMicro, th.ink32);
                 }
 
                 // The focus ring, on the focused item of the focused stop.
