@@ -79,11 +79,13 @@
 // - --kind <kind> (FSynth G1; FSynth docs/design/03-build-verify-process.md §3.2.2): the first component of a Mode
 //   probe's scope, so a product with several kinds of Modes keeps their goldens apart: <kind>/<mode> in place of
 //   modes/<mode>, for the base file, the overlay, the sidecars, the candidates and the "scope=" of a candidate's
-//   header. A kind is [a-z][a-z0-9]{0,15}. The mode is the probe's own (the constructor's): --mode stays optional
-//   and, when given, must equal it. --kind on a global probe (no mode) is a harness error, and so is a kind outside
-//   the grammar. With --kind the results JSON and the RESULT line gain the member "kind":"<kind>" directly after
-//   "ms", before any note() member; "kind" joins the names note() refuses. A run without --kind is unchanged byte
-//   for byte: the scope is modes/<mode> and no "kind" member is printed (a reader takes a missing member as "modes").
+//   header. A kind is [a-z][a-z0-9]{0,15} and not "global", the scope of the probes without a mode (global/<mode>
+//   would sit among them, and a glob such as global/* would select both). The mode is the probe's own (the
+//   constructor's): --mode stays optional and, when given, must equal it. --kind on a global probe (no mode) is a
+//   harness error, and so is a kind outside the grammar or "global". With --kind the results JSON and the RESULT
+//   line gain the member "kind":"<kind>" directly after "ms", before any note() member; "kind" joins the names
+//   note() refuses. A run without --kind is unchanged byte for byte: the scope is modes/<mode> and no "kind" member
+//   is printed (a reader takes a missing member as "modes").
 //   The results file stays <probe>.<mode>.json. Platform-neutral: the same on Linux, without JUCE and as wasm32.
 // There is no --check flag: every run compares against the golden files (v1's --check is the only mode), and
 // candidates go to --bless-to, never into the tree.
@@ -351,10 +353,10 @@ namespace funkgui::test
                                [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'; });
         }
 
-        // A scope kind (--kind, FSynth G1): [a-z][a-z0-9]{0,15}.
+        // A scope kind (--kind, FSynth G1): [a-z][a-z0-9]{0,15}, and not "global" (the scope without a mode).
         inline bool validKind(std::string_view k)
         {
-            if (k.empty() || k.size() > 16 || !(k[0] >= 'a' && k[0] <= 'z'))
+            if (k.empty() || k.size() > 16 || !(k[0] >= 'a' && k[0] <= 'z') || k == "global")
                 return false;
             return std::all_of(k.begin(), k.end(),
                                [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'); });
@@ -877,6 +879,8 @@ namespace funkgui::test
             if (mode_.empty())
                 harnessError("--kind " + argKind + " on a global probe: a kind names the scope of a probe that has a "
                              "mode");
+            else if (argKind == "global")
+                harnessError("invalid kind 'global': it is the scope of the probes without a mode");
             else if (!detail::validKind(argKind))
                 harnessError("invalid kind '" + argKind + "' ([a-z][a-z0-9]{0,15})");
             else

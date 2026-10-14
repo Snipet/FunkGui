@@ -4,7 +4,7 @@
 // them. Spec rows only; no JUCE, so it runs in every configuration.
 //
 // - default.*   a host written before them (the pure virtuals only) compiles; both calls do nothing, with and
-//               without a priority, and services() is what it was.
+//               without a priority: they reach none of the host's own calls, and services() is what it was.
 // - headless.*  HeadlessHost logs every announcement that has a text, in call order and whatever its priority, with
 //               UTF-8 kept; an empty text is not logged (no host posts one). It logs every a11yFocus call: the count,
 //               and the last id asked for, 0 included. Nothing is spoken and nothing takes focus.
@@ -36,16 +36,23 @@ using funkgui::HostServices;
 
 namespace
 {
-    // A host as every host was before the calls existed: the pure virtuals and nothing else.
+    // A host as every host was before the calls existed: the pure virtuals and nothing else, each counted, so a
+    // default that reached one of them would show.
     class PlainHost final : public HostServices
     {
     public:
-        void   setUnboundedDrag(bool) override {}
-        void   showParamMenu(funkgui::ParamPort&, float, float) override {}
-        void   nudgeFullRate() override {}
-        double nowSeconds() const override { return 0.0; }
-        void   beginBatch() override {}
-        void   endBatch() override {}
+        mutable int calls = 0;
+
+        void   setUnboundedDrag(bool) override { ++calls; }
+        void   showParamMenu(funkgui::ParamPort&, float, float) override { ++calls; }
+        void   nudgeFullRate() override { ++calls; }
+        double nowSeconds() const override
+        {
+            ++calls;
+            return 0.0;
+        }
+        void   beginBatch() override { ++calls; }
+        void   endBatch() override { ++calls; }
     };
 
     // Three ports in a row. Return on a port picks its cable up; Tab then visits the other ports; Return connects,
@@ -59,7 +66,7 @@ namespace
         int  connections = 0;
 
         static constexpr uint32_t kFirstId = 100;
-        static constexpr const char* kNames[3] = { "Osc 1 Out", "Filter 1 In", "Delay In" };
+        static constexpr const char* kNames[3] = { "Source A Out", "Filter 1 In", "Mix A In" };
 
         void attach(HostServices& h) override { host = &h; }
         int  width() const override { return 240; }
@@ -137,12 +144,12 @@ int main(int argc, char** argv)
     {
         PlainHost plain;
         HostServices& h = plain;
-        h.announce("Connected Osc 1 Out to Filter 1 In");
+        h.announce("Connected Source A Out to Filter 1 In");
         h.announce("Refused", HostServices::Announce::high);
         h.announce("");
         h.a11yFocus(100);
         h.a11yFocus(0);
-        P.eq("default.compiles_and_runs", 1, 1);
+        P.eq("default.reaches_no_host_call", plain.calls, 0);
         P.eq("default.services_none", plain.services(), 0);
         P.eq("default.clipboard_empty", h.clipboardText().empty(), 1);
     }
@@ -193,25 +200,26 @@ int main(int argc, char** argv)
     {
         PatchPanel panel;
         HeadlessHost host(panel);
-        host.keys("return");                             // pick up at Osc 1 Out
-        P.eq("panel.pick_up", host.log.announcements == std::vector<std::string>{ "Carrying from Osc 1 Out. 2 targets." }
-                                  && host.log.a11yFocusCalls == 0, 1);
-        host.keys("tab,tab");                            // Filter 1 In, then Delay In
+        host.keys("return");                             // pick up at Source A Out
+        P.eq("panel.pick_up",
+             host.log.announcements == std::vector<std::string>{ "Carrying from Source A Out. 2 targets." }
+                 && host.log.a11yFocusCalls == 0, 1);
+        host.keys("tab,tab");                            // Filter 1 In, then Mix A In
         P.eq("panel.targets_spoken", host.log.announcements.size() == 3 && host.log.announcements[1] == "Filter 1 In"
-                                         && host.log.announcements[2] == "Delay In", 1);
+                                         && host.log.announcements[2] == "Mix A In", 1);
         P.eq("panel.cursor_follows", host.log.a11yFocusId == 102 && host.log.a11yFocusCalls == 2, 1);
         host.keys("tab");                                // wraps past the source: only valid targets
         P.eq("panel.wraps_to_valid_target", host.log.a11yFocusId == 101 && host.log.announcements.back() == "Filter 1 In",
              1);
         host.keys("return");                             // drop
         P.eq("panel.connected", panel.connections == 1
-                                    && host.log.announcements.back() == "Connected Osc 1 Out to Filter 1 In", 1);
-        host.keys("return,tab,escape");                  // pick up at Filter 1 In, visit Delay In, cancel
+                                    && host.log.announcements.back() == "Connected Source A Out to Filter 1 In", 1);
+        host.keys("return,tab,escape");                  // pick up at Filter 1 In, visit Mix A In, cancel
         P.eq("panel.cancelled", host.log.announcements.back() == "Cancelled" && panel.carriedFrom == -1
                                     && panel.focus == 1 && host.log.a11yFocusId == 101, 1);
-        const std::vector<std::string> session{ "Carrying from Osc 1 Out. 2 targets.", "Filter 1 In", "Delay In",
-                                                "Filter 1 In", "Connected Osc 1 Out to Filter 1 In",
-                                                "Carrying from Filter 1 In. 2 targets.", "Delay In", "Cancelled" };
+        const std::vector<std::string> session{ "Carrying from Source A Out. 2 targets.", "Filter 1 In", "Mix A In",
+                                                "Filter 1 In", "Connected Source A Out to Filter 1 In",
+                                                "Carrying from Filter 1 In. 2 targets.", "Mix A In", "Cancelled" };
         P.eq("panel.session_in_order", host.log.announcements == session, 1);
         P.eq("panel.focus_calls", host.log.a11yFocusCalls, 5);
     }

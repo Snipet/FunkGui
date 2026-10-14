@@ -12,13 +12,18 @@
 //             (flattenCubic calls no maths library); the cap, a small buffer, a straight curve, control points beyond
 //             the chord, NaN.
 // - arc.*     arcSegments equals ceil(theta / (2 acos(1 - e / r))) (22 for 270 degrees at r 16 and e 0.1 px, H §2
-//             "Rings") over a grid, and its clamps; flattenArc's points lie on the circle, start at a0, end at a1, and
-//             no chord strays more than e from the arc.
+//             "Rings", which kArcDevicePx is) over a grid at both tolerances, kFlattenDevicePx and kArcDevicePx, and
+//             its clamps; flattenArc's points lie on the circle, start at a0, end at a1, and no chord strays more than
+//             e from the arc, at both tolerances.
 // - at.*      cubicAt at 0, 1 and 0.5.
 // - dist.*    distToPolyline against a dense sampling of the polyline.
 // - same.*    the same call twice gives the same bits.
 // - canvas.*  arc, arcDotted and cubic record only `segment` primitives, as many as Flatten.h says, in the colour,
-//             width and tag asked for; a dot is a capsule of no length.
+//             width and tag asked for; a dot is a capsule of no length. The tolerance, the last argument of each:
+//             arc defaults to kArcDevicePx (its piece counts pinned at dpi 1, 2 and 2.5) and records flattenArc's
+//             points at it, and at kFlattenDevicePx when asked; cubic defaults to kFlattenDevicePx and records
+//             flattenCubic's pieces at whatever it is given; arcDotted's dots lie on the circle within any tolerance
+//             and no tolerance moves them; a tolerance that is not > 0 records nothing.
 
 #include <funkgui/canvas/Canvas.h>
 #include <funkgui/canvas/Prim.h>
@@ -35,6 +40,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <string>
 #include <vector>
@@ -335,30 +341,39 @@ int main(int argc, char** argv)
         P.eq("arc.segments.backwards_is_the_same", geom::arcSegments(16.0f, turn270, 0.0f, 1.0f, 0.1f), 22);
         // The dpi turns the device tolerance into logical px: 0.2 device px at dpi 2 is 0.1 px.
         P.eq("arc.segments.dpi_scales_tolerance", geom::arcSegments(16.0f, 0.0f, turn270, 2.0f, 0.2f), 22);
+        // kArcDevicePx is H's 0.1 px: 22 pieces at dpi 1, and finer in device px at dpi 2 (29 for r 15).
+        P.eq("arc.segments.ring_tolerance_r16", geom::arcSegments(16.0f, 0.0f, turn270, 1.0f, geom::kArcDevicePx), 22);
+        P.eq("arc.segments.ring_tolerance_r15_dpi2", geom::arcSegments(15.0f, 0.0f, turn270, 2.0f, geom::kArcDevicePx),
+             29);
 
         // ceil(theta / (2 acos(1 - e / r))) over a grid; a quotient within 1e-4 of a whole number is not judged (the
         // float and the double round it to either side).
         int judged = 0, wrong = 0;
-        for (const float r : { 5.5f, 11.0f, 15.0f, 16.0f, 20.0f, 37.5f, 120.0f, 640.0f })
-            for (const float deg : { 15.0f, 90.0f, 133.0f, 270.0f, 360.0f, 720.0f })
-                for (const float dpi : { 1.0f, 1.25f, 2.0f, 2.5f, 3.5f })
-                {
-                    const float sweep = static_cast<float>(static_cast<double>(deg) * kPi / 180.0);
-                    const double e = static_cast<double>(geom::kFlattenDevicePx) / static_cast<double>(dpi);
-                    const double q = static_cast<double>(sweep) / (2.0 * std::acos(1.0 - e / static_cast<double>(r)));
-                    if (std::fabs(q - std::round(q)) < 1.0e-4)
-                        continue;
-                    const int want = std::clamp(static_cast<int>(std::ceil(q)), 1, geom::kMaxCurvePoints - 1);
-                    ++judged;
-                    if (geom::arcSegments(r, 0.25f, 0.25f + sweep, dpi) != want)
+        for (const float tol : { geom::kFlattenDevicePx, geom::kArcDevicePx })
+            for (const float r : { 5.5f, 11.0f, 15.0f, 16.0f, 20.0f, 37.5f, 120.0f, 640.0f })
+                for (const float deg : { 15.0f, 90.0f, 133.0f, 270.0f, 360.0f, 720.0f })
+                    for (const float dpi : { 1.0f, 1.25f, 2.0f, 2.5f, 3.5f })
                     {
-                        ++wrong;
-                        std::printf("NOTE     arcSegments(r %g, %g deg, dpi %g) = %d, want %d\n",
-                                    static_cast<double>(r), static_cast<double>(deg), static_cast<double>(dpi),
-                                    geom::arcSegments(r, 0.25f, 0.25f + sweep, dpi), want);
+                        const float sweep = static_cast<float>(static_cast<double>(deg) * kPi / 180.0);
+                        const double e = static_cast<double>(tol) / static_cast<double>(dpi);
+                        const double q =
+                            static_cast<double>(sweep) / (2.0 * std::acos(1.0 - e / static_cast<double>(r)));
+                        if (std::fabs(q - std::round(q)) < 1.0e-4)
+                            continue;
+                        const int want = std::clamp(static_cast<int>(std::ceil(q)), 1, geom::kMaxCurvePoints - 1);
+                        ++judged;
+                        const int got = tol == geom::kFlattenDevicePx ? geom::arcSegments(r, 0.25f, 0.25f + sweep, dpi)
+                                                                      : geom::arcSegments(r, 0.25f, 0.25f + sweep, dpi,
+                                                                                          tol);
+                        if (got != want)
+                        {
+                            ++wrong;
+                            std::printf("NOTE     arcSegments(r %g, %g deg, dpi %g, tolerance %g) = %d, want %d\n",
+                                        static_cast<double>(r), static_cast<double>(deg), static_cast<double>(dpi),
+                                        static_cast<double>(tol), got, want);
+                        }
                     }
-                }
-        P.ge("arc.segments.grid.judged", judged, 200);
+        P.ge("arc.segments.grid.judged", judged, 400);
         P.eq("arc.segments.grid.wrong", wrong, 0);
 
         const float nan = std::numeric_limits<float>::quiet_NaN();
@@ -370,37 +385,41 @@ int main(int argc, char** argv)
         P.eq("arc.segments.cap", geom::arcSegments(100000.0f, 0.0f, 600.0f, 4.0f, 0.001f),
              geom::kMaxCurvePoints - 1);
 
-        // flattenArc: arcSegments + 1 points on the circle, from a0 to a1, no chord further than e from the arc.
+        // flattenArc: arcSegments + 1 points on the circle, from a0 to a1, no chord further than e from the arc, at the
+        // functions' default tolerance and at the rings'.
         bool counts = true, starts = true, endsAt = true;
         double offCircle = 0.0, chordError = 0.0;
-        for (const float r : { 11.0f, 15.0f, 20.0f, 64.0f })
-            for (const float dpi : { 1.0f, 2.0f, 2.5f })
-            {
-                const Point centre{ 100.25f, 80.5f };
-                const float a0 = static_cast<float>(0.75 * kPi), a1 = a0 + turn270;
-                Point pts[geom::kMaxCurvePoints];
-                const int n = geom::flattenArc(centre, r, a0, a1, dpi, pts, geom::kMaxCurvePoints);
-                counts = counts && n == geom::arcSegments(r, a0, a1, dpi) + 1;
-                const auto at = [&](float a) {
-                    return Point{ centre.x + r * static_cast<float>(std::cos(static_cast<double>(a))),
-                                  centre.y + r * static_cast<float>(std::sin(static_cast<double>(a))) };
-                };
-                starts = starts && samePoint(pts[0], at(a0));
-                endsAt = endsAt && n >= 2 && samePoint(pts[n - 1], at(a1));
-                const double e = static_cast<double>(geom::kFlattenDevicePx) / static_cast<double>(dpi);
-                for (int i = 0; i < n; ++i)
+        for (const float tol : { geom::kFlattenDevicePx, geom::kArcDevicePx })
+            for (const float r : { 11.0f, 15.0f, 20.0f, 64.0f })
+                for (const float dpi : { 1.0f, 2.0f, 2.5f })
                 {
-                    const D c = asD(centre), a = asD(pts[i]);
-                    const double radius = static_cast<double>(r);
-                    offCircle = std::max(offCircle, std::fabs(distToSegment(c, c, a) - radius));
-                    if (i + 1 < n)
+                    const Point centre{ 100.25f, 80.5f };
+                    const float a0 = static_cast<float>(0.75 * kPi), a1 = a0 + turn270;
+                    Point pts[geom::kMaxCurvePoints];
+                    const int n = tol == geom::kFlattenDevicePx
+                                    ? geom::flattenArc(centre, r, a0, a1, dpi, pts, geom::kMaxCurvePoints)
+                                    : geom::flattenArc(centre, r, a0, a1, dpi, pts, geom::kMaxCurvePoints, tol);
+                    counts = counts && n == geom::arcSegments(r, a0, a1, dpi, tol) + 1;
+                    const auto at = [&](float a) {
+                        return Point{ centre.x + r * static_cast<float>(std::cos(static_cast<double>(a))),
+                                      centre.y + r * static_cast<float>(std::sin(static_cast<double>(a))) };
+                    };
+                    starts = starts && samePoint(pts[0], at(a0));
+                    endsAt = endsAt && n >= 2 && samePoint(pts[n - 1], at(a1));
+                    const double e = static_cast<double>(tol) / static_cast<double>(dpi);
+                    for (int i = 0; i < n; ++i)
                     {
-                        const D b = asD(pts[i + 1]);
-                        const D mid{ 0.5 * (a.x + b.x), 0.5 * (a.y + b.y) };       // a chord is furthest at its middle
-                        chordError = std::max(chordError, (radius - distToSegment(c, c, mid)) / e);
+                        const D c = asD(centre), a = asD(pts[i]);
+                        const double radius = static_cast<double>(r);
+                        offCircle = std::max(offCircle, std::fabs(distToSegment(c, c, a) - radius));
+                        if (i + 1 < n)
+                        {
+                            const D b = asD(pts[i + 1]);
+                            const D mid{ 0.5 * (a.x + b.x), 0.5 * (a.y + b.y) };   // a chord is furthest at its middle
+                            chordError = std::max(chordError, (radius - distToSegment(c, c, mid)) / e);
+                        }
                     }
                 }
-            }
         P.eq("arc.flatten.counts", counts, 1);
         P.eq("arc.flatten.starts_at_a0", starts, 1);
         P.eq("arc.flatten.ends_at_a1", endsAt, 1);
@@ -515,7 +534,7 @@ int main(int argc, char** argv)
         P.eq("same.bits", T::hashFloats(a) == T::hashFloats(b), 1);
     }
 
-    // ---- Canvas: only segments, as many as Flatten.h says -----------------------------------------------------------
+    // ---- Canvas: only segments, as many as Flatten.h says, at the tolerance asked for -------------------------------
     {
         auto& fonts = funkgui::FontService::get();
         const funkgui::FontAtlasSdf& atlas = fonts.atlas();
@@ -527,6 +546,27 @@ int main(int argc, char** argv)
         const Point centre{ 60.0f, 60.0f };
         const Point cable[4] = { { 20.0f, 150.0f }, { 120.0f, 150.0f }, { 180.0f, 40.0f }, { 280.0f, 40.0f } };
 
+        // Whether the recorded segments run through pts[0..n-1] in order, each end within 1/1000 px: a segment's ends
+        // travel relative to its quad's centre.
+        const auto runsThrough = [](const PrimList& l, const Point* pts, int n) {
+            if (n < 2 || static_cast<int>(l.prims.size()) != n - 1)
+                return false;
+            const auto near = [](float a, float b) { return std::fabs(a - b) < 1.0e-3f; };
+            for (int i = 0; i + 1 < n; ++i)
+            {
+                const Prim& p = l.prims[static_cast<size_t>(i)];
+                const float cx = (p.x0 + p.x1) * 0.5f, cy = (p.y0 + p.y1) * 0.5f;
+                if (!near(cx + p.d1[0], pts[i].x) || !near(cy + p.d1[1], pts[i].y) || !near(cx + p.d1[2], pts[i + 1].x)
+                    || !near(cy + p.d1[3], pts[i + 1].y))
+                    return false;
+            }
+            return true;
+        };
+
+        // A 270 degree ring at r 20: the pieces of the default (kArcDevicePx) and of the cables' tolerance, pinned.
+        static constexpr int kRingPieces[3] = { 24, 34, 38 };
+        static constexpr int kCoarsePieces[3] = { 10, 14, 16 };
+        int at = 0;
         for (const float dpi : { 1.0f, 2.0f, 2.5f })
         {
             const std::string k = "canvas." + dpiKey(dpi);
@@ -535,8 +575,24 @@ int main(int argc, char** argv)
             canvas.arc(centre, 20.0f, a0, a0 + turn270, 2.0f, ink);
             const PrimList arc = canvas.end();
             P.eq(k + ".arc.count", static_cast<int64_t>(arc.prims.size()),
-                 geom::arcSegments(20.0f, a0, a0 + turn270, dpi));
+                 geom::arcSegments(20.0f, a0, a0 + turn270, dpi, geom::kArcDevicePx));
+            P.eq(k + ".arc.pieces", static_cast<int64_t>(arc.prims.size()), kRingPieces[at]);
             P.eq(k + ".arc.only_segments", allSegments(arc, 1.0f, ink, funkgui::tags::firstProduct + 3), 1);
+            Point ring[geom::kMaxCurvePoints];
+            int nr = geom::flattenArc(centre, 20.0f, a0, a0 + turn270, dpi, ring, geom::kMaxCurvePoints,
+                                      geom::kArcDevicePx);
+            P.eq(k + ".arc.through_flatten_arc", runsThrough(arc, ring, nr), 1);
+
+            // The cables' tolerance, asked for: coarser, and Flatten.h's own default.
+            canvas.begin(frame(dpi));
+            canvas.arc(centre, 20.0f, a0, a0 + turn270, 2.0f, ink, geom::kFlattenDevicePx);
+            const PrimList coarse = canvas.end();
+            P.eq(k + ".arc.coarse.count", static_cast<int64_t>(coarse.prims.size()),
+                 geom::arcSegments(20.0f, a0, a0 + turn270, dpi));
+            P.eq(k + ".arc.coarse.pieces", static_cast<int64_t>(coarse.prims.size()), kCoarsePieces[at]);
+            nr = geom::flattenArc(centre, 20.0f, a0, a0 + turn270, dpi, ring, geom::kMaxCurvePoints);
+            P.eq(k + ".arc.coarse.through_flatten_arc", runsThrough(coarse, ring, nr), 1);
+            ++at;
 
             canvas.begin(frame(dpi));
             canvas.setTag(funkgui::tags::none);              // the tag is the Canvas's until changed, across frames
@@ -560,6 +616,16 @@ int main(int argc, char** argv)
                       && std::fabs(lx - cable[3].x) < 1.0e-3f && std::fabs(ly - cable[3].y) < 1.0e-3f;
             }
             P.eq(k + ".cubic.ends_on_control_points", joined, 1);
+            P.eq(k + ".cubic.through_flatten_cubic", runsThrough(cubic, pts, n), 1);
+
+            // A finer tolerance, asked for: more pieces, flattenCubic's at that tolerance.
+            canvas.begin(frame(dpi));
+            canvas.cubic(cable, 2.5f, ink, geom::kArcDevicePx);
+            const PrimList fine = canvas.end();
+            const int nf = geom::flattenCubic(cable, dpi, pts, geom::kMaxCurvePoints, geom::kArcDevicePx);
+            P.eq(k + ".cubic.fine.count", static_cast<int64_t>(fine.prims.size()), nf - 1);
+            P.eq(k + ".cubic.fine.more_pieces", fine.prims.size() > cubic.prims.size(), 1);
+            P.eq(k + ".cubic.fine.through_flatten_cubic", runsThrough(fine, pts, nf), 1);
         }
 
         // A dotted arc: a dot every 4 px of a quarter turn at r 40 (62.83 px), from a0: 16 dots (0, 4, ..., 60).
@@ -587,6 +653,38 @@ int main(int argc, char** argv)
         canvas.arcDotted(centre, 32.0f, 2.0f, 1.0f, 8.0f, 1.5f, ink);
         P.eq("canvas.dotted.half_open", static_cast<int64_t>(canvas.end().prims.size()), 4);
 
+        // The dots are on the circle: within the rings' tolerance at every dpi, and no tolerance moves one (the
+        // default, kArcDevicePx and kFlattenDevicePx given, and a far finer one record the same bytes).
+        {
+            double worst = 0.0;
+            bool same = true;
+            for (const float dpi : { 1.0f, 2.0f, 2.5f })
+            {
+                const float quarter = static_cast<float>(0.5 * kPi);
+                canvas.begin(frame(dpi));
+                canvas.arcDotted(centre, 40.0f, 0.0f, quarter, 4.0f, 1.5f, ink);
+                const PrimList byDefault = canvas.end();
+                for (const Prim& d : byDefault.prims)
+                {
+                    const D c = asD(centre), q{ static_cast<double>((d.x0 + d.x1) * 0.5f),
+                                                static_cast<double>((d.y0 + d.y1) * 0.5f) };
+                    worst = std::max(worst, std::fabs(distToSegment(c, c, q) - 40.0) * static_cast<double>(dpi)
+                                                / static_cast<double>(geom::kArcDevicePx));
+                }
+                for (const float tol : { geom::kArcDevicePx, geom::kFlattenDevicePx, 0.001f })
+                {
+                    canvas.begin(frame(dpi));
+                    canvas.arcDotted(centre, 40.0f, 0.0f, quarter, 4.0f, 1.5f, ink, tol);
+                    const PrimList given = canvas.end();
+                    same = same && !given.prims.empty() && given.prims.size() == byDefault.prims.size()
+                        && std::memcmp(given.prims.data(), byDefault.prims.data(), given.prims.size() * sizeof(Prim))
+                               == 0;
+                }
+            }
+            P.le("canvas.dotted.on_circle_over_ring_tolerance", worst, 0.01);
+            P.eq("canvas.dotted.no_tolerance_moves_a_dot", same, 1);
+        }
+
         // Nothing for no radius, no width, no step, no curve; a dot for no sweep.
         canvas.begin(frame(2.0f));
         canvas.arc(centre, 0.0f, 0.0f, 1.0f, 2.0f, ink);
@@ -598,6 +696,17 @@ int main(int argc, char** argv)
         canvas.cubic(nullptr, 2.0f, ink);
         canvas.cubic(cable, 0.0f, ink);
         P.eq("canvas.nothing_recorded", static_cast<int64_t>(canvas.end().prims.size()), 0);
+
+        // Nor for a tolerance that is not > 0, whatever the call: not even the dot of an arc with no sweep.
+        canvas.begin(frame(2.0f));
+        for (const float bad : { 0.0f, -0.1f, std::numeric_limits<float>::quiet_NaN() })
+        {
+            canvas.arc(centre, 20.0f, a0, a0 + turn270, 2.0f, ink, bad);
+            canvas.arc(centre, 20.0f, 1.0f, 1.0f, 2.0f, ink, bad);
+            canvas.arcDotted(centre, 40.0f, 0.0f, 1.0f, 4.0f, 1.5f, ink, bad);
+            canvas.cubic(cable, 2.5f, ink, bad);
+        }
+        P.eq("canvas.bad_tolerance_records_nothing", static_cast<int64_t>(canvas.end().prims.size()), 0);
         canvas.begin(frame(2.0f));
         canvas.arc(centre, 20.0f, 1.0f, 1.0f, 2.0f, ink);
         const PrimList dot = canvas.end();

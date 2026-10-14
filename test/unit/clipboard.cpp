@@ -8,7 +8,8 @@
 // - headless.*  HeadlessHost keeps one in-memory clipboard for both directions: setClipboard (the user copying
 //               somewhere else) then clipboardText; copyText then clipboardText, with log.copies and log.lastCopy as
 //               at v0.14.0; setClipboard is not a copy and leaves the log alone; UTF-8 and an embedded line break are
-//               kept byte for byte; an empty text empties it; each host has its own.
+//               kept byte for byte; a read leaves the text where it is; an empty text empties it; each host has its
+//               own.
 // - panel.*     a Panel copies in one field and pastes in another through the host, as a product's views would.
 // No test reads or writes the user's clipboard: EditorHost's side is one JUCE call (juce::SystemClipboard), tried by
 // hand in a product's editor.
@@ -120,7 +121,11 @@ int main(int argc, char** argv)
         host.setClipboard(text);
         P.eq("headless.utf8_kept", h.clipboardText() == text, 1);
         P.eq("headless.copy_utf8", host.copyText(text) && h.clipboardText() == text && host.log.lastCopy == text, 1);
-        P.eq("headless.read_twice", h.clipboardText() == h.clipboardText(), 1);
+        // A read takes nothing away: the second read answers what the first did, the text set.
+        host.setClipboard(text);
+        const std::string firstRead = h.clipboardText();
+        const std::string secondRead = h.clipboardText();
+        P.eq("headless.read_twice", firstRead == text && secondRead == text, 1);
 
         host.setClipboard("");
         P.eq("headless.set_empty", h.clipboardText().empty(), 1);

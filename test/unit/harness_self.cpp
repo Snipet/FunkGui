@@ -12,8 +12,9 @@
 // FSynth G1 (kinds(), the kind.* rows): the --kind flag. A Mode probe's scope becomes <kind>/<mode> for the golden
 // file, the overlay, the sidecars, the candidates and their headers, with the results file named as before; the
 // "kind" member follows "ms" and precedes the notes, and is printed only with the flag; the flag is refused on a
-// global probe and for a kind outside [a-z][a-z0-9]{0,15}, accepted with or without --mode, and skipped with its
-// value by positionals(); note("kind", ...) is refused; a run without the flag prints no "kind" member.
+// global probe and for a kind outside [a-z][a-z0-9]{0,15} or equal to "global", accepted with or without --mode, and
+// skipped with its value by positionals(); note("kind", ...) is refused; a run without the flag prints no "kind"
+// member.
 
 #include <funkgui/test/Harness.h>
 
@@ -765,62 +766,62 @@ namespace
         {
             // The scope: the golden under <kind>/<mode> is the one compared, and the one under modes/<mode> is not.
             const Sandbox sb = S.fresh("kind-scope");
-            put(sb.base("self.kind", "osc/analog"), "a\t1\texact\n");
-            put(sb.base("self.kind", "modes/analog"), "a\t99\texact\n");
-            const auto o = S.run(sb, "self.kind", "analog", sb.args({ "--mode", "analog", "--kind", "osc" }), one);
+            put(sb.base("self.kind", "osc/alpha"), "a\t1\texact\n");
+            put(sb.base("self.kind", "modes/alpha"), "a\t99\texact\n");
+            const auto o = S.run(sb, "self.kind", "alpha", sb.args({ "--mode", "alpha", "--kind", "osc" }), one);
             S.eq("kind.scope.pass", o.exit, 0);
-            S.yes("kind.scope.candidate_path", fs::exists(sb.cand() / "arm64" / "osc" / "analog" / "self.kind.txt"));
+            S.yes("kind.scope.candidate_path", fs::exists(sb.cand() / "arm64" / "osc" / "alpha" / "self.kind.txt"));
             S.yes("kind.scope.not_under_modes", !fs::exists(sb.cand() / "arm64" / "modes"));
             S.yes("kind.scope.candidate_header",
-                  slurp(sb.cand() / "arm64" / "osc" / "analog" / "self.kind.txt")
-                      == "# funkgui-golden 2  probe=self.kind  scope=osc/analog\n# key\tvalue\ttolerance\na\t1\texact\n");
+                  slurp(sb.cand() / "arm64" / "osc" / "alpha" / "self.kind.txt")
+                      == "# funkgui-golden 2  probe=self.kind  scope=osc/alpha\n# key\tvalue\ttolerance\na\t1\texact\n");
             // The results file is named by probe and mode, as before: the kind is a member, not a part of the name.
-            S.yes("kind.scope.results_name", fs::exists(sb.res() / "self.kind.analog.json"));
+            S.yes("kind.scope.results_name", fs::exists(sb.res() / "self.kind.alpha.json"));
             S.yes("kind.scope.results_file_equals_result_line",
-                  !o.json.empty() && slurp(sb.res() / "self.kind.analog.json") == o.json + "\n");
+                  !o.json.empty() && slurp(sb.res() / "self.kind.alpha.json") == o.json + "\n");
             // The member's place: after the standard members, which end with "ms", and last when there is no note.
             S.yes("kind.member.standard_members_first",
-                  o.json.starts_with("{\"probe\":\"self.kind\",\"mode\":\"analog\",\"arch\":\"arm64\","
+                  o.json.starts_with("{\"probe\":\"self.kind\",\"mode\":\"alpha\",\"arch\":\"arm64\","
                                      "\"status\":\"pass\",\"spec_pass\":0,\"spec_fail\":0,\"golden_rows\":1,"
                                      "\"golden_fail\":0,\"golden_new\":0,\"golden_missing_rows\":0,\"ms\":"));
             S.yes("kind.member.directly_after_ms", afterMs(o.json) == ",\"kind\":\"osc\"}");
             // The same golden, read without the flag: the scope is modes/<mode> and the row drifts.
-            const auto plain = S.run(sb, "self.kind", "analog", sb.args({ "--mode", "analog" }), one);
+            const auto plain = S.run(sb, "self.kind", "alpha", sb.args({ "--mode", "alpha" }), one);
             S.eq("kind.absent.scope_is_modes", plain.exit, 2);
             S.yes("kind.absent.candidate_under_modes",
-                  fs::exists(sb.cand() / "arm64" / "modes" / "analog" / "self.kind.txt"));
+                  fs::exists(sb.cand() / "arm64" / "modes" / "alpha" / "self.kind.txt"));
             S.yes("kind.absent.no_member", !has(plain.json, "\"kind\"") && !has(plain.out, "\"kind\""));
             S.yes("kind.absent.ms_is_the_last_member", afterMs(plain.json) == "}");
             // The other kind's candidate is another directory: this run did not touch it.
             S.yes("kind.absent.other_scope_untouched",
-                  fs::exists(sb.cand() / "arm64" / "osc" / "analog" / "self.kind.txt"));
+                  fs::exists(sb.cand() / "arm64" / "osc" / "alpha" / "self.kind.txt"));
         }
         {
             // Before the notes, in call order after it.
             const Sandbox sb = S.fresh("kind-notes");
-            const auto o = S.run(sb, "self.kind", "analog", sb.args({ "--kind", "fx" }), [](T::Probe& P) {
+            const auto o = S.run(sb, "self.kind", "alpha", sb.args({ "--kind", "fx" }), [](T::Probe& P) {
                 P.eq("x", 1, 1);
                 P.note("count", "3");
-                const std::string keys[] = { "clean" };
+                const std::string keys[] = { "beta" };
                 P.note("provisional", T::jsonArray(keys));
             });
             S.eq("kind.notes.exit", o.exit, 0);
             S.yes("kind.member.before_the_notes",
-                  afterMs(o.json) == ",\"kind\":\"fx\",\"count\":3,\"provisional\":[\"clean\"]}");
+                  afterMs(o.json) == ",\"kind\":\"fx\",\"count\":3,\"provisional\":[\"beta\"]}");
             // Kept whatever the status, like the notes.
-            const auto failed = S.run(sb, "self.kind", "analog", sb.args({ "--kind", "fx" }),
+            const auto failed = S.run(sb, "self.kind", "alpha", sb.args({ "--kind", "fx" }),
                                       [](T::Probe& P) { P.eq("x", 1, 2); });
             S.yes("kind.member.kept_on_spec_fail", failed.exit == 1 && afterMs(failed.json) == ",\"kind\":\"fx\"}");
         }
         {
             // Accepted on a Mode probe with or without the --mode flag: the mode is the probe's own.
             const Sandbox sb = S.fresh("kind-mode-flag");
-            put(sb.base("self.kind", "fn/lfo"), "a\t1\texact\n");
-            S.eq("kind.without_mode_flag", S.run(sb, "self.kind", "lfo", sb.args({ "--kind", "fn" }), one).exit, 0);
+            put(sb.base("self.kind", "fn/gamma"), "a\t1\texact\n");
+            S.eq("kind.without_mode_flag", S.run(sb, "self.kind", "gamma", sb.args({ "--kind", "fn" }), one).exit, 0);
             S.eq("kind.with_mode_flag",
-                 S.run(sb, "self.kind", "lfo", sb.args({ "--kind", "fn", "--mode", "lfo" }), one).exit, 0);
+                 S.run(sb, "self.kind", "gamma", sb.args({ "--kind", "fn", "--mode", "gamma" }), one).exit, 0);
             S.eq("kind.mode_must_still_agree",
-                 S.run(sb, "self.kind", "lfo", sb.args({ "--kind", "fn", "--mode", "adsr" }), one).exit, 4);
+                 S.run(sb, "self.kind", "gamma", sb.args({ "--kind", "fn", "--mode", "delta" }), one).exit, 4);
         }
         {
             // On a global probe there is no scope to rename: a harness error, and nothing is written.
@@ -839,7 +840,7 @@ namespace
             // The grammar: [a-z][a-z0-9]{0,15}.
             const Sandbox sb = S.fresh("kind-grammar");
             const auto exitOf = [&](const std::string& kind) {
-                return S.run(sb, "self.kind", "analog", sb.args({ "--kind", kind }),
+                return S.run(sb, "self.kind", "alpha", sb.args({ "--kind", kind }),
                              [](T::Probe& P) { P.eq("x", 1, 1); }).exit;
             };
             static constexpr const char* good[] = { "osc", "fx", "fn", "a", "modes", "fx2", "k0123456789abcde" };
@@ -853,69 +854,83 @@ namespace
             for (const char* k : bad)
                 refused += exitOf(k) == 4 ? 1 : 0;
             S.eq("kind.grammar.refused", refused, static_cast<long long>(std::size(bad)));
-            const auto o = S.run(sb, "self.kind", "analog", sb.args({ "--kind", "Osc" }), one);
+            const auto o = S.run(sb, "self.kind", "alpha", sb.args({ "--kind", "Osc" }), one);
             S.yes("kind.grammar.message", has(o.out, "invalid kind 'Osc'"));
             // A refused kind writes nothing: not under it, and not under modes/ either.
             S.yes("kind.grammar.no_candidate", !fs::exists(sb.cand()));
             S.yes("kind.grammar.no_member", !has(o.json, "\"kind\""));
+            // "global" fits the grammar and is refused: global/<mode> would sit among the scope of the probes
+            // without a mode, and a glob such as global/* would select both. Only the whole word is refused.
+            const auto globalRun = S.run(sb, "self.kind", "alpha", sb.args({ "--kind", "global" }), one);
+            S.eq("kind.global_word.refused", globalRun.exit, 4);
+            S.yes("kind.global_word.message", has(globalRun.out, "invalid kind 'global'"));
+            S.yes("kind.global_word.no_candidate", !fs::exists(sb.cand()));
+            S.yes("kind.global_word.no_member", !has(globalRun.json, "\"kind\""));
+            S.yes("kind.global_word.with_mode_flag_too",
+                  S.run(sb, "self.kind", "alpha", sb.args({ "--kind", "global", "--mode", "alpha" }), one).exit == 4);
+            static constexpr const char* nearWords[] = { "globals", "glob", "xglobal", "global2" };
+            int nearAccepted = 0;
+            for (const char* w : nearWords)
+                nearAccepted += exitOf(w) == 0 ? 1 : 0;
+            S.eq("kind.global_word.near_words_accepted", nearAccepted, static_cast<long long>(std::size(nearWords)));
             std::vector<std::string> noValue = sb.args({ "--kind" });
-            S.eq("kind.value_missing", S.run(sb, "self.kind", "analog", noValue, one).exit, 4);
-            S.eq("kind.value_is_flag", S.run(sb, "self.kind", "analog", sb.args({ "--kind", "--verbose" }), one).exit, 4);
+            S.eq("kind.value_missing", S.run(sb, "self.kind", "alpha", noValue, one).exit, 4);
+            S.eq("kind.value_is_flag", S.run(sb, "self.kind", "alpha", sb.args({ "--kind", "--verbose" }), one).exit, 4);
             // The default kind, given by name, is the default scope, and the member says so.
-            const auto modes = S.run(sb, "self.kind", "analog", sb.args({ "--kind", "modes" }), one);
+            const auto modes = S.run(sb, "self.kind", "alpha", sb.args({ "--kind", "modes" }), one);
             S.yes("kind.modes_by_name",
-                  modes.exit == 3 && fs::exists(sb.cand() / "arm64" / "modes" / "analog" / "self.kind.txt")
+                  modes.exit == 3 && fs::exists(sb.cand() / "arm64" / "modes" / "alpha" / "self.kind.txt")
                       && afterMs(modes.json) == ",\"kind\":\"modes\"}");
         }
         {
             // "kind" is a standard member now: a note may not carry it, with the flag or without.
             const Sandbox sb = S.fresh("kind-note");
             const auto noted = [](T::Probe& P) { P.note("kind", "\"osc\""); };
-            S.eq("kind.note_refused", S.run(sb, "self.kind", "analog", sb.args(), noted).exit, 4);
-            S.eq("kind.note_refused_with_flag", S.run(sb, "self.kind", "analog", sb.args({ "--kind", "osc" }), noted).exit,
+            S.eq("kind.note_refused", S.run(sb, "self.kind", "alpha", sb.args(), noted).exit, 4);
+            S.eq("kind.note_refused_with_flag", S.run(sb, "self.kind", "alpha", sb.args({ "--kind", "osc" }), noted).exit,
                  4);
             S.eq("kind.note_refused_on_global", S.run(sb, "self.kind", "", sb.args(), noted).exit, 4);
         }
         {
             // Two kinds may hold the same Mode key: each keeps its own golden, overlay, sidecar and candidates.
             const Sandbox sb = S.fresh("kind-two");
-            put(sb.base("self.kind", "osc/analog"), "a\t1\texact\n");
-            put(sb.base("self.kind", "fx/analog"), "a\t5\texact\n");
-            put(sb.overlay("arm64", "self.kind", "fx/analog"), "a\t2\texact\n");
-            put(sb.golden() / "base" / "fx" / "analog" / "self.kind.tabs.lines", "Tab 1\n");
-            S.eq("kind.two.osc", S.run(sb, "self.kind", "analog", sb.args({ "--kind", "osc" }), one).exit, 0);
-            const auto fx = S.run(sb, "self.kind", "analog", sb.args({ "--kind", "fx" }), [](T::Probe& P) {
-                P.num("a", 2, T::Tol::exact());              // the arm64 overlay of fx/analog
+            put(sb.base("self.kind", "osc/alpha"), "a\t1\texact\n");
+            put(sb.base("self.kind", "fx/alpha"), "a\t5\texact\n");
+            put(sb.overlay("arm64", "self.kind", "fx/alpha"), "a\t2\texact\n");
+            put(sb.golden() / "base" / "fx" / "alpha" / "self.kind.tabs.lines", "Tab 1\n");
+            S.eq("kind.two.osc", S.run(sb, "self.kind", "alpha", sb.args({ "--kind", "osc" }), one).exit, 0);
+            const auto fx = S.run(sb, "self.kind", "alpha", sb.args({ "--kind", "fx" }), [](T::Probe& P) {
+                P.num("a", 2, T::Tol::exact());              // the arm64 overlay of fx/alpha
                 const std::string v[] = { "Tab 1" };
                 P.lines("tabs", v);
             });
             S.eq("kind.two.fx_overlay_and_sidecar", fx.exit, 0);
             S.yes("kind.two.sidecar_candidate",
-                  slurp(sb.cand() / "arm64" / "fx" / "analog" / "self.kind.tabs.lines") == "Tab 1\n");
+                  slurp(sb.cand() / "arm64" / "fx" / "alpha" / "self.kind.tabs.lines") == "Tab 1\n");
             S.eq("kind.two.fx_base_on_another_arch",
-                 S.run(sb, "self.kind", "analog", sb.args({ "--kind", "fx" }, "x86_64"), [](T::Probe& P) {
+                 S.run(sb, "self.kind", "alpha", sb.args({ "--kind", "fx" }, "x86_64"), [](T::Probe& P) {
                      P.num("a", 5, T::Tol::exact());
                      const std::string v[] = { "Tab 1" };
                      P.lines("tabs", v);
                  }).exit, 0);
             // A drift under a kind: the .diff lies in the kind's directory and names its scope.
-            const auto drift = S.run(sb, "self.kind", "analog", sb.args({ "--kind", "osc" }), two);
+            const auto drift = S.run(sb, "self.kind", "alpha", sb.args({ "--kind", "osc" }), two);
             S.eq("kind.two.drift", drift.exit, 2);
-            const std::string diff = slurp(sb.cand() / "arm64" / "osc" / "analog" / "self.kind.diff");
+            const std::string diff = slurp(sb.cand() / "arm64" / "osc" / "alpha" / "self.kind.diff");
             S.yes("kind.two.diff_header",
-                  diff.starts_with("# funkgui-golden-diff 2  probe=self.kind  scope=osc/analog  arch=arm64\n")
+                  diff.starts_with("# funkgui-golden-diff 2  probe=self.kind  scope=osc/alpha  arch=arm64\n")
                       && has(diff, "-a\t1\texact\n+a\t2\texact\n"));
             // wasm32 scopes are <kind>/<mode> too.
-            const auto wasm = S.run(sb, "self.kind", "analog", sb.args({ "--kind", "osc" }, "wasm32"), one);
+            const auto wasm = S.run(sb, "self.kind", "alpha", sb.args({ "--kind", "osc" }, "wasm32"), one);
             S.yes("kind.two.wasm32", wasm.exit == 0
-                                         && fs::exists(sb.cand() / "wasm32" / "osc" / "analog" / "self.kind.txt"));
+                                         && fs::exists(sb.cand() / "wasm32" / "osc" / "alpha" / "self.kind.txt"));
         }
         {
             // positionals() takes --kind's value for the flag's, as the Probe does.
-            char p0[] = "tool", p1[] = "dsp.alias", p2[] = "--kind", p3[] = "osc", p4[] = "--mode", p5[] = "analog",
+            char p0[] = "tool", p1[] = "dsp.probe", p2[] = "--kind", p3[] = "osc", p4[] = "--mode", p5[] = "alpha",
                  p6[] = "in.wav", p7[] = "--kind";
             char* pv[] = { p0, p1, p2, p3, p4, p5, p6, p7, nullptr };
-            S.yes("kind.positionals", T::positionals(8, pv) == std::vector<std::string>{ "dsp.alias", "in.wav" });
+            S.yes("kind.positionals", T::positionals(8, pv) == std::vector<std::string>{ "dsp.probe", "in.wav" });
         }
     }
 

@@ -10,7 +10,7 @@
 //   focus to the slider; left and right move between the connection and its two children, and Return closes it
 //   again. The Panel's a11yRevision() moves with every open and close.
 // - A 4 x 3 table whose cells are sliders: "Routes", one `row` item per route, each with three slider cells that give
-//   their column (Depth, Lag, Curve). One Tab stop; the arrows move a drawn focus cell, clamped at the edges. The
+//   their column (Depth, Lag, Shape). One Tab stop; the arrows move a drawn focus cell, clamped at the edges. The
 //   table item gives the whole table's size, 4 x 3.
 // - An editableText item and a staticText readout that names the focused item, so a `lines` sidecar shows where the
 //   focus is.
@@ -24,9 +24,10 @@
 //
 // States: rest (nothing focused); keys (Tab to the table, then down, down, right: the focus ring on route 3's Lag);
 // open (Tab to the list, down, Return: the second connection open, its two children listed, the focus ring on its
-// Amount). The fingerprint and the a11y lines of each are goldens. No JUCE and no platform code: the section also compiles into the gallery app and,
-// under Emscripten, the web gallery and the web host's page. The line above registers the test; the tools glob
-// compiles this file into FunkGuiGalleryProbe.
+// Amount). The fingerprint and the a11y lines of each are goldens. No JUCE and no platform code: the section also
+// compiles into the gallery app and, under Emscripten, the web gallery and the web host's page. The line above
+// registers the test; the tools glob compiles this file into FunkGuiGalleryProbe. Its text names generic nodes and
+// controls (Source A, Filter 1, Amount), never a product's Modes: its a11y lines become goldens.
 
 #include "GalleryPanel.h"
 
@@ -59,13 +60,14 @@ namespace funkgui::gallery
         constexpr int   kConnections = 5;
         constexpr float kListX = 16.0f, kListY = 100.0f, kListW = 184.0f, kListRowH = 18.0f;
         constexpr Rect  kList{ kListX, 84.0f, kListW, 16.0f + kListRowH * static_cast<float>(kConnections) };
+        // Generic node names, no product's Mode names (the drawn text abbreviates what is spoken).
         constexpr std::array<const char*, kConnections> kConnText{
-            { "OSC 1 \xE2\x86\x92 FILTER 1", "OSC 2 \xE2\x86\x92 FILTER 1", "FILTER 1 \xE2\x86\x92 MIX A",
-              "NOISE \xE2\x86\x92 MIX A", "MIX A \xE2\x86\x92 DELAY" }
+            { "SRC A \xE2\x86\x92 FILTER 1", "SRC B \xE2\x86\x92 FILTER 1", "FILTER 1 \xE2\x86\x92 MIX A",
+              "SRC C \xE2\x86\x92 MIX A", "MIX A \xE2\x86\x92 BUS 1" }
         };
         constexpr std::array<const char*, kConnections> kConnTitle{
-            { "Osc 1 Out to Filter 1 In", "Osc 2 Out to Filter 1 In", "Filter 1 Out to Mix A In 1",
-              "Noise Out to Mix A In 2", "Mix A Out to Delay In" }
+            { "Source A Out to Filter 1 In", "Source B Out to Filter 1 In", "Filter 1 Out to Mix A In 1",
+              "Source C Out to Mix A In 2", "Mix A Out to Bus 1 In" }
         };
         constexpr std::array<int, kConnections> kConnAmount{ { 100, 50, 100, 25, 80 } };
 
@@ -73,10 +75,10 @@ namespace funkgui::gallery
         constexpr float kTableX = 216.0f, kTableY = 48.0f, kRowH = 24.0f, kCellX = 284.0f, kCellPitch = 58.0f,
                         kCellW = 52.0f;
         constexpr Rect  kTable{ kTableX, 32.0f, 236.0f + 4.0f, 16.0f + kRowH * static_cast<float>(kRows) };
-        constexpr std::array<const char*, kCols> kColText{ { "DEPTH", "LAG", "CURVE" } };
-        constexpr std::array<const char*, kCols> kColTitle{ { "Depth", "Lag", "Curve" } };
-        constexpr std::array<const char*, kRows> kRouteTitle{ { "LFO 1 to Cutoff", "Env 2 to Pitch", "Velocity to Amp",
-                                                                "Macro 1 to Drive" } };
+        constexpr std::array<const char*, kCols> kColText{ { "DEPTH", "LAG", "SHAPE" } };
+        constexpr std::array<const char*, kCols> kColTitle{ { "Depth", "Lag", "Shape" } };
+        constexpr std::array<const char*, kRows> kRouteTitle{ { "Source A to Cutoff", "Source B to Pitch",
+                                                                "Velocity to Level", "Macro 1 to Width" } };
         // Percent, 0 .. 100, per route and column.
         constexpr int kCell[kRows][kCols] = { { 25, 0, 50 }, { 60, 10, 50 }, { 100, 35, 75 }, { 40, 5, 20 } };
 
@@ -201,8 +203,8 @@ namespace funkgui::gallery
                 group.id = kIdGroup;
                 group.role = a11yrole::group;
                 group.bounds = kGroup;
-                group.title = "Filter 1, ladder";
-                group.help = "Voice FX slot 1";
+                group.title = "Filter 1";
+                group.help = "Slot 1";
                 out.push_back(group);
                 for (int i = 0; i < kButtons; ++i)
                 {

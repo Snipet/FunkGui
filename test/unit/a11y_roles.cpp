@@ -134,9 +134,9 @@ int main(int argc, char** argv)
     // ---- the dump line of each new role and field -------------------------------------------------------------------
     //         role title(24)                 bounds(20)
     {
-        A11yItem group = item(role::group, "Filter 1, ladder", { 208, 96, 120, 48 });
-        group.help = "Voice FX slot 1";
-        expect(P, "line.group", group, "10 Filter 1, ladder         208,96,120,48        help=Voice FX slot 1");
+        A11yItem group = item(role::group, "Filter 1", { 208, 96, 120, 48 });
+        group.help = "Slot 1";
+        expect(P, "line.group", group, "10 Filter 1                 208,96,120,48        help=Slot 1");
 
         expect(P, "line.list", item(role::list, "Connections", { 8, 300, 320, 96 }),
                "11 Connections              8,300,320,96");
@@ -154,8 +154,8 @@ int main(int argc, char** argv)
         A11yItem cell = item(role::cell, "Source", { 40, 232, 96, 20 });
         cell.parent = 2;
         cell.col = 0;
-        cell.value = "LFO 1";
-        expect(P, "line.cell", cell, "14 Source                   40,232,96,20         value=LFO 1 col=0");
+        cell.value = "Source A";
+        expect(P, "line.cell", cell, "14 Source                   40,232,96,20         value=Source A col=0");
 
         A11yItem text = item(role::editableText, "Preset name", { 300, 12, 200, 20 });
         text.value = "Warm Pad";
@@ -247,10 +247,10 @@ int main(int argc, char** argv)
         radio.checkable = true;
         expect(P, "v0140.radio_button", radio, " 4 Std                      690,64,48,16         unchecked");
         A11yItem combo = item(A11yRole::comboBox, "Mode", { 40, 20, 200, 28 });
-        combo.value = "FET 76";
-        expect(P, "v0140.combo", combo, " 5 Mode                     40,20,200,28         value=FET 76");
-        expect(P, "v0140.list_item", item(A11yRole::listItem, "Opto 2A", { 40, 120, 110, 13 }),
-               " 6 Opto 2A                  40,120,110,13");
+        combo.value = "Mode B";
+        expect(P, "v0140.combo", combo, " 5 Mode                     40,20,200,28         value=Mode B");
+        expect(P, "v0140.list_item", item(A11yRole::listItem, "Item 2", { 40, 120, 110, 13 }),
+               " 6 Item 2                   40,120,110,13");
         A11yItem na = item(A11yRole::staticText, "Range, not applicable", { 584, 316, 120, 80 });
         na.enabled = false;
         na.help = "This Mode has no range control";

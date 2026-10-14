@@ -5,9 +5,12 @@
 // dpi, so the same section records more, shorter pieces at dpi 2 than at dpi 1 and looks the same at both.
 //
 // - Three rings at r 11, 15 and 20, each a 270 degree track in ink16 from 135 degrees (the gap at the bottom, as a
-//   dial has it) with a value arc in ink100 over a part of it, and a round dot on the value's end.
-// - A fourth ring at r 20 as a dotted arc (a dot every 4 px of arc length), with a shorter dotted arc inside it that
-//   runs the other way.
+//   dial has it) with a value arc in ink100 over a part of it, and a round dot on the value's end, all at the rings'
+//   default tolerance, geom::kArcDevicePx (0.1 device px).
+// - The r 20 ring again at the cables' tolerance, geom::kFlattenDevicePx (0.6 device px), passed as the last
+//   argument: the same ring with fewer, longer chords, labelled with its tolerance.
+// - A ring at r 20 as a dotted arc (a dot every 4 px of arc length), with a shorter dotted arc inside it that runs
+//   the other way.
 // - Three cables at 2.5 px between port squares: forwards (left to right, horizontal tangents), backwards (the source
 //   to the right of its target, so the cable loops out and back) and vertical. A fourth, in the signal colour at
 //   half strength premixed over the ground, is the one translucent colour: a curve must be opaque, so a product mixes
@@ -22,6 +25,7 @@
 
 #include <funkgui/canvas/Tags.h>
 #include <funkgui/core/Col.h>
+#include <funkgui/core/Flatten.h>
 #include <funkgui/core/Geometry.h>
 #include <funkgui/core/TypeScale.h>
 
@@ -41,11 +45,13 @@ namespace funkgui::gallery
             float       r;
             float       value;                           // 0..1 of the sweep
             const char* label;
+            float       tolDevicePx;                     // the chord error asked for
         };
-        constexpr Ring kRings[3] = { { { 44.0f, 52.0f }, 11.0f, 0.25f, "R 11" },
-                                     { { 116.0f, 52.0f }, 15.0f, 0.5f, "R 15" },
-                                     { { 196.0f, 52.0f }, 20.0f, 0.8f, "R 20" } };
-        constexpr Point kDotted{ 284.0f, 52.0f };
+        constexpr Ring kRings[4] = { { { 36.0f, 52.0f }, 11.0f, 0.25f, "R 11", geom::kArcDevicePx },
+                                     { { 96.0f, 52.0f }, 15.0f, 0.5f, "R 15", geom::kArcDevicePx },
+                                     { { 160.0f, 52.0f }, 20.0f, 0.8f, "R 20", geom::kArcDevicePx },
+                                     { { 224.0f, 52.0f }, 20.0f, 0.8f, "0.6 PX", geom::kFlattenDevicePx } };
+        constexpr Point kDotted{ 288.0f, 52.0f };
 
         struct Cable
         {
@@ -76,9 +82,9 @@ namespace funkgui::gallery
                 for (const Ring& ring : kRings)
                 {
                     const float end = kStart + kSweep * ring.value;
-                    c.arc(ring.centre, ring.r, kStart, kStart + kSweep, 2.0f, th.ink16);
-                    c.arc(ring.centre, ring.r, kStart, end, 2.0f, th.ink100);
-                    c.arc(ring.centre, ring.r, end, end, 4.0f, th.accent);
+                    c.arc(ring.centre, ring.r, kStart, kStart + kSweep, 2.0f, th.ink16, ring.tolDevicePx);
+                    c.arc(ring.centre, ring.r, kStart, end, 2.0f, th.ink100, ring.tolDevicePx);
+                    c.arc(ring.centre, ring.r, end, end, 4.0f, th.accent, ring.tolDevicePx);
                     const Canvas::Scope s(c, tags::slotLabel, false);
                     c.text(ring.label, ring.centre.x, ring.centre.y + ring.r + 10.0f, type::kCaption, th.ink52,
                            Align::centre);

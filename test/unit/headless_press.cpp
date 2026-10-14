@@ -10,7 +10,8 @@
 //              atomic drag() can show; after release() the frame is the idle one again.
 // - state.*    pressed() and pointer() through every call; a second press releases first; release() without a press
 //              sends nothing; moveTo without a press sends pointerMove events with no Mods; click(), doubleClick() and
-//              drag() end a press; no input ticks the clock.
+//              drag() release an open press first (its pointerUp before their pointerMove) and end with their own;
+//              no input ticks the clock.
 // - drop.*     dropFiles: filesInterest, then filesDragEnter, filesDragMove and filesDropped at the drop position
 //              with the paths, in that order, when accepted; nothing after a refusal; log.drops counts both.
 // - cursor.*   cursor() is Panel::cursor() after the last event, for each of the nine values.
@@ -297,16 +298,38 @@ int main(int argc, char** argv)
                                    && sameBits(panel.events.back().e.x, 90.0f), 1);
         P.eq("state.pointer_stays", host.pointer().x == 90.0f && host.pointer().y == 60.0f, 1);
 
-        // The atomic calls end with their own pointerUp: no press is left open, and release() then sends nothing.
-        host.press(10.0f, 10.0f);
+        // The atomic calls release an open press first, as a second press() does: the event before their own
+        // pointerMove is that press's pointerUp, where the hand is and with the press's Mods. Then come their own
+        // events, which end with their own pointerUp: no press is left open, and release() then sends nothing.
+        const auto releasedFirst = [&panel](size_t from, size_t count, float hx, float hy) {
+            const std::vector<Event>& ev = panel.events;
+            return ev.size() == from + count && ev[from].kind == Kind::up && sameBits(ev[from].e.x, hx)
+                && sameBits(ev[from].e.y, hy) && ev[from].e.mods.shift && ev[from + 1].kind == Kind::move
+                && !ev[from + 1].e.mods.shift && ev.back().kind == Kind::up;
+        };
+        host.press(10.0f, 10.0f, shift);
+        host.moveTo(16.0f, 18.0f);
+        size_t from = panel.events.size();
         host.click(12.0f, 12.0f);
+        P.eq("state.click_releases_first", releasedFirst(from, 4, 16.0f, 18.0f), 1);    // up; move, down, up
         P.eq("state.click_ends_press", !host.pressed() && host.pointer().x == 12.0f, 1);
-        host.press(10.0f, 10.0f);
+        host.press(10.0f, 10.0f, shift);
+        host.moveTo(16.0f, 18.0f);
+        from = panel.events.size();
         host.drag(10.0f, 10.0f, 70.0f, 40.0f, 2);
+        P.eq("state.drag_releases_first", releasedFirst(from, 6, 16.0f, 18.0f), 1);     // up; move, down, 2 drags, up
         P.eq("state.drag_ends_press", !host.pressed() && host.pointer().x == 70.0f && host.pointer().y == 40.0f, 1);
-        host.press(10.0f, 10.0f);
+        host.press(10.0f, 10.0f, shift);
+        host.moveTo(16.0f, 18.0f);
+        from = panel.events.size();
         host.doubleClick(14.0f, 14.0f);
+        P.eq("state.double_click_releases_first", releasedFirst(from, 7, 16.0f, 18.0f), 1);   // up; the six of it
         P.eq("state.double_click_ends_press", !host.pressed() && host.pointer().x == 14.0f, 1);
+        // Without an open press they send what they always sent: no pointerUp before their pointerMove.
+        from = panel.events.size();
+        host.click(12.0f, 12.0f);
+        P.eq("state.click_without_press_unchanged",
+             panel.events.size() == from + 3 && panel.events[from].kind == Kind::move, 1);
         const size_t n = panel.events.size();
         host.release();
         P.eq("state.release_after_atomic_sends_nothing", panel.events.size() == n, 1);

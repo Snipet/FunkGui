@@ -99,10 +99,10 @@ namespace
     std::vector<A11yItem> fixture(int rows = kRows, int cols = kCols, int shift = 0)
     {
         std::vector<A11yItem> v;
-        v.push_back(item(kGroup, 0, role::group, "Filter 1, ladder", { 8, 8, 120, 48 }));
+        v.push_back(item(kGroup, 0, role::group, "Filter 1", { 8, 8, 120, 48 }));
         v.push_back(item(kButton, kGroup, A11yRole::button, "Filter 1 In", { 8, 20, 24, 24 }));
         v.push_back(item(kList, 0, role::list, "Connections", { 8, 64, 120, 40 }));
-        v.push_back(item(kListItem, kList, A11yRole::listItem, "Osc 1 Out to Filter 1 In", { 8, 64, 120, 20 }));
+        v.push_back(item(kListItem, kList, A11yRole::listItem, "Source A Out to Filter 1 In", { 8, 64, 120, 20 }));
         A11yItem text = item(kText, 0, role::editableText, "Preset name", { 140, 8, 200, 20 });
         text.value = "Warm Pad";
         v.push_back(text);
@@ -125,7 +125,7 @@ namespace
                 const funkgui::Rect b{ 86.0f * static_cast<float>(c), y, 86.0f, 20.0f };
                 A11yItem cell = item(cellId(r, c), rowId(r), role::cell, "Source", b);
                 if (c == 0)
-                    cell.value = "LFO 1";
+                    cell.value = "Source A";
                 else if (c == kCols - 1)
                 {
                     cell.role = A11yRole::button;
@@ -355,7 +355,7 @@ int main(int argc, char** argv)
              1);
         P.eq("cell.text_cell_value", textCell->getValueInterface() != nullptr
                                          && textCell->getValueInterface()->isReadOnly()
-                                         && textCell->getValueInterface()->getCurrentValueAsString() == "LFO 1", 1);
+                                         && textCell->getValueInterface()->getCurrentValueAsString() == "Source A", 1);
     }
 
     // ---- nesting by component parent --------------------------------------------------------------------------------

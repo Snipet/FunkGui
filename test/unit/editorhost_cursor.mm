@@ -14,7 +14,8 @@
 //   events.*     every kind of pointer event is followed by a cursor update
 //   again.*      after every editor has gone, a new editor shows the cursors again
 // A juce::MouseCursor has no public null state, and NormalCursor itself holds a null handle, so no row asks whether a
-// cursor "exists". The images and their hot spots are looked at live, in the gallery app.
+// cursor "exists". The images and their hot spots are looked at live in a product's editor (FSynth 02 §30 #8): no
+// gallery section shows these cursors.
 
 #include <funkgui/a11y/A11yItem.h>
 #include <funkgui/canvas/Canvas.h>

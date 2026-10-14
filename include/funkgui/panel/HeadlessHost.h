@@ -121,9 +121,10 @@ namespace funkgui
         // pointerDrag with the press's Mods while pressed, pointerMove with none otherwise. release = pointerUp at
         // pointer() with the press's Mods; nothing when not pressed. A second press while pressed releases first.
         // press(x0, y0, m), moveTo(x1, y1, steps), release() send the events of drag(x0, y0, x1, y1, steps, m), bit
-        // for bit. click(), doubleClick() and drag() end with their own pointerUp and so end a press too; a press
-        // still open when the host is destroyed is closed by Panel::closeGestures(), as a live one is. No input ticks
-        // the clock. The same on every platform, without JUCE and as wasm32.
+        // for bit. click(), doubleClick() and drag() release an open press first (its pointerUp at pointer(), as
+        // release() sends it), then send their own events, which end with their own pointerUp; move() and wheel()
+        // leave a press open. A press still open when the host is destroyed is closed by Panel::closeGestures(), as
+        // a live one is. No input ticks the clock. The same on every platform, without JUCE and as wasm32.
         void  press(float x, float y, Mods = {});
         void  moveTo(float x, float y, int steps = 1);
         void  release();

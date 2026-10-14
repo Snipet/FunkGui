@@ -55,9 +55,11 @@
 //   and wheel call notes the last position it sent, which is where moveTo starts and release ends. moveTo's points
 //   are drag()'s: start + (end - start) * (k / steps), and the end itself for the last, so a split drag sends the
 //   atomic drag's events bit for bit. A press's popup flag is its ctrl, as click()'s, and its drags and its release
-//   carry the press's Mods. click(), doubleClick() and drag() clear the pressed state they end. dropFiles sends
-//   EditorHost's sequence for an accepted drag (enter, move, drop, all at the drop position) and nothing for a
-//   refused one. copyText keeps its log and also fills the in-memory clipboard that clipboardText() answers.
+//   carry the press's Mods. click(), doubleClick() and drag() first release a press left open (release(): its
+//   pointerUp at pointer(), with its Mods), so the Panel never sees two pointerDowns without a pointerUp between
+//   them; move() and wheel() leave it open and send what they always sent. dropFiles sends EditorHost's sequence
+//   for an accepted drag (enter, move, drop, all at the drop position) and nothing for a refused one. copyText
+//   keeps its log and also fills the in-memory clipboard that clipboardText() answers.
 //   announce() logs every text that is not empty, whatever its priority (an empty one is what EditorHost does not
 //   post either); a11yFocus() logs every call, id 0 included.
 
@@ -270,9 +272,10 @@ namespace funkgui
 
     void HeadlessHost::click(float x, float y, Mods m)
     {
+        if (pressed_)
+            release();                                   // an open press ends first, as press() ends one
         const PointerEvent e = pointerAt(x, y, m, 1);
         pointer_ = { x, y };
-        pressed_ = false;                                // it ends with its own pointerUp
         panel_.pointerMove(e);
         panel_.pointerDown(e);
         panel_.pointerUp(e);
@@ -280,9 +283,10 @@ namespace funkgui
 
     void HeadlessHost::doubleClick(float x, float y, Mods m)
     {
+        if (pressed_)
+            release();
         const PointerEvent one = pointerAt(x, y, m, 1), two = pointerAt(x, y, m, 2);
         pointer_ = { x, y };
-        pressed_ = false;
         panel_.pointerMove(one);
         panel_.pointerDown(one);
         panel_.pointerUp(one);
@@ -293,8 +297,9 @@ namespace funkgui
 
     void HeadlessHost::drag(float x0, float y0, float x1, float y1, int steps, Mods m)
     {
+        if (pressed_)
+            release();
         const PointerEvent start = pointerAt(x0, y0, m, 1);
-        pressed_ = false;
         panel_.pointerMove(start);
         panel_.pointerDown(start);
         const int n = steps < 1 ? 1 : steps;
