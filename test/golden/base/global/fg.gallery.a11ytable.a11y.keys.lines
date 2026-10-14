@@ -1,0 +1,29 @@
+10 Filter 1                 16,16,184,56         help=Slot 1
+ 2 Filter 1 In              24,44,36,18
+ 2 Filter 1 Out             68,44,36,18
+ 2 Open in inspector        112,44,80,18
+11 Connections              16,84,184,106
+ 6 Source A Out to Filter 1 In 16,100,184,18        value=100 %
+ 6 Source B Out to Filter 1 In 16,118,184,18        value=50 %
+ 6 Filter 1 Out to Mix A In 1 16,136,184,18        value=100 %
+ 6 Source C Out to Mix A In 2 16,154,184,18        value=25 %
+ 6 Mix A Out to Bus 1 In    16,172,184,18        value=80 %
+12 Routes                   216,32,240,112       table=4x3
+13 Source A to Cutoff       216,48,240,24        row=0
+ 0 Depth                    284,48,52,24         value=25 % col=0
+ 0 Lag                      342,48,52,24         value=0 % col=1
+ 0 Shape                    400,48,52,24         value=50 % col=2
+13 Source B to Pitch        216,72,240,24        row=1
+ 0 Depth                    284,72,52,24         value=60 % col=0
+ 0 Lag                      342,72,52,24         value=10 % col=1
+ 0 Shape                    400,72,52,24         value=50 % col=2
+13 Velocity to Level        216,96,240,24        row=2
+ 0 Depth                    284,96,52,24         value=100 % col=0
+ 0 Lag                      342,96,52,24         value=35 % col=1
+ 0 Shape                    400,96,52,24         value=75 % col=2
+13 Macro 1 to Width         216,120,240,24       row=3
+ 0 Depth                    284,120,52,24        value=40 % col=0
+ 0 Lag                      342,120,52,24        value=5 % col=1
+ 0 Shape                    400,120,52,24        value=20 % col=2
+15 Patch name               216,160,236,18       value=Init Patch
+ 7 Focus                    216,182,236,12       value=Velocity to Level, Lag
