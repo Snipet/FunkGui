@@ -1,0 +1,10 @@
+ 0 LIVE DOT                 12,4,56,76           value=50 %
+ 0 STALE                    72,4,56,76           value=38 %
+ 0 INERT                    132,4,56,76          value=20 ms, fixed [ro] [off] help=HELD BY THE FIXTURE
+ 0 SNAPPED                  192,4,56,76          value=two help=5 steps: 1, 2, 3, 4, 5
+ 0 BIPOLAR                  252,4,56,76          value=0 %
+ 0 0 ROUTES                 312,4,56,76          value=25 %
+ 0 DEPTH 0                  372,4,56,76          value=75 %
+ 0 COMPACT                  382,104,50,48        value=0 %
+ 0 LIVE TICK                10,98,188,80         value=50 %
+ 0 EDITED                   218,98,148,66        value=38 %
