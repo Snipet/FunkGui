@@ -29,6 +29,15 @@ namespace funkgui
         inline constexpr Tag focusRing    = 12;   // FOCUS_RING    the keyboard focus ring
         inline constexpr Tag hint         = 13;   // HINT          the first-run hint / spec line
 
+        // ---- FSynth G2 additions: the Dial and the modulation overlay (widgets/Dial.h, ModOverlay.h) ----------------
+        inline constexpr Tag dialTrack    = 14;   // DIAL_TRACK    a dial's 270-degree track (dotted when locked), its
+                                                  //               hover fill and a derived dial's LINKED box
+        inline constexpr Tag dialArc      = 15;   // DIAL_ARC      a dial's value arc
+        inline constexpr Tag dialPointer  = 16;   // DIAL_POINTER  its pointer (solid, hollow when derived, ghost)
+        inline constexpr Tag dialNotch    = 17;   // DIAL_NOTCH    its Mode-default notch, soft notches, locked notch
+        inline constexpr Tag modBand      = 18;   // MOD_BAND      a modulation band: a dial's ring, a slider's band
+        inline constexpr Tag modDot       = 19;   // MOD_DOT       the live modulated value (live)
+
         inline constexpr Tag lastFunkGui  = 255;  // FunkGui's range is 1..lastFunkGui
         inline constexpr Tag firstProduct = 256;  // a product's tags start here
     }
@@ -46,6 +55,9 @@ namespace funkgui
         { tags::detentTick, "DETENT_TICK" }, { tags::detentLabel, "DETENT_LABEL" }, { tags::word, "WORD" },
         { tags::latch, "LATCH" },            { tags::cell, "CELL" },                { tags::focusRing, "FOCUS_RING" },
         { tags::hint, "HINT" },
+        // FSynth G2
+        { tags::dialTrack, "DIAL_TRACK" },   { tags::dialArc, "DIAL_ARC" },     { tags::dialPointer, "DIAL_POINTER" },
+        { tags::dialNotch, "DIAL_NOTCH" },   { tags::modBand, "MOD_BAND" },     { tags::modDot, "MOD_DOT" },
     };
 
     // A product's tag names (tags >= tags::firstProduct), registered once before the first dump is written or parsed;

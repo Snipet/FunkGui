@@ -51,6 +51,40 @@ namespace funkgui
         constexpr const char* kEnDash = "\xE2\x80\x93";        // U+2013, the n/a value (01 §4.6, K1 #15)
 
         float clamp01(float v) noexcept { return v <= 0.0f ? 0.0f : (v >= 1.0f ? 1.0f : v); }
+        float unit01(float v) noexcept { return !(v > 0.0f) ? 0.0f : (v >= 1.0f ? 1.0f : v); }   // NaN -> 0
+
+        // FSynth G2: the overlay as the slider keeps it, every position in 0..1 and every pair in order (ModOverlay.h).
+        ModOverlay sanitised(const ModOverlay& m) noexcept
+        {
+            ModOverlay s = m;
+            s.lo = unit01(m.lo);
+            s.hi = unit01(m.hi);
+            if (s.hi < s.lo)
+            {
+                const float t = s.lo;
+                s.lo = s.hi;
+                s.hi = t;
+            }
+            s.editLo = unit01(m.editLo);
+            s.editHi = unit01(m.editHi);
+            if (s.editHi < s.editLo)
+            {
+                const float t = s.editLo;
+                s.editLo = s.editHi;
+                s.editHi = t;
+            }
+            s.live = unit01(m.live);
+            return s;
+        }
+
+        // FSynth G2: the modulation part of an a11y description: "modulated by 2 routes" (", no effect" when inert).
+        std::string modDescription(const ModOverlay& m)
+        {
+            std::string s = "modulated by " + std::to_string(m.routes) + (m.routes == 1 ? " route" : " routes");
+            if (m.inert)
+                s += ", no effect";
+            return s;
+        }
 
         float stepPitch(int n) noexcept
         {
@@ -139,6 +173,67 @@ namespace funkgui
         labelsDrawn_ = fitRule_ && (!tagOnSubLine() || firstLabelLeft_ >= tagWidth_ + 4.0f);
         if (!labelsDrawn_)
             hoverLabel_ = -1;
+        // FSynth G2: the overlay, re-read when its key changed (nothing at all while there is none).
+        if (mod_ == nullptr)
+        {
+            if (modView_.routes != 0 || modValid_)
+                modView_ = ModOverlay{};
+            modValid_ = false;
+        }
+        else if (!modValid_ || mod_->key != modView_.key)
+        {
+            modView_ = sanitised(*mod_);
+            modValid_ = true;
+        }
+    }
+
+    // ---- FSynth G2: the modulation band -----------------------------------------------------------------------------
+
+    void RuleSlider::setMod(const ModOverlay* m)
+    {
+        mod_ = m;
+        modValid_ = false;
+        refresh();
+    }
+
+    bool RuleSlider::bandContains(Point p) const
+    {
+        return Rect{ geom_.x, geom_.trackY() + 3.0f, geom_.w, 8.0f }.contains(p);
+    }
+
+    float RuleSlider::bandX(float t) const noexcept
+    {
+        if (hybrid())
+            return contLeft() + t * (contRight() - contLeft());
+        return geom_.x + t * geom_.w;
+    }
+
+    void RuleSlider::drawMod(Canvas& c, const Theme& th) const
+    {
+        const ModOverlay& m = modView_;
+        const float ty = geom_.trackY();
+        // A band from t0 to t1, at least 2 px wide (a route at depth 0 is still seen).
+        const auto band = [&](float t0, float t1, Col col) {
+            float x0 = bandX(t0), x1 = bandX(t1);
+            if (x1 - x0 < 2.0f)
+            {
+                const float mid = 0.5f * (x0 + x1);
+                x0 = mid - 1.0f;
+                x1 = mid + 1.0f;
+            }
+            c.rrect(x0, ty + 6.0f, x1 - x0, 2.0f, 0.0f, col);
+        };
+        {
+            const Canvas::Scope s(c, tags::modBand, false);
+            band(m.lo, m.hi, m.inert ? th.ink16 : th.signal);
+            if (m.editing)
+                band(m.editLo, m.editHi, th.accent);
+        }
+        if (m.liveValid && !m.inert)
+        {
+            const Canvas::Scope s(c, tags::modDot, true);
+            c.hairlineV(bandX(m.live), ty + 5.0f, 5.0f, th.signal);
+        }
     }
 
     bool RuleSlider::refused() const noexcept
@@ -314,6 +409,8 @@ namespace funkgui
             return false;
         if (!ease::sameBits(caretX_, caretTarget()))
             return false;
+        if (mod_ != nullptr && (!modValid_ || mod_->key != modView_.key))
+            return false;                                // FSynth G2: a newer overlay is waiting for the next tick
         return !(flashHold_ > 0.0f) && ease::sameBits(flash_, 0.0f);
     }
 
@@ -349,6 +446,8 @@ namespace funkgui
 
     Cursor RuleSlider::cursorAt(Point p) const
     {
+        if (modView_.routes > 0 && !refused() && bandContains(p))
+            return Cursor::grab;                         // FSynth G2: a depth drag (the product's, FSynth 02 §14.4)
         if (!contains(p) || refused())
             return Cursor::normal;
         return detentLabelAt(p) >= 0 ? Cursor::pointingHand : Cursor::leftRight;
@@ -868,6 +967,8 @@ namespace funkgui
         item.title = v.label != nullptr ? v.label : "";
         if (nonEmpty(v.aka))
             item.description = "controls " + lowerAscii(v.aka);
+        if (modView_.routes > 0)                         // FSynth G2
+            item.description += (item.description.empty() ? "" : ", ") + modDescription(modView_);
         std::string spoken = v.text.spoken;
         if (spoken.empty())
         {
@@ -1196,6 +1297,9 @@ namespace funkgui
                 break;
             }
         }
+
+        if (modView_.routes > 0)
+            drawMod(c, th);                              // FSynth G2: nothing at all without routes
 
         if (focusRing)
             drawFocusRing(c, geom_.hit(), th.accent);

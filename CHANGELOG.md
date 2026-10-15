@@ -3,6 +3,96 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.16.0 — 2026-10-15 · MINOR: a rotary dial, modulation overlays on the dial and the slider
+
+Golden impact: **none** on existing rows on macOS with JUCE and in the JUCE-free core, natively and as wasm32 under node
+(every existing `fg.gallery.*`, `fg.shader.hash`, `fg.shader.web`, `fg.font.probe`, `fg.font.baked` and `fg.a11yline`
+unchanged; `fg.gallery.ruleslider`, whose widget gains the band, is byte for byte its golden: 344 rows and 9 a11y line
+files). Linux x86-64 with JUCE: not run (the run was waived for this tag on 2026-10-15; this release has no platform
+code, and its widgets code was not built on Linux). New rows: `fg.gallery.dial` (228, and 6 a11y line files) and
+`fg.gallery.modoverlay` (90, and 2 a11y line files), byte for byte the same files on macOS, natively without JUCE and
+as wasm32. New tests (JUCE-free: every preset, and wasm32 under node): `fg.dial.input` (305 spec rows), `fg.modoverlay`
+(103), `fg.gallery.dial` (44 besides its goldens) and `fg.gallery.modoverlay` (16 besides its goldens). No existing
+test's source changes; `fg.headers` takes the two new headers and `fg.web.host` (live) the two new sections, at rest, by
+their globs. Additive, with the notes under **Consumers**: FCompressor a5fe769 passed its agent, agent-gui and web gates
+against it unchanged, and FSynth 5ade43c passed its agent gate. (FSynth card G2.)
+
+- **`Dial`** (`funkgui/widgets/Dial.h`): a rotary control over a `ValueModel` with `RuleSlider`'s contract: the same
+  five states, the same writes through `GestureController`, the same keys and the same a11y (a slider; stepped in
+  index space). It has no detent labels, attached word or `pointerMove`: hover comes through `tick()`. It comes in a
+  60 x 80 cell (`DialSize::primary`) or a 54 x 52 cell (`compact`, whose only text is the label). `DialGeom{x, top,
+  size}` gives the cell (`w()`, `h()`), `hit()` (2 px gutters at the sides, 4 px below), `centre()`, `radius()` (15;
+  compact 11), `ringRadius()` (radius() + 5) and the text lines (`labelTop()`, `valueTop()`, `subTop()`). The sweep is
+  270 degrees (`Dial::kSweepDeg`), from 7:30 through 12:00 to 4:30, in `Canvas::arc`'s angles: track position t sits
+  at 135 + 270 t degrees, and a stepped view's detent i at (i + 0.5) / n, where `ValueView::track` puts it.
+  - Drags: travel is dx - dy, 240 px a sweep (Shift 1200, Cmd 6000: `kDragPx`, `kFinePx`, `kUltraPx`), re-anchored
+    when a modifier toggles. A continuous drag (not a hybrid's) sticks to a soft notch within 1/60 of the sweep, 4 of a
+    full sweep's 240 px whatever the modifiers (20 px of travel under Shift). Stepped: clamp(240/(n-1), 24, 64) px a
+    detent, committing at 0.5 p + 6 px, one gesture, with a ghost pointer.
+  - Hybrid end steps: 20-degree end cells (`kEndCellDeg`) past each end of the sweep, entered 18 px past the edge.
+    **At most two a side**, which the Dial does not check: four cells fill 80 of the 90-degree gap, a third a side
+    would overlap the other side's at 6:00, and the Dial neither shrinks nor drops cells, so a role with more uses a
+    `RuleSlider`.
+  - Wheel and keys work as `RuleSlider`'s. Double-click and Delete write the Mode default. Locked, derived and n/a
+    refuse every write, and the popup click still opens the host menu.
+  - `cursorAt` is `upDown` over a writable dial, and `grab` over `ringContains()` when an overlay with routes is set
+    and the dial is not locked, derived or n/a. `valueBox()` (primary {x + 2, top + 54, 56, 14}, compact {x + 2,
+    top + 36, 50, 14}) and `takesTypedKeys()` are for the product's typed-value field. `flashLabel()` marks a
+    Mode-switch landing.
+  - The sub line shows "CLAMPED" for a clamped continuous view, else the view's tag in every state but n/a.
+  - A derived dial's LINKED box and the focus ring use the hit rect grown 2 px up and down, {x + 2, top - 2, w - 4, h}:
+    both reach above the cell (the box 2 px, the ring, drawn 1 px inside, 1 px), and the box stops 2 px short of the
+    cell's bottom, so the boxes of two derived dials stacked meet edge to edge, their borders side by side.
+    `contains()` and the a11y bounds stay the hit rect.
+  - It draws with `Canvas::arc` and `arcDotted` and four new tags (below). Sines and cosines are taken in double and
+    rounded once to float, so macOS, natively and as wasm32, records the same points (the new rows above); Linux: not
+    run (waived).
+- **`ModOverlay`** (`funkgui/widgets/ModOverlay.h`): what a modulated control draws over its value, as plain data the
+  product owns, in the widget's track space 0..1: `routes`; the reachable `lo`..`hi`; the `live` position and
+  `liveValid`; `inert`; `editing` with the edited route's `editLo`..`editHi`; and a `key` the product changes whenever
+  it changes a field. The API around it: `Dial::setMod` and `RuleSlider::setMod` (`nullptr`, the default, means no
+  overlay; the widget keeps the pointer, so the overlay lives until `setMod(nullptr)` or the widget goes),
+  `Dial::ringContains` (the annulus radius() + 2 to ringRadius() + 4) and `RuleSlider::bandContains`
+  ({x, trackY() + 3, w, 8}).
+  - Copying: the widget copies the overlay at `setMod()`, then again whenever `key` differs, where it re-reads its
+    view: in `tick()` and the input calls (a press, a drag, a double-click, the wheel, keys, a11y actions). The copy is
+    clamped to 0..1 (a NaN counts as 0) and each pair is put in order. `settled()` is false while a newer key waits.
+  - Drawing: nothing while `routes` <= 0, and the frame is then the plain control's, primitive for primitive.
+    Otherwise:
+    - a 2 px band from lo to hi in the theme's `signal` (ink16 when `inert`). A band is never less than a 2 px mark,
+      so a route at depth 0 is still seen.
+    - the edited band in `accent` over it while `editing`.
+    - the live value, when `liveValid` and not `inert`, as a live primitive, so fingerprints leave telemetry out.
+  - Shapes: on a dial, the band is an arc at `ringRadius()` and the live value a disc of r 2.5. On a slider, the band
+    runs at `trackY()` + 6 on the drawn track (the continuous part between a hybrid's end cells) and the live value is
+    a 1 x 5 tick.
+  - A11y: the description gains "modulated by <n> route(s)" (", no effect" when inert). The range in display units is
+    the product's to add.
+  - The hit tests are geometry only: the depth edit is the product's. The band's ink, the live value and the a11y
+    clause follow `inert` alone, so a product marks inert the overlay of a locked, derived or n/a control (whose cursor
+    is never `grab`).
+- **Tags** (`funkgui/canvas/Tags.h`): `tags::dialTrack` (14), `dialArc`, `dialPointer`, `dialNotch`, `modBand` and
+  `modDot` (19), dumped as `DIAL_TRACK`, `DIAL_ARC`, `DIAL_POINTER`, `DIAL_NOTCH`, `MOD_BAND` and `MOD_DOT` and
+  appended to `kFunkGuiTagNames`.
+- **Gallery**: two new sections, in `FunkGuiGalleryProbe`, the gallery app, the web gallery and the web host page.
+  `dial` shows both sizes and every state, in the states rest, hover, drag, ghost, keys and refused. `modoverlay`
+  shows dials and both slider sizes, in the states rest and editing.
+- **Consumers:**
+  - Tag names: the six names above now belong to FunkGui. A product that registers one of them for its own tag has the
+    registration ignored, and that tag dumps as its number. FCompressor's `Tags.h` `static_assert` refuses such a
+    name. FCompressor, HardwareReverb and FSynth use none of them. A loop over `kFunkGuiTagNames` sees 19 entries.
+  - `RuleSlider` gains private members (its size changes; every consumer builds from source), and `RuleSlider.h` now
+    includes `ModOverlay.h`. A slider with no overlay draws, ticks, settles, lists and sets the cursor as before.
+  - With an overlay, a slider's cursor can be `grab` outside `contains()`: `bandContains()` reaches below the hit rect
+    (1 px on a primary slider, 5 px on a secondary), and on a secondary slider the band and the live tick draw up to
+    4 px below it. A Panel that routes depth drags tests `bandContains()` before `contains()`.
+  - `Dial::key` and `RuleSlider::key` take Alt+Up/Down as value steps, as before, so a product handles its depth keys
+    before them.
+- No Apple-only or Linux-only file, and nothing under `src/gpu`, `src/juce`, `src/nojuce` or `src/web`. Run on macOS
+  arm64 with and without JUCE, as wasm32 under node, and in Chrome on macOS: the `index`, `host` and `services` pages.
+  The host page draws both new sections, WebGL within 1 per channel of SoftRaster. Linux x86-64: not run (waived,
+  2026-10-15).
+
 ## v0.15.0 — 2026-10-15 · MINOR: curves, drag cursors, the clipboard read and paste, drags in steps, roles for graphs and tables, scope kinds
 
 Golden impact: **none** on existing rows on macOS with JUCE and in the JUCE-free core, natively and as wasm32 under node
