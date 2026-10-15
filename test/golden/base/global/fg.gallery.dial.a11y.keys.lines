@@ -1,0 +1,14 @@
+ 0 VALUE                    12,4,56,76           value=62 %
+ 0 STEPS 3                  72,4,56,76           value=high help=3 steps: LO, MID, HI
+ 0 LOCKED                   132,4,56,76          value=20 ms, fixed [ro] [off] help=HELD BY THE FIXTURE
+ 0 DERIVED                  192,4,56,76          value=62 % [ro] help=FOLLOWS VALUE
+ 7 N/A, not applicable      252,4,56,76          [ro] [off] help=NOT USED HERE
+ 0 HYBRID                   312,4,56,76          value=Off help=end steps: Off
+ 0 BIPOLAR                  372,4,56,76          value=+20 %
+ 0 STEPS 21                 12,88,56,76          value=−4 help=21 steps: −10, −9, −8, −7, −6, −5, −4, −3, −2, −1, 0, +1, +2, +3, +4, +5, +6, +7, +8, +9, +10
+ 0 VALUE                    78,92,50,48          value=30 %
+ 0 STEPS 5                  138,92,50,48         value=four help=5 steps: 1, 2, 3, 4, 5
+ 0 LOCKED                   198,92,50,48         value=100 %, fixed [ro] [off] help=HELD BY THE FIXTURE
+ 0 BIPOLAR                  258,92,50,48         value=−25
+ 0 IN RANGE                 318,88,56,76         value=70 % help=end steps: Off, Maximum
+ 0 DEFAULT                  378,88,56,76         value=75 %
