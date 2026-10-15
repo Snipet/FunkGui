@@ -1098,16 +1098,19 @@ namespace funkgui
             {
                 const bool bipolar = v.bipolar && v.state == ValueState::continuous;
                 const float from = bipolar ? angleOf(0.5f) : a0;
+                // The fill and the value arc end at the pointer held to the sweep: a pointer easing out of a hybrid end
+                // cell crosses the gap, where there is no track to draw on (the pointer itself keeps its angle).
+                const float pa = pointerA_ < a0 ? a0 : (pointerA_ > a1 ? a1 : pointerA_);
                 {
                     const Canvas::Scope s(c, tags::dialTrack, false);
                     if (h > 0.01f && !inCell)            // the hover fill, under the track (RuleSlider's track fill)
-                        arcBetween(c, ctr, r, from, pointerA_, kFillW, premix(th.ground, th.accentDim, h));
+                        arcBetween(c, ctr, r, from, pa, kFillW, premix(th.ground, th.accentDim, h));
                     c.arc(ctr, r, a0, a1, kTrackW, trackCol);
                 }
                 if (v.state == ValueState::continuous && !inCell)
                 {
                     const Canvas::Scope s(c, tags::dialArc, false);
-                    arcBetween(c, ctr, r, from, pointerA_, kTrackW, mix(th.ink70, th.accent, h));
+                    arcBetween(c, ctr, r, from, pa, kTrackW, mix(th.ink70, th.accent, h));
                 }
                 if (v.state == ValueState::stepped)
                 {

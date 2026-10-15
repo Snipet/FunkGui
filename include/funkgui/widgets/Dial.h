@@ -16,8 +16,11 @@
 //   135 + 270 t degrees, so 0 is 7:30, 0.5 is 12:00 and 1 is 4:30. A stepped view's detent i sits at its cell centre,
 //   t = (i + 0.5) / n, which is where FCompressor's ValueView convention puts ValueView::track, so a product snaps a
 //   ModOverlay end to a detent in the same space. Hybrid end cell k (1 = next to the sweep) is centred 20 (k - 0.5)
-//   degrees past its end of the sweep, so two cells a side fit in the 90-degree gap; end cells are ordered as
-//   RuleSlider orders them (endLo[0] outermost, endHi[0] innermost).
+//   degrees past its end of the sweep; end cells are ordered as RuleSlider orders them (endLo[0] outermost, endHi[0]
+//   innermost). A Dial takes at most two end cells a side: 4 x 20 degrees fill 80 of the 90-degree gap, and a third
+//   cell a side would overlap the other side's at 6:00 (a fifth on one side lands on the other end of the sweep). The
+//   Dial does not shrink or drop cells; a product with more end steps on a side uses a RuleSlider (16 px cells, any
+//   number).
 // - Radial marks sit just outside the track, centred at radius() + 3 (18 px primary, 14 compact): the Mode-default
 //   notch and soft notches 1 x 3 ink32, detent ticks, end-cell ticks and the locked notch 1 x 5 (ink32, active
 //   ink100). Detent ticks are drawn only when a cell is at least 4 px of track arc (radius() x 270 degrees / n). The
@@ -26,7 +29,8 @@
 // - The hover fill is a 4 px accentDim arc, premixed over the ground at the hover amount, under the track and value
 //   arc: from the sweep start (bipolar continuous: 12:00) to the pointer; stepped: to the active detent; none in an
 //   end cell. The value arc (continuous, inside the range) is ink70, mixed to accent by the hover amount; 12:00 starts
-//   it when bipolar. alwaysChrome draws the track ink32.
+//   it when bipolar. Both end at the pointer's angle held to the sweep, so while the pointer eases out of an end cell
+//   neither is drawn in the gap. alwaysChrome draws the track ink32.
 // - Text is centred on the cell: the label (kCaption at top; compact kMicro at top + 38), the value and its unit on one
 //   kMicro line at top + 56, and the sub line at top + 68: "CLAMPED" for a clamped continuous view, else the view's tag
 //   in every state but n/a. Compact dials draw the label only. A derived view's value and hollow pointer are live

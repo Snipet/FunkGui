@@ -5,12 +5,14 @@
 // case list re-run on a dial. Each case compares the exact event sequence the host would see (b:<id> beginGesture,
 // s:<id>=<v> setValue01, e:<id> endGesture, u1/u0 setUnboundedDrag, menu:<id> host menu): continuous drags on the
 // travel dx - dy (240 px per sweep, Shift 1200, Cmd 6000, re-anchored on a modifier toggle, soft notches sticking
-// within 4 px of a sweep's 240); stepped drags (pitch clamp(240/(n-1), 24, 64), commit at 0.5·p + 6 px, one gesture,
-// only detent values, an end stop, the ghost pointer); the wheel (one detent per discrete event, kWheelNotch
-// accumulation, one burst); every key of FC 02 §8.9 and double-click (the Mode default); index-space a11y; hybrid end
-// cells (18 px of travel past the edge, keys, wheel and a11y crossing one cell at a time, the 20-degree cells past each
-// end of the sweep); locked, derived and n/a refusing every write while the host menu still opens; the geometry of
-// DialGeom; what each state draws (§14.1: the track arc, the value arc from 7:30 or 12:00, the pointer, the notch,
+// within 4 px of a sweep's 240, inclusive, whatever the modifiers); stepped drags (pitch clamp(240/(n-1), 24, 64),
+// commit at 0.5·p + 6 px, one gesture, only detent values, an end stop, the ghost pointer); the wheel (one detent per
+// discrete event, kWheelNotch accumulation, one burst); every key of FC 02 §8.9 and double-click (the Mode default);
+// index-space a11y; hybrid end cells on both sides (18 px of travel past the edge, inclusive, keys, wheel and a11y
+// crossing one cell at a time, a modifier toggle re-anchoring on the cell, the 20-degree cells past each end of the
+// sweep, at most two a side); locked, derived and n/a refusing every write while the host menu still opens; the
+// geometry of DialGeom; what each state draws (§14.1: the track arc, the value arc from 7:30 or 12:00 and, with the
+// hover fill, held to the sweep while the pointer eases out of an end cell, the pointer and its tau, the notch,
 // detent ticks and the 4 px rule, the dotted locked track and its notch, the hollow pointer in its LINKED box, nothing
 // for n/a; the label, value and sub lines; compact dials); the cursor, valueBox and takesTypedKeys; the label flash and
 // the Mode-switch landing; spec lines and accessibility items. Spec rows only. No JUCE: a HeadlessGuiScope bakes the
@@ -175,6 +177,7 @@ namespace
         float def = 0.25f;
         float fixedTrack = 0.4f;                          // locked / derived / n/a track
         bool  bipolar = false, clamped = false, live = false;
+        bool  detentUnknown = false;                      // stepped: detent -1, track fixedTrack (the dial reads it)
     };
 
     class Model final : public funkgui::ValueModel
@@ -213,8 +216,9 @@ namespace
                     if (std::fabs(spec.detents[static_cast<size_t>(i)].host01 - h)
                         < std::fabs(spec.detents[static_cast<size_t>(best)].host01 - h))
                         best = i;
-                v.detent = best;
-                v.track = (static_cast<float>(best) + 0.5f) / static_cast<float>(v.nDetents);
+                v.detent = spec.detentUnknown ? -1 : best;
+                v.track = spec.detentUnknown ? spec.fixedTrack
+                                             : (static_cast<float>(best) + 0.5f) / static_cast<float>(v.nDetents);
                 std::snprintf(v.text.value, sizeof v.text.value, "%s", spec.detents[static_cast<size_t>(best)].label);
                 return;
             }
@@ -376,6 +380,18 @@ namespace
         return s;
     }
 
+    // One high cell: MAX at host 1, past the range 0 .. 0.9 (host 0.9 is t 1 exactly).
+    Spec hybridHiSpec()
+    {
+        Spec s;
+        s.label = "HYBRID";
+        s.rangeLo = 0.0f;
+        s.rangeHi = 0.9f;
+        s.def = 0.5f;
+        s.hi = { { 1.0f, "MAX", "Max" } };
+        return s;
+    }
+
     // One frame's primitives, drawn at dpi 1 unless asked.
     struct Frame
     {
@@ -471,6 +487,41 @@ namespace
         return { c.x + r * static_cast<float>(std::cos(static_cast<double>(a))),
                  c.y + r * static_cast<float>(std::sin(static_cast<double>(a))) };
     }
+
+    // Whether every endpoint of every primitive with tag t lies on the sweep, 7:30 .. 4:30 (135 .. 405 degrees).
+    bool onSweep(const Frame& f, funkgui::Tag t)
+    {
+        for (const auto& p : f.prims)
+            if (p.tag == t)
+                for (const Point q : { endA(p), endB(p) })
+                {
+                    const float a = dialAngle(kCentre, q);
+                    if (a < kStart - 1e-4f || a > kStart + kSweep + 1e-4f)
+                        return false;
+                }
+        return true;
+    }
+
+    // The hover fill's pieces: DIAL_TRACK segments 4 px wide (the track's own are 2 px).
+    std::vector<funkgui::Prim> fillOf(const Frame& f)
+    {
+        std::vector<funkgui::Prim> out;
+        for (const auto& p : f.prims)
+            if (p.tag == tags::dialTrack && p.d2[0] == 2.0f)
+                out.push_back(p);
+        return out;
+    }
+
+    bool anyEndAt(const std::vector<funkgui::Prim>& v, Point q)
+    {
+        for (const auto& p : v)
+            if (dist(endA(p), q) <= 1e-3f || dist(endB(p), q) <= 1e-3f)
+                return true;
+        return false;
+    }
+
+    // The angle a primitive's midpoint sits at, or -1 without one.
+    float angleAt(const funkgui::Prim* p, Point c = kCentre) { return p != nullptr ? dialAngle(c, mid(*p)) : -1.0f; }
 
     std::string spec(const Dial& d, size_t n = 256)
     {
@@ -568,9 +619,61 @@ int main(int argc, char** argv)
         P.eq("soft.sticks", funkgui::ease::sameBits(p.value01(), 0.25f), 1);
         d.pointerDrag(at(60 + 21.6f, kY), g);             // t 0.29: 9.6 px away
         P.near("soft.released", p.value01(), 0.29, 1e-5);
+        d.pointerDrag(at(60 + 15.9f, kY), g);             // 3.9 px past the notch: inside the 4
+        P.eq("soft.sticks_at_3.9px", funkgui::ease::sameBits(p.value01(), 0.25f), 1);
+        d.pointerDrag(at(60 + 16.1f, kY), g);             // 4.1 px past it: outside
+        P.near("soft.released_at_4.1px", p.value01(), 0.25 + 4.1 / 240.0, 1e-5);
+        d.pointerDrag(at(60 + 8.1f, kY), g);              // 3.9 px before it
+        P.eq("soft.sticks_at_3.9px_before", funkgui::ease::sameBits(p.value01(), 0.25f), 1);
+        d.pointerDrag(at(60 + 7.9f, kY), g);              // 4.1 px before it
+        P.near("soft.released_at_4.1px_before", p.value01(), 0.25 - 4.1 / 240.0, 1e-5);
         d.pointerUp(at(80, kY), g);
         P.eq("soft.discipline", p.clean(), 1);
         P.eq("soft.notch_marks", drawOf(d).count(tags::dialNotch), 3);   // the default and two soft notches
+    }
+    {
+        // the 4 px radius is inclusive: from t 0 a notch at float(1/60) is 4 px of a 240 px sweep exactly
+        EventLog log;
+        FakeHost host(log);
+        FakePort p("p", log, 0.0f);
+        const float n = 1.0f / 60.0f;
+        Spec sp;
+        sp.notches = { n };
+        Model m(sp, &p);
+        Dial d(m, kGeom, 10);
+        GestureController g(host);
+        P.eq("soft.premise_exactly_4px", std::fabs(0.0f - n) * Dial::kDragPx == 4.0f, 1);
+        d.pointerDown(at(60, kY), g, host);
+        d.pointerDrag(at(50, kY), g);                     // t 0 (clamped)
+        P.eq("soft.sticks_at_exactly_4px", funkgui::ease::sameBits(p.value01(), n), 1);
+        d.pointerUp(at(50, kY), g);
+        P.eq("soft.exact_discipline", p.clean(), 1);
+    }
+    {
+        // whatever the modifiers, the 4 px are of a 240 px sweep: under Shift (1200 px) a notch holds 0.0167 of track
+        // either side, 20 px of travel; under Cmd (6000 px) 100 px
+        EventLog log;
+        FakeHost host(log);
+        FakePort p("p", log, 0.24f);
+        Spec sp;
+        sp.notches = { 0.25f };
+        Model m(sp, &p);
+        Dial d(m, kGeom, 10);
+        GestureController g(host);
+        d.pointerDown(at(60, kY, shift()), g, host);
+        d.pointerDrag(at(84, kY, shift()), g);            // 24 px of 1200: t 0.26, 2.4 px of a 240 px sweep
+        P.eq("soft.shift_sticks", funkgui::ease::sameBits(p.value01(), 0.25f), 1);
+        d.pointerDrag(at(96, kY, shift()), g);            // 36 px: t 0.27, 4.8 px of 240
+        P.near("soft.shift_leaves", p.value01(), 0.27, 1e-5);
+        d.pointerUp(at(96, kY), g);
+        p.set(0.24f);
+        d.pointerDown(at(60, kY, cmd()), g, host);
+        d.pointerDrag(at(180, kY, cmd()), g);             // 120 px of 6000: t 0.26
+        P.eq("soft.cmd_sticks", funkgui::ease::sameBits(p.value01(), 0.25f), 1);
+        d.pointerDrag(at(240, kY, cmd()), g);             // 180 px: t 0.27
+        P.near("soft.cmd_leaves", p.value01(), 0.27, 1e-5);
+        d.pointerUp(at(240, kY), g);
+        P.eq("soft.modifiers_discipline", p.clean(), 1);
     }
 
     // ---- stepped drag: p = clamp(240/(n-1), 24, 64), commit at 0.5p + 6, one gesture, detent values only ------------
@@ -649,6 +752,25 @@ int main(int argc, char** argv)
             d.pointerUp(at(60, kY), g);
             P.eq(c.key, held && committed, 1);
         }
+    }
+    {
+        // the ghost's offset scales with the detent count: on 5 detents (pitch 60) 20 px is a third of a cell, and a
+        // cell is a fifth of the sweep
+        EventLog log;
+        FakeHost host(log);
+        FakePort p("p", log, 0.0f);
+        Model m(stepped(evenly(5)), &p);
+        Dial d(m, kGeom, 10);
+        GestureController g(host);
+        d.pointerDown(at(60, kY), g, host);
+        d.pointerDrag(at(80, kY), g);
+        const Frame ghost = drawOf(d);
+        const funkgui::Prim* gp = ghost.nth(tags::dialPointer, 0);
+        const funkgui::Prim* pp = ghost.nth(tags::dialPointer, 1);
+        P.near("step.ghost_offset_n5", gp != nullptr && pp != nullptr ? angleAt(gp) - angleAt(pp) : 0.0,
+               (20.0 / 60.0) / 5.0 * 1.5 * 3.14159265358979, 1e-3);
+        d.pointerUp(at(80, kY), g);
+        expect(P, "step.ghost_n5_no_commit", log, "b:p u1 e:p u0");
     }
 
     // ---- wheel: continuous in track space (0.025, Shift 0.005, non-smooth x4, dx when dy is 0), one burst -----------
@@ -1031,6 +1153,155 @@ int main(int argc, char** argv)
         expect(P, "hybrid2.keys_walk_the_cells", log, "b:p s:p=0 e:p b:p s:p=0.9 e:p b:p s:p=1 e:p");
         P.eq("hybrid2.spec", spec(d) == "CELLS   END STEPS L2 \xC2\xB7 L1 \xC2\xB7 H1 \xC2\xB7 H2   DRAG   SHIFT FINE   "
                                         "DBL-CLICK RESET", 1);
+        // two cells a side is the most a Dial takes (Dial.h): the cell ticks sit at 105, 125, 415 and 435 degrees, and
+        // the two outermost 20-degree cells leave 10 degrees clear at 6:00
+        const Frame cells = drawOf(d);
+        float tick[4] = { -1.0f, -1.0f, -1.0f, -1.0f };
+        for (int i = 0; i < 4; ++i)
+            tick[i] = angleAt(cells.nth(tags::detentTick, i));
+        const float deg1 = static_cast<float>(deg);
+        P.eq("hybrid2.max_two_a_side_ticks", std::fabs(tick[0] - 105.0f * deg1) < 1e-4f
+                                             && std::fabs(tick[1] - 125.0f * deg1) < 1e-4f
+                                             && std::fabs(tick[2] - 415.0f * deg1) < 1e-4f
+                                             && std::fabs(tick[3] - 435.0f * deg1) < 1e-4f, 1);
+        P.near("hybrid2.max_two_a_side_clear_at_6_00",
+               (static_cast<double>(tick[0]) - 10.0 * deg + 2.0 * 3.14159265358979) - (tick[3] + 10.0 * deg),
+               10.0 * deg, 1e-4);
+    }
+    {
+        // the low edge's commit is inclusive: from t 0 exactly (host 0.1), 17 px of travel past it holds, 18 enters
+        EventLog log;
+        FakeHost host(log);
+        FakePort p("p", log, 0.1f);
+        Model m(hybridSpec(), &p);
+        Dial d(m, kGeom, 10);
+        GestureController g(host);
+        d.pointerDown(at(100, kY), g, host);
+        d.pointerDrag(at(83, kY), g);
+        expect(P, "hybrid.low_edge_17px_holds", log, "b:p u1");
+        d.pointerDrag(at(82, kY), g);
+        expect(P, "hybrid.low_edge_18px_enters", log, "s:p=0");
+        d.pointerUp(at(82, kY), g);
+        expect(P, "hybrid.low_edge_one_gesture", log, "e:p u0");
+    }
+    {
+        // a single high cell (MAX, host 1, past the range 0 .. 0.9): the low side's rules past 4:30
+        EventLog log;
+        FakeHost host(log);
+        FakePort p("p", log, 0.9f);                      // t 1 exactly
+        Model m(hybridHiSpec(), &p);
+        Dial d(m, kGeom, 10);
+        GestureController g(host);
+        d.pointerDown(at(100, kY), g, host);
+        d.pointerDrag(at(117, kY), g);                    // 17 px past the high edge
+        expect(P, "hybrid_hi.drag_17px_holds", log, "b:p u1");
+        d.pointerDrag(at(118, kY), g);                    // 18 px: the commit, inclusive
+        expect(P, "hybrid_hi.drag_18px_enters", log, "s:p=1");
+        d.pointerDrag(at(107, kY), g);                    // 17 px back from the cell's own position (edge + 24)
+        expect(P, "hybrid_hi.drag_17px_back_holds", log, "");
+        d.pointerDrag(at(106, kY), g);                    // 18 px back: the range's high edge
+        expect(P, "hybrid_hi.drag_18px_back_leaves", log, "s:p=0.9");
+        d.pointerUp(at(106, kY), g);
+        expect(P, "hybrid_hi.drag_one_gesture", log, "e:p u0");
+
+        // a Shift toggle inside the cell re-anchors on the cell: 1 px holds, then 18 px back leaves it
+        p.set(1.0f);
+        d.pointerDown(at(100, kY), g, host);
+        d.pointerDrag(at(101, kY, shift()), g);
+        expect(P, "hybrid_hi.shift_in_the_cell_holds", log, "b:p u1");
+        d.pointerDrag(at(83, kY, shift()), g);            // 17 px back from the cell
+        expect(P, "hybrid_hi.shift_17px_back_holds", log, "");
+        d.pointerDrag(at(82, kY, shift()), g);            // 18 px back
+        expect(P, "hybrid_hi.shift_18px_back_leaves", log, "s:p=0.9");
+        d.pointerDrag(at(70, kY, shift()), g);            // 6 px under the edge at 1200 px per sweep
+        P.near("hybrid_hi.shift_fine_in_the_range", p.value01(), 0.9 * (1.0 - 6.0 / 1200.0), 1e-6);
+        d.pointerUp(at(70, kY), g);
+        log.take();
+        // and a Cmd toggle the same way
+        p.set(1.0f);
+        d.pointerDown(at(100, kY), g, host);
+        d.pointerDrag(at(101, kY, cmd()), g);
+        d.pointerDrag(at(83, kY, cmd()), g);
+        expect(P, "hybrid_hi.cmd_in_the_cell_holds", log, "b:p u1");
+        d.pointerDrag(at(82, kY, cmd()), g);
+        expect(P, "hybrid_hi.cmd_18px_back_leaves", log, "s:p=0.9");
+        d.pointerUp(at(82, kY), g);
+        log.take();
+
+        p.set(0.9f);
+        d.key(keyOf(Key::up), g);
+        d.key(keyOf(Key::up), g);                         // already the outermost cell: nothing
+        d.key(keyOf(Key::down), g);
+        expect(P, "hybrid_hi.keys_cross_the_high_edge", log, "b:p s:p=1 e:p b:p s:p=0.9 e:p");
+        d.key(keyOf(Key::home), g);
+        d.key(keyOf(Key::end), g);
+        expect(P, "hybrid_hi.home_end", log, "b:p s:p=0 e:p b:p s:p=1 e:p");
+
+        p.set(0.9f);
+        d.wheel(wheelOf(0.25f), g, 20.0);                // one discrete notch at the high edge: into MAX
+        d.wheel(wheelOf(0.25f), g, 20.1);                // the outermost cell: nothing
+        d.wheel(wheelOf(-0.25f), g, 20.2);
+        g.poll(21.0);
+        expect(P, "hybrid_hi.wheel_one_notch_crosses", log, "b:p s:p=1 s:p=0.9 e:p");
+
+        p.set(0.9f);
+        d.a11yAction(A11yAction::increment, 0, g);
+        A11yItem inCell;
+        d.tick(1.0f, false, false, false);
+        d.accessibility(inCell);
+        const Frame f = drawOf(d);
+        d.a11yAction(A11yAction::decrement, 0, g);
+        expect(P, "hybrid_hi.a11y_crosses", log, "b:p s:p=1 e:p b:p s:p=0.9 e:p");
+        P.eq("hybrid_hi.a11y_v_1_in_the_cell", inCell.v == 1.0 && inCell.help == "end steps: Max", 1);
+        P.near("hybrid_hi.cell_angle", pointerTrack(f) * kSweep + kStart,
+               kStart + kSweep + 10.0 * 3.14159265358979 / 180.0, 1e-4);
+        P.eq("hybrid_hi.no_value_arc_in_the_cell", f.count(tags::dialArc), 0);
+        P.eq("hybrid_hi.discipline", p.clean(), 1);
+    }
+    {
+        // leaving an end cell, the pointer eases back across the gap; the hover fill and the value arc stay on the
+        // sweep (FSynth 02 §14.1: the value arc runs from the sweep start to the value)
+        EventLog log;
+        FakeHost host(log);
+        FakePort p("p", log, 0.0f);                       // OFF
+        Model m(hybridSpec(), &p);
+        Dial d(m, kGeom, 10);
+        GestureController g(host);
+        for (int i = 0; i < 60; ++i)
+            d.tick(1.0f / 60.0f, true, false, false);
+        d.key(keyOf(Key::right), g);                      // to the range's low edge, t 0
+        d.tick(1.0f / 60.0f, true, false, false);
+        const Frame lo = drawOf(d);
+        P.eq("hybrid.leaving_low_cell_pointer_in_the_gap", pointerTrack(lo) < 0.0f, 1);
+        P.eq("hybrid.leaving_low_cell_arcs_on_the_sweep", onSweep(lo, tags::dialArc) && onSweep(lo, tags::dialTrack),
+             1);
+        d.a11yAction(A11yAction::decrement, 0, g);        // back in OFF, then into the range at t 0.02
+        settleFrames(d);
+        d.a11yAction(A11yAction::setValue, 0.02, g);
+        d.tick(1.0f / 60.0f, true, false, false);
+        const Frame lo2 = drawOf(d);
+        P.eq("hybrid.leaving_low_cell_into_the_range", pointerTrack(lo2) < 0.0f && onSweep(lo2, tags::dialArc)
+                                                       && onSweep(lo2, tags::dialTrack), 1);
+        settleFrames(d);
+        const Frame lo3 = drawOf(d);
+        P.eq("hybrid.arrived_arc_from_7_30", hasEnd(lo3, tags::dialArc, onCircle(kCentre, 15.0f, kStart))
+                                             && hasEnd(lo3, tags::dialArc, onCircle(kCentre, 15.0f, angleOf(0.02f))),
+             1);
+
+        FakePort q("q", log, 1.0f);                       // MAX
+        Model mh(hybridHiSpec(), &q);
+        Dial h(mh, kGeom, 11);
+        for (int i = 0; i < 60; ++i)
+            h.tick(1.0f / 60.0f, true, false, false);
+        h.key(keyOf(Key::left), g);                       // to the range's high edge, t 1
+        h.tick(1.0f / 60.0f, true, false, false);
+        const Frame hi = drawOf(h);
+        P.eq("hybrid.leaving_high_cell_pointer_in_the_gap", pointerTrack(hi) > 1.0f, 1);
+        P.eq("hybrid.leaving_high_cell_arcs_on_the_sweep", onSweep(hi, tags::dialArc) && onSweep(hi, tags::dialTrack),
+             1);
+        P.eq("hybrid.leaving_high_cell_arc_to_4_30",
+             hasEnd(hi, tags::dialArc, onCircle(kCentre, 15.0f, kStart + kSweep)), 1);
+        log.take();
     }
 
     // ---- accessibility: roles, index space, read-only, disabled, descriptions ---------------------------------------
@@ -1139,12 +1410,12 @@ int main(int argc, char** argv)
         P.near("draw.pointer_at_0_is_7_30", [&] {
             p.set(0.0f);
             d.tick(1.0f, false, false, false);
-            return dialAngle(kCentre, mid(*drawOf(d).nth(tags::dialPointer)));
+            return angleAt(drawOf(d).nth(tags::dialPointer));
         }(), a0, 1e-4);
         P.near("draw.pointer_at_1_is_4_30", [&] {
             p.set(1.0f);
             d.tick(1.0f, false, false, false);
-            return dialAngle(kCentre, mid(*drawOf(d).nth(tags::dialPointer)));
+            return angleAt(drawOf(d).nth(tags::dialPointer));
         }(), a1, 1e-4);
         P.eq("draw.focus_ring_hairlines", drawOf(d, true).count(tags::focusRing), 4);
         {
@@ -1174,7 +1445,8 @@ int main(int argc, char** argv)
         const Frame hv = drawOf(d);
         const int fillSegs = funkgui::geom::arcSegments(15.0f, a0, angleOf(0.5f), 1.0f, funkgui::geom::kArcDevicePx);
         P.eq("draw.hover_fill_under_the_track", hv.count(tags::dialTrack), fillSegs + trackSegs);
-        P.eq("draw.hover_fill_4px_accentdim", hv.nth(tags::dialTrack)->d2[0] == 2.0f
+        P.eq("draw.hover_fill_4px_accentdim", hv.nth(tags::dialTrack) != nullptr
+                                              && hv.nth(tags::dialTrack)->d2[0] == 2.0f
                                               && hv.colour(tags::dialTrack) == packed(th.accentDim), 1);
         P.eq("draw.hover_value_arc_accent", hv.colour(tags::dialArc) == packed(th.accent), 1);
         P.eq("draw.hover_value_accent", hv.colour(tags::slotValue) == packed(th.accent), 1);
@@ -1229,13 +1501,72 @@ int main(int argc, char** argv)
         Model m21(stepped(evenly(21)), &p);
         Dial d21(m21, kGeom, 13);
         P.eq("draw.step21_no_ticks", drawOf(d21).count(tags::detentTick), 0);
-        // the pointer eases onto a new detent with tau 60 ms (not a snap)
+        // the pointer eases onto a new detent with tau 60 ms (not a snap): one 1/60 s tick is ease::toward's step
         p.set(1.0f);
         d3.tick(1.0f / 60.0f, false, false, false);
-        const float moving = pointerTrack(drawOf(d3));
+        const Frame f1 = drawOf(d3);
+        const float moving = pointerTrack(f1);
         P.eq("draw.step_pointer_eases", moving > 0.5f && moving < 5.0f / 6.0f, 1);
-        P.in("draw.step_pointer_settles", settleFrames(d3), 10, 60);
+        P.near("draw.step_pointer_tau_60ms", angleAt(f1.last(tags::dialPointer)),
+               funkgui::ease::toward(angleOf(0.5f), angleOf(5.0f / 6.0f), 1.0f / 60.0f, 0.06f), 1e-5);
+        // from there the snap (1e-3 rad) lands it 22 frames later at tau 60 ms (35 at 90 ms)
+        P.in("draw.step_pointer_settles", settleFrames(d3), 21, 23);
         P.near("draw.step_pointer_arrives", pointerTrack(drawOf(d3)), 5.0 / 6.0, 1e-4);
+    }
+    {
+        // a stepped view that names no detent (detent -1): the active one is read off the track, floor(t n)
+        EventLog log;
+        FakePort p("p", log, 0.0f);
+        Spec sp = stepped(lmh());
+        sp.detentUnknown = true;
+        sp.fixedTrack = 0.84f;
+        Model m(sp, &p);
+        Dial d(m, kGeom, 10);
+        A11yItem it;
+        d.accessibility(it);
+        const Frame f = drawOf(d);
+        P.eq("draw.step_active_from_track", it.v == 2.0 && f.colour(tags::detentTick, 2) == packed(th.ink100)
+                                            && f.colour(tags::detentTick, 0) == packed(th.ink32), 1);
+        P.near("draw.step_active_from_track_pointer", pointerTrack(f), 5.0 / 6.0, 1e-4);
+        m.spec.fixedTrack = 1.0f;                         // t 1 is the last detent, not one past it
+        ++m.rev;
+        d.tick(1.0f, false, false, false);
+        d.accessibility(it);
+        P.eq("draw.step_active_from_track_at_1", it.v == 2.0, 1);
+    }
+    {
+        // bipolar is a continuous view's: a stepped view with the flag set fills from 7:30 to its active detent
+        EventLog log;
+        FakePort p("p", log, 0.0f);                       // LO: the fill runs 7:30 .. 9:00, nowhere near 12:00
+        Spec sp = stepped(lmh());
+        sp.bipolar = true;
+        Model m(sp, &p);
+        Dial d(m, kGeom, 10);
+        for (int i = 0; i < 120; ++i)
+            d.tick(1.0f / 60.0f, true, false, false);
+        const std::vector<funkgui::Prim> fill = fillOf(drawOf(d));
+        P.eq("draw.step_bipolar_fill_from_7_30", !fill.empty() && anyEndAt(fill, onCircle(kCentre, 15.0f, kStart))
+                                                 && anyEndAt(fill, onCircle(kCentre, 15.0f, angleOf(1.0f / 6.0f))), 1);
+        P.eq("draw.step_bipolar_fill_not_from_12_00", anyEndAt(fill, { 70.0f, 119.0f }), 0);
+    }
+    {
+        // a drag is under the hand: the hover chrome rises with the pointer away from the dial (hovered false)
+        EventLog log;
+        FakeHost host(log);
+        FakePort p("p", log, 0.5f);
+        Model m(Spec{}, &p);
+        Dial d(m, kGeom, 10);
+        GestureController g(host);
+        d.pointerDown(at(60, kY), g, host);
+        for (int i = 0; i < 60; ++i)
+            d.tick(1.0f / 60.0f, false, false, false);
+        const Frame f = drawOf(d);
+        P.eq("hover.drag_is_under_the_hand", d.settled() && f.colour(tags::slotValue) == packed(th.accent)
+                                             && f.colour(tags::dialArc) == packed(th.accent) && !fillOf(f).empty(), 1);
+        d.pointerUp(at(60, kY), g);
+        d.tick(1.0f / 60.0f, false, false, false);        // the next frame sees the hand gone
+        settleFrames(d);
+        P.eq("hover.drag_released", drawOf(d).colour(tags::slotValue) == packed(th.ink100), 1);
     }
     {
         // locked: a dotted track (a 1.5 px dot every 3 px of arc) and a 1 x 5 notch; derived: a hollow pointer in its
@@ -1249,10 +1580,15 @@ int main(int argc, char** argv)
         Dial l(ml, kGeom, 10);
         const Frame fl = drawOf(l);
         P.eq("draw.locked_dots", fl.count(tags::dialTrack), 24);          // k * 3 < 15 x 4.712
-        P.eq("draw.locked_dot_size", fl.nth(tags::dialTrack)->d2[0] == 0.75f, 1);
+        P.eq("draw.locked_dot_size", fl.nth(tags::dialTrack) != nullptr && fl.nth(tags::dialTrack)->d2[0] == 0.75f, 1);
         P.eq("draw.locked_notch", fl.count(tags::dialNotch), 1);
-        P.eq("draw.locked_notch_at_track",
-             std::fabs(dialAngle(kCentre, mid(*fl.nth(tags::dialNotch))) - angleOf(0.4f)) < 1e-4f, 1);
+        const funkgui::Prim* ln = fl.nth(tags::dialNotch);
+        P.eq("draw.locked_notch_at_track", std::fabs(angleAt(ln) - angleOf(0.4f)) < 1e-4f, 1);
+        // 1 x 5 centred at r 18: the segment runs r 16 .. 20, so with its round ends it spans r 15.5 .. 20.5
+        P.eq("draw.locked_notch_1x5_r15.5_to_r20.5", ln != nullptr && ln->d2[0] == 0.5f
+                                                     && std::fabs(dist(endA(*ln), kCentre) - 16.0f) < 1e-3f
+                                                     && std::fabs(dist(endB(*ln), kCentre) - 20.0f) < 1e-3f
+                                                     && ln->c0 == packed(th.ink32), 1);
         P.eq("draw.locked_no_pointer", fl.count(tags::dialPointer) + fl.count(tags::dialArc), 0);
         P.eq("draw.locked_tag_on_sub_line", fl.count(tags::slotSub), 5);
         P.eq("draw.locked_value_ink32", fl.colour(tags::slotValue) == packed(th.ink32), 1);
@@ -1324,7 +1660,7 @@ int main(int argc, char** argv)
         const Frame f = drawOf(d);
         P.eq("draw.compact_label_only", f.count(tags::slotLabel) == 5 && f.count(tags::slotValue) == 0
                                         && f.count(tags::slotSub) == 0, 1);
-        P.eq("draw.compact_label_below", f.nth(tags::slotLabel)->y0 > 130.0f, 1);
+        P.eq("draw.compact_label_below", f.nth(tags::slotLabel) != nullptr && f.nth(tags::slotLabel)->y0 > 130.0f, 1);
         const funkgui::Prim* ptr = f.nth(tags::dialPointer);
         const Point c = cg.centre();
         P.eq("draw.compact_pointer_r5_to_r13", ptr != nullptr && std::fabs(dist(endA(*ptr), c) - 6.0f) < 1e-3f
