@@ -18,7 +18,7 @@ Emscripten, on a `<canvas>`, where a WebGL2 sink draws the recorded frame in one
 
 FunkGui is the GUI of [FCompressor](https://github.com/Snipet/FCompressor). HardwareReverb, a private plugin whose GUI
 code FunkGui grew from, has moved onto it too. FunkGui is at 0.x, and its API may change between minor versions.
-Every release is an annotated tag on `main` (latest: `v0.14.0`), and [`CHANGELOG.md`](CHANGELOG.md) says what each
+Every release is an annotated tag on `main` (latest: `v0.15.0`), and [`CHANGELOG.md`](CHANGELOG.md) says what each
 release does to a consumer's golden files.
 
 ![Widgets from FunkGui's gallery: slider states, filled areas and a transfer curve, segmented selectors, latches and a focus ring](docs/images/gallery.png)
@@ -86,17 +86,18 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
   JUCE, and can capture frames. `FramePump` gives every editor in the process one clock (a display link on macOS, a
   timer on Linux) and one `bgfx::frame()` per tick. On macOS the Objective-C classes are registered at run time under
   randomised names, so two products using FunkGui in one host never collide.
-- **web** (`FunkGui::web`; Emscripten only, no JUCE): `WebHost`, `EditorHost`'s counterpart on a `<canvas>`. It runs
-  the frame clock on `requestAnimationFrame` (about 60 Hz while anything moves, 12 Hz idle, nothing while the document
-  is hidden), sizes the canvas for the UI zoom and the device pixel ratio, converts the browser's pointer, wheel and key
-  events by JUCE's rules, and serves menus (DOM elements in the request's theme) and the clipboard; it has no file
-  chooser, no IME, no file drops and no accessibility mirror. `WebHostConfig::beforeTick` (v0.14.0) is a product's
-  function called just before each tick of the Panel. `WebGlSink` draws a recorded frame with WebGL2 in one draw call,
-  from shader text generated out of the same `shaders/*.sc`, and rebuilds its resources after a context loss.
-  `installLocalStoragePrefs()` (`WebPrefs.h`) keeps the UI preferences in `localStorage`. `WebInput.h` and
-  `WebClock.h` are the input and clock rules as header-only C++, tested natively and under node. Every header is plain
-  C++ and compiles on every host; `WebHost`, `WebGlSink` and `installLocalStoragePrefs()` are defined only under
-  Emscripten. The menu and the clipboard live behind `src/web/WebServices.h`, private to the host.
+- **web** (`FunkGui::web`; Emscripten only, no JUCE): `WebHost`, `EditorHost`'s counterpart on a `<canvas>`. It runs the
+  frame clock on `requestAnimationFrame` (about 60 Hz while anything moves, 12 Hz idle, nothing while the document is
+  hidden), sizes the canvas for the UI zoom and the device pixel ratio, converts the browser's pointer, wheel and key
+  events by JUCE's rules, and serves menus (DOM elements in the request's theme) and the clipboard write (`copyText`;
+  `clipboardText` reads empty there); it has no file chooser, no IME, no file drops and no accessibility mirror.
+  `WebHostConfig::beforeTick` (v0.14.0) is a product's function called just before each tick of the Panel. `WebGlSink`
+  draws a recorded frame with WebGL2 in one draw call, from shader text generated out of the same `shaders/*.sc`, and
+  rebuilds its resources after a context loss. `installLocalStoragePrefs()` (`WebPrefs.h`) keeps the UI preferences in
+  `localStorage`. `WebInput.h` and `WebClock.h` are the input and clock rules as header-only C++, tested natively and
+  under node. Every header is plain C++ and compiles on every host; `WebHost`, `WebGlSink` and
+  `installLocalStoragePrefs()` are defined only under Emscripten. The menu and the clipboard live behind
+  `src/web/WebServices.h`, private to the host.
 - **presets** (FunkPresets): a SQLite preset store shared by every plugin instance, a preset manager with product
   hooks, and an XML preset file format. It does not depend on the GUI layers.
 - **test** (`test/Harness.h`): a header-only, JUCE-free probe harness. Spec rows are judged at once and never stored;
@@ -138,7 +139,7 @@ FetchContent_MakeAvailable(JUCE)
 # Options are normal variables set before FetchContent_MakeAvailable(FunkGui); these two are the defaults.
 set(FUNKGUI_WITH_BGFX ON)
 set(FUNKGUI_WITH_PRESETS ON)
-FetchContent_Declare(FunkGui GIT_REPOSITORY https://github.com/Snipet/FunkGui.git GIT_TAG v0.14.0)
+FetchContent_Declare(FunkGui GIT_REPOSITORY https://github.com/Snipet/FunkGui.git GIT_TAG v0.15.0)
 FetchContent_MakeAvailable(FunkGui)
 
 juce_add_plugin(MyPlugin FORMATS AU VST3 Standalone PRODUCT_NAME "My Plugin")   # plus your usual arguments
@@ -152,7 +153,7 @@ For a browser, configure with Emscripten's toolchain (`emcmake cmake …`) and n
 
 ```cmake
 set(FUNKGUI_WITH_JUCE OFF)          # the JUCE-free core; FunkGui::gpu and FunkGui::presets are not defined
-FetchContent_Declare(FunkGui GIT_REPOSITORY https://github.com/Snipet/FunkGui.git GIT_TAG v0.14.0)
+FetchContent_Declare(FunkGui GIT_REPOSITORY https://github.com/Snipet/FunkGui.git GIT_TAG v0.15.0)
 FetchContent_MakeAvailable(FunkGui)
 
 add_executable(my_ui ui.cpp)        # one module for the page: my_ui.js and my_ui.wasm
