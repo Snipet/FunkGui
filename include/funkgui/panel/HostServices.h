@@ -6,6 +6,7 @@
 #include <funkgui/core/Geometry.h>
 #include <funkgui/core/Theme.h>
 
+#include <cstdint>
 #include <functional>
 #include <span>
 #include <string>
@@ -203,5 +204,40 @@ namespace funkgui
             return false;
            #endif
         }
+
+        // ---- FSynth G1 additions. Not pure: a host written before them compiles and gets the defaults. ---------------
+
+        // Reading the clipboard: the system clipboard's plain text as UTF-8, the read beside copyText (v0.12.0); empty
+        // when it holds no text or the host cannot read it. Synchronous; message thread.
+        // EditorHost: juce::SystemClipboard (the general pasteboard on macOS; on Linux the X11 CLIPBOARD selection,
+        // then PRIMARY). HeadlessHost: its in-memory clipboard, which setClipboard() and copyText() set. A web host
+        // and the default: empty (a browser gives a page its clipboard only inside a paste event or through an
+        // asynchronous, permission-gated read), so a paste chord inserts nothing there.
+        // No hostservice bit covers the read, and services() is unchanged: a paste chord has no cell to disable, and
+        // an empty answer pastes nothing.
+        virtual std::string clipboardText() const { return {}; }
+
+        // Speech: asks the screen reader to say `text` (UTF-8). The priority is
+        // juce::AccessibilityHandler::AnnouncementPriority's: low waits until the reader is free, high interrupts it.
+        // EditorHost: juce::AccessibilityHandler::postAnnouncement, which does nothing when no assistive client runs,
+        // and nothing at all on Linux (JUCE 8.0.4 has no native accessibility there): the call compiles, runs and
+        // says nothing. HeadlessHost: appended to log.announcements. A web host and the default: nothing (a web host
+        // has no accessibility mirror). An empty text is not announced by any host.
+        enum class Announce : uint8_t { low, medium, high };
+        virtual void announce(std::string_view /*text*/, Announce = Announce::medium) {}
+
+        // Moves the screen reader's cursor to the item with this A11yItem::id (0 names no item and clears what an
+        // earlier call asked for). The keyboard focus stays where it is.
+        // EditorHost: the item's A11yBridge child takes JUCE's accessibility focus (bridge children never want
+        // keyboard focus, so the editor keeps the keys). It keeps the id as its focus target: when the item has a
+        // component and the Panel's a11yRevision() has not moved since the last bridge sync it grabs focus at once,
+        // otherwise at the end of the next sync; after any later sync that rebuilt the bridge or dropped that item's
+        // handler (or the handler of an item it is nested in) it grabs focus again, while the id is listed. An id
+        // that is not listed after a sync clears the target. So does a target whose handler, once grabbed, no longer
+        // holds JUCE's focus when a sync begins: the screen reader focused another item, and the host does not pull
+        // its cursor back. Nothing is grabbed while the editor has no window. On Linux the same code runs and no
+        // assistive technology hears of it.
+        // HeadlessHost: log.a11yFocusId and log.a11yFocusCalls. A web host and the default: nothing moves.
+        virtual void a11yFocus(uint32_t /*itemId*/) {}
     };
 }

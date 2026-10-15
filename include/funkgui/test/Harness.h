@@ -7,8 +7,8 @@
 //
 // One probe subcommand per process:
 //
-//   <exe> <layer>.<name> [--mode <key>] --golden-root <dir> --arch arm64|x86_64|wasm32 [--bless-to <dir>]
-//         [--results <dir>] [--only <glob>] [--quick] [--verbose]
+//   <exe> <layer>.<name> [--mode <key>] [--kind <kind>] --golden-root <dir> --arch arm64|x86_64|wasm32
+//         [--bless-to <dir>] [--results <dir>] [--only <glob>] [--quick] [--verbose]
 //
 //   int main(int argc, char** argv)          // (FCompressor dispatches through ProbeMain.cpp / FCMP_PROBE)
 //   {
@@ -24,7 +24,8 @@
 //   whatever the golden says. They are never stored, so blessing cannot launder them.
 // - Golden rows (num/hash/text/lines) are compared with <root>/base/<scope>/<probe>.txt merged with the overlay
 //   <root>/<arch>/<scope>/<probe>.txt; `lines` rows with the sidecar <root>/base/<scope>/<probe>.<key>.lines.
-//   <scope> is "global" or "modes/<mode>". <probe> is the name given to the constructor ("<layer>.<name>").
+//   <scope> is "global" or "modes/<mode>" (with --kind: "<kind>/<mode>"). <probe> is the name given to the
+//   constructor ("<layer>.<name>").
 // - There is no --bless. --bless-to <dir> writes the full measured row set as <dir>/<arch>/<scope>/<probe>.txt
 //   (plus <probe>.<key>.lines sidecars and, on drift, <probe>.diff), each through a temp file and rename().
 //   Only the lead's golden.py adopt moves candidates into the golden tree.
@@ -75,6 +76,17 @@
 // - --arch wasm32 (v0.12.0): a probe compiled to WebAssembly (run under node) names its architecture like any other,
 //   so its overlay is <root>/wasm32/<scope>/<probe>.txt and its candidates go to <bless-to>/wasm32/. ScopedFtz does
 //   nothing there: WebAssembly has no flush-to-zero control, and its arithmetic keeps denormals.
+// - --kind <kind> (FSynth G1; FSynth docs/design/03-build-verify-process.md §3.2.2): the first component of a Mode
+//   probe's scope, so a product with several kinds of Modes keeps their goldens apart: <kind>/<mode> in place of
+//   modes/<mode>, for the base file, the overlay, the sidecars, the candidates and the "scope=" of a candidate's
+//   header. A kind is [a-z][a-z0-9]{0,15} and not "global", the scope of the probes without a mode (global/<mode>
+//   would sit among them, and a glob such as global/* would select both). The mode is the probe's own (the
+//   constructor's): --mode stays optional and, when given, must equal it. --kind on a global probe (no mode) is a
+//   harness error, and so is a kind outside the grammar or "global". With --kind the results JSON and the RESULT
+//   line gain the member "kind":"<kind>" directly after "ms", before any note() member; "kind" joins the names
+//   note() refuses. A run without --kind is unchanged byte for byte: the scope is modes/<mode> and no "kind" member
+//   is printed (a reader takes a missing member as "modes").
+//   The results file stays <probe>.<mode>.json. Platform-neutral: the same on Linux, without JUCE and as wasm32.
 // There is no --check flag: every run compares against the golden files (v1's --check is the only mode), and
 // candidates go to --bless-to, never into the tree.
 
@@ -261,6 +273,7 @@ namespace funkgui::test
         bool loadGolden(const std::filesystem::path& p, std::vector<std::pair<std::string, Golden>>& out);
 
         std::string probe_, mode_, scope_, arch_;
+        std::string kind_;                           // --kind (FSynth G1); empty = not given: the scope is modes/<mode>
         std::filesystem::path root_, blessTo_, results_;
         std::vector<std::string> only_;
         bool quick_ = false, verbose_ = false;
@@ -338,6 +351,15 @@ namespace funkgui::test
                 return false;
             return std::all_of(m.begin(), m.end(),
                                [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'; });
+        }
+
+        // A scope kind (--kind, FSynth G1): [a-z][a-z0-9]{0,15}, and not "global" (the scope without a mode).
+        inline bool validKind(std::string_view k)
+        {
+            if (k.empty() || k.size() > 16 || !(k[0] >= 'a' && k[0] <= 'z') || k == "global")
+                return false;
+            return std::all_of(k.begin(), k.end(),
+                               [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'); });
         }
 
         // Whether v spells a non-finite number the way strtod reads one: [+-]?(inf|infinity|nan|nan(<[0-9A-Za-z_]*>)),
@@ -455,7 +477,7 @@ namespace funkgui::test
         inline bool flagTakesValue(std::string_view a) noexcept
         {
             return a == "--mode" || a == "--golden-root" || a == "--arch" || a == "--bless-to" || a == "--results"
-                || a == "--only";
+                || a == "--only" || a == "--kind";
         }
 
         // ^[a-z][a-z0-9_]{0,63}$ and not one of the standard results members.
@@ -468,7 +490,7 @@ namespace funkgui::test
                     return false;
             static constexpr std::string_view kStandard[] = { "probe", "mode", "arch", "status", "spec_pass",
                                                               "spec_fail", "golden_rows", "golden_fail", "golden_new",
-                                                              "golden_missing_rows", "ms" };
+                                                              "golden_missing_rows", "ms", "kind" };
             return std::find(std::begin(kStandard), std::end(kStandard), k) == std::end(kStandard);
         }
 
@@ -818,8 +840,8 @@ namespace funkgui::test
             harnessError("invalid mode key '" + mode_ + "'");
         scope_ = mode_.empty() ? std::string("global") : "modes/" + mode_;
 
-        std::string argMode, root;
-        bool haveMode = false, haveRoot = false, haveArch = false;
+        std::string argMode, argKind, root;
+        bool haveMode = false, haveKind = false, haveRoot = false, haveArch = false;
         for (int i = 1; i < argc; ++i)
         {
             const std::string_view a = argv[i] != nullptr ? argv[i] : "";
@@ -838,6 +860,7 @@ namespace funkgui::test
             };
             std::string v;
             if      (a == "--mode")        { if (value(argMode)) haveMode = true; }
+            else if (a == "--kind")        { if (value(argKind)) haveKind = true; }
             else if (a == "--golden-root") { if (value(root)) haveRoot = true; }
             else if (a == "--arch")        { if (value(arch_)) haveArch = true; }
             else if (a == "--bless-to")    { if (value(v)) blessTo_ = v; }
@@ -849,6 +872,23 @@ namespace funkgui::test
         }
         if (haveMode && argMode != mode_)
             harnessError("--mode " + argMode + " disagrees with the probe's mode '" + mode_ + "'");
+        // --kind (FSynth G1): the first component of a Mode probe's scope. The mode is the probe's own, so the flag
+        // needs no --mode beside it; a probe without a mode has no scope to rename.
+        if (haveKind)
+        {
+            if (mode_.empty())
+                harnessError("--kind " + argKind + " on a global probe: a kind names the scope of a probe that has a "
+                             "mode");
+            else if (argKind == "global")
+                harnessError("invalid kind 'global': it is the scope of the probes without a mode");
+            else if (!detail::validKind(argKind))
+                harnessError("invalid kind '" + argKind + "' ([a-z][a-z0-9]{0,15})");
+            else
+            {
+                kind_ = argKind;
+                scope_ = kind_ + "/" + mode_;
+            }
+        }
         if (!haveRoot)
             harnessError("--golden-root <dir> is required");
         else
@@ -1363,6 +1403,8 @@ namespace funkgui::test
                  + ",\"golden_new\":" + std::to_string(goldenNew)
                  + ",\"golden_missing_rows\":" + std::to_string(goldenMissingRows)
                  + ",\"ms\":" + std::to_string(ms);
+            if (!kind_.empty())                                        // FSynth G1: only with --kind
+                o += ",\"kind\":" + detail::jsonString(kind_);
             for (const auto& [key, value] : notes_)
                 o += ",\"" + key + "\":" + value;
             return o + "}";

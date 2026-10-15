@@ -3,6 +3,78 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.15.0 — 2026-10-15 · MINOR: curves, drag cursors, the clipboard read and paste, drags in steps, roles for graphs and tables, scope kinds
+
+Golden impact: **none** on existing rows on macOS with JUCE and in the JUCE-free core, natively and as wasm32 under node
+(every existing `fg.gallery.*`, `fg.shader.hash`, `fg.shader.web`, `fg.font.probe`, `fg.font.baked` and `fg.a11yline`
+unchanged); Linux x86-64 with JUCE: not run (the run was waived for this tag on 2026-10-15; the Linux sources are
+reviewed, not built). New rows: `fg.gallery.curves` (22, and 1 a11y line file, empty) and `fg.gallery.a11ytable` (82,
+and 3 a11y line files), byte for byte the same files on macOS, natively without JUCE and as wasm32. New tests:
+`fg.canvas.curves`, `fg.headless.press`, `fg.clipboard`, `fg.lineedit.paste`, `fg.a11y.roles`, `fg.announce`,
+`fg.gallery.curves`, `fg.gallery.a11ytable` (JUCE-free: every preset, and wasm32 under node); `fg.editorhost.cursor`
+(gpu; one name, a macOS file and a Linux file); `fg.a11ybridge.table` (gpu, macOS only). `fg.web.input` gains 4 rows,
+`fg.harness.self` 49, `fg.golden.self` 26; `fg.gallery.live` (live, never in `verify`) gains the cases `curves` and
+`a11ytable_open`. Additive, with the exceptions under **Consumers**: FCompressor a5fe769 passed its agent, agent-gui and
+web gates against it unchanged. (FSynth card G1.)
+
+- **Curves** (`funkgui/core/Flatten.h`; `Canvas::arc`, `arcDotted`, `cubic`): `geom::flattenCubic`, `arcSegments`,
+  `flattenArc`, `cubicAt` and `distToPolyline`, pure functions with no state and no allocation, and the constants
+  `geom::kFlattenDevicePx` (0.6), `kArcDevicePx` (0.1) and `kMaxCurvePoints` (129). `arc` and `cubic` flatten their
+  curve at the frame's dpi to the chord error in device px given as their last argument (by default `kArcDevicePx`
+  for `arc`, `kFlattenDevicePx` for `cubic`), at most 128 pieces a call; a tolerance that is not > 0 records nothing.
+  `arcDotted` takes no tolerance: a round dot every `stepPx` of arc length from `a0` (a dot) towards `a1` (none), each
+  centred on the circle itself. All three record capsule segments through `polyline()`: no new primitive, shader or
+  dump field, and the colour must be opaque (`premix()` it). Sines, cosines and the arc cosine are taken in double and
+  rounded to float once, so macOS and wasm32 record the same points (the new rows above); Linux: not run (waived).
+- **Cursors** `grab`, `grabbing`, `copy`, `notAllowed`, appended to `funkgui::Cursor` (the first five keep their
+  numbers). `EditorHost`: JUCE's dragging hand for `grab` and its copy cursor for `copy`; on macOS the system's closed
+  hand and not-allowed sign, made once per process while any editor lives; **on Linux `grabbing` is the same hand as
+  `grab` and `notAllowed` the normal arrow** (JUCE reaches neither there), so a refusal must also show in what is
+  drawn. `WebHost`: the CSS cursors `grab`, `grabbing`, `copy`, `not-allowed`. `HeadlessHost::cursor()` reports the
+  Panel's.
+- **`HostServices::clipboardText()`**, the read beside `copyText` (synchronous, message thread; empty when the
+  clipboard holds no text): `EditorHost` reads `juce::SystemClipboard` (on Linux the X11 CLIPBOARD selection, then
+  PRIMARY); `HeadlessHost` reads an in-memory clipboard that `setClipboard()` and `copyText()` fill; **`WebHost` and
+  the default read empty**, so a paste on a web host inserts nothing. No `hostservice` bit; `services()` is unchanged.
+  `text::LineEdit::paste(text, maxLength)` inserts the text at the caret, line breaks and tabs as spaces and the rest
+  made printable as `printable()` does, cut to `maxLength`; while the buffer is all selected it replaces it; nothing
+  inserted returns false and changes nothing. `key()` never pastes: the Panel calls `paste` with `clipboardText()` on
+  its command-V chord.
+- **`HeadlessHost::press`, `moveTo`, `release`**: a drag in steps, so a probe can draw a frame half-way; together they
+  send `drag()`'s events bit for bit. Also `pressed()`, `pointer()`, `dropFiles(paths, x, y)` (EditorHost's file-drag
+  sequence; `log.drops`), `setClipboard()` and `cursor()`. `click()`, `doubleClick()` and `drag()` release a press left
+  open before their own events.
+- **Accessibility for graphs and tables**: six roles as constants of `A11yRole`, `funkgui::a11yrole::{group, list,
+  table, row, cell, editableText}` (values 10 to 15; not enumerators, so a consumer's switch over the ten enumerators
+  still compiles: compare them with `==`), and `A11yItem::rows`, `cols`, `row`, `col` (appended), which `a11yDumpLine`
+  prints only when set, so no existing dump line moves. `HostServices::announce(text, priority)`
+  (`HostServices::Announce::{low, medium, high}`, default `medium`) and `HostServices::a11yFocus(itemId)` (0 clears):
+  `EditorHost` posts the announcement through `juce::AccessibilityHandler::postAnnouncement` (nothing without an
+  assistive client) and gives the item's bridge child JUCE's accessibility focus, keeping it as the focus target
+  across bridge syncs until the screen reader moves elsewhere or the item goes; `HeadlessHost` logs both
+  (`log.announcements`, `log.a11yFocusId`, `log.a11yFocusCalls`); `WebHost` and the default do nothing. On Linux the
+  same JUCE calls run and nothing is spoken or heard (JUCE 8.0.4 has no native accessibility there). `A11yBridge`: the
+  six JUCE roles, a table interface over the item's `rows` and `cols` with the rows and cells listed, a cell interface
+  on a table's rows and cells, a read-only text value on every `editableText` item (an empty one too, so typing keeps
+  its handler), and `handlerEpoch(id)`.
+- **Harness `--kind <kind>`** and `golden.py` kinds: a Mode probe's scope becomes `<kind>/<mode>` for its goldens,
+  overlays, sidecars and candidates; without the flag it is `modes/<mode>` as before, and nothing moves. A kind is
+  `[a-z][a-z0-9]{0,15}` and never `global`; `--kind` on a probe without a mode is a harness error. With the flag the
+  results and the RESULT line gain `"kind"` directly after `"ms"`; the results file is still `<probe>.<mode>.json`.
+  `golden.py` reads results without `"kind"` as `modes`, takes `--only` globs such as `<kind>/*/<probe>`, and `adopt`
+  refuses a candidate whose results were written for another scope, and any scope that is not `global` or
+  `<kind>/<key>`.
+- **Consumers:** a `switch` over `funkgui::Cursor` that names the five v0.14.0 values and has no `default` now fails
+  `-Wswitch` under `-Werror` (FCompressor and HardwareReverb have none). `Probe::note("kind", …)` is now a harness
+  error, as for the other standard members. A `HostServices` that forwards to another (FCompressor's
+  `Panel::HostProxy`) must forward `clipboardText`, `announce` and `a11yFocus`, or its Panel gets the defaults (an
+  empty clipboard, nothing spoken or focused). `EditorHost` and `HeadlessHost` override `announce` without the default
+  priority: call it through `HostServices&` or pass the priority.
+- Apple-only files: `src/gpu/Cursors.mm`, `test/unit/editorhost_cursor.mm`, `test/unit/a11ybridge_table.mm`.
+  Linux-only: `src/gpu/linux/Cursors.cpp`, `test/unit/editorhost_cursor_linux.cpp`. Run on macOS arm64 with and
+  without JUCE, as wasm32 under node, and in Chrome on macOS (the `index`, `host` and `services` pages, which draw both
+  new sections); Linux x86-64: not run (waived, 2026-10-15).
+
 ## v0.14.0 — 2026-10-02 · MINOR: a hook before each tick of a web host
 
 Golden impact: **none**. No new test: `fg.web.host` (the `web` preset, live) gains 15 claims. Additive: nothing a JUCE

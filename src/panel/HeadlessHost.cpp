@@ -51,12 +51,23 @@
 //   host goes can reach one. Mode::save's extension rule is JUCE's File::hasFileExtension and withFileExtension, as
 //   EditorHost applies them: a path that does not end in the extension (ASCII case ignored) loses what follows the
 //   last '.' of its file name and gains the extension.
+// - FSynth G1 (press, moveTo, release, dropFiles, the clipboard, speech, the screen reader's focus). Every pointer
+//   and wheel call notes the last position it sent, which is where moveTo starts and release ends. moveTo's points
+//   are drag()'s: start + (end - start) * (k / steps), and the end itself for the last, so a split drag sends the
+//   atomic drag's events bit for bit. A press's popup flag is its ctrl, as click()'s, and its drags and its release
+//   carry the press's Mods. click(), doubleClick() and drag() first release a press left open (release(): its
+//   pointerUp at pointer(), with its Mods), so the Panel never sees two pointerDowns without a pointerUp between
+//   them; move() and wheel() leave it open and send what they always sent. dropFiles sends EditorHost's sequence
+//   for an accepted drag (enter, move, drop, all at the drop position) and nothing for a refused one. copyText
+//   keeps its log and also fills the in-memory clipboard that clipboardText() answers.
+//   announce() logs every text that is not empty, whatever its priority (an empty one is what EditorHost does not
+//   post either); a11yFocus() logs every call, id 0 included.
 
 namespace funkgui
 {
     namespace
     {
-        PointerEvent pointer(float x, float y, Mods m, int clicks)
+        PointerEvent pointerAt(float x, float y, Mods m, int clicks)
         {
             PointerEvent e;
             e.x = x;
@@ -255,12 +266,16 @@ namespace funkgui
 
     void HeadlessHost::move(float x, float y)
     {
-        panel_.pointerMove(pointer(x, y, {}, 1));
+        pointer_ = { x, y };
+        panel_.pointerMove(pointerAt(x, y, {}, 1));
     }
 
     void HeadlessHost::click(float x, float y, Mods m)
     {
-        const PointerEvent e = pointer(x, y, m, 1);
+        if (pressed_)
+            release();                                   // an open press ends first, as press() ends one
+        const PointerEvent e = pointerAt(x, y, m, 1);
+        pointer_ = { x, y };
         panel_.pointerMove(e);
         panel_.pointerDown(e);
         panel_.pointerUp(e);
@@ -268,7 +283,10 @@ namespace funkgui
 
     void HeadlessHost::doubleClick(float x, float y, Mods m)
     {
-        const PointerEvent one = pointer(x, y, m, 1), two = pointer(x, y, m, 2);
+        if (pressed_)
+            release();
+        const PointerEvent one = pointerAt(x, y, m, 1), two = pointerAt(x, y, m, 2);
+        pointer_ = { x, y };
         panel_.pointerMove(one);
         panel_.pointerDown(one);
         panel_.pointerUp(one);
@@ -279,7 +297,9 @@ namespace funkgui
 
     void HeadlessHost::drag(float x0, float y0, float x1, float y1, int steps, Mods m)
     {
-        const PointerEvent start = pointer(x0, y0, m, 1);
+        if (pressed_)
+            release();
+        const PointerEvent start = pointerAt(x0, y0, m, 1);
         panel_.pointerMove(start);
         panel_.pointerDown(start);
         const int n = steps < 1 ? 1 : steps;
@@ -288,14 +308,16 @@ namespace funkgui
             const float t = static_cast<float>(k) / static_cast<float>(n);
             const float x = k == n ? x1 : x0 + (x1 - x0) * t;
             const float y = k == n ? y1 : y0 + (y1 - y0) * t;
-            panel_.pointerDrag(pointer(x, y, m, 1));
+            panel_.pointerDrag(pointerAt(x, y, m, 1));
         }
-        panel_.pointerUp(pointer(x1, y1, m, 1));
+        panel_.pointerUp(pointerAt(x1, y1, m, 1));
+        pointer_ = { x1, y1 };
     }
 
     void HeadlessHost::wheel(float x, float y, float dy, bool smooth, Mods m)
     {
-        panel_.pointerMove(pointer(x, y, m, 1));
+        pointer_ = { x, y };
+        panel_.pointerMove(pointerAt(x, y, m, 1));
         WheelEvent w;
         w.x = x;
         w.y = y;
@@ -303,6 +325,63 @@ namespace funkgui
         w.smooth = smooth;
         w.mods = m;
         panel_.wheel(w);
+    }
+
+    // ---- FSynth G1: a drag in steps, file drops ---------------------------------------------------------------------
+
+    void HeadlessHost::press(float x, float y, Mods m)
+    {
+        if (pressed_)
+            release();                                   // a second press while pressed releases first
+        const PointerEvent e = pointerAt(x, y, m, 1);
+        pointer_ = { x, y };
+        pressMods_ = m;
+        pressed_ = true;
+        panel_.pointerMove(e);
+        panel_.pointerDown(e);
+    }
+
+    void HeadlessHost::moveTo(float x, float y, int steps)
+    {
+        // drag()'s points: start + (end - start) * (k / n), and the end itself for the last.
+        const float x0 = pointer_.x, y0 = pointer_.y;
+        const Mods m = pressed_ ? pressMods_ : Mods{};
+        const int n = steps < 1 ? 1 : steps;
+        for (int k = 1; k <= n; ++k)
+        {
+            const float t = static_cast<float>(k) / static_cast<float>(n);
+            const float px = k == n ? x : x0 + (x - x0) * t;
+            const float py = k == n ? y : y0 + (y - y0) * t;
+            pointer_ = { px, py };
+            if (pressed_)
+                panel_.pointerDrag(pointerAt(px, py, m, 1));
+            else
+                panel_.pointerMove(pointerAt(px, py, m, 1));
+        }
+    }
+
+    void HeadlessHost::release()
+    {
+        if (!pressed_)
+            return;
+        pressed_ = false;
+        panel_.pointerUp(pointerAt(pointer_.x, pointer_.y, pressMods_, 1));
+    }
+
+    bool HeadlessHost::dropFiles(std::vector<std::string> paths, float x, float y)
+    {
+        ++log.drops;
+        if (!panel_.filesInterest(paths))
+            return false;                                // refused: the Panel hears nothing more of it
+        panel_.filesDragEnter(paths, x, y);
+        panel_.filesDragMove(x, y);
+        panel_.filesDropped(paths);
+        return true;
+    }
+
+    Cursor HeadlessHost::cursor() const
+    {
+        return panel_.cursor();
     }
 
     void HeadlessHost::keys(const char* spec)
@@ -459,7 +538,32 @@ namespace funkgui
     {
         ++log.copies;
         log.lastCopy.assign(utf8);
+        clipboard_.assign(utf8);                         // FSynth G1: what clipboardText() now answers
         return true;
+    }
+
+    // ---- FSynth G1: the clipboard read, speech, the screen reader's focus -------------------------------------------
+
+    void HeadlessHost::setClipboard(std::string text)
+    {
+        clipboard_ = std::move(text);
+    }
+
+    std::string HeadlessHost::clipboardText() const
+    {
+        return clipboard_;
+    }
+
+    void HeadlessHost::announce(std::string_view text, Announce)
+    {
+        if (!text.empty())
+            log.announcements.emplace_back(text);
+    }
+
+    void HeadlessHost::a11yFocus(uint32_t itemId)
+    {
+        ++log.a11yFocusCalls;
+        log.a11yFocusId = itemId;
     }
 
     bool HeadlessHost::commandKeyIsMeta() const { return commandKeyIsMeta_; }

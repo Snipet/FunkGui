@@ -38,5 +38,14 @@ namespace funkgui
         char32_t ch = 0;                         // the character, for Key::character
     };
 
-    enum class Cursor : uint8_t { normal, leftRight, upDown, pointingHand, crosshair };
+    // What Panel::cursor() asks its host to show. The last four are FSynth G1's, appended: the first five keep their
+    // numbers. grab: an open hand over something that can be picked up. grabbing: the closed hand while it is carried.
+    // copy: a drop here adds (an arrow with a plus). notAllowed: a drop here is refused.
+    // EditorHost on macOS shows the system's cursors for all four. EditorHost on Linux shows JUCE's own hand for grab
+    // and for grabbing and its arrow-with-plus for copy, and keeps the normal arrow for notAllowed (JUCE reaches no
+    // closed-hand or not-allowed cursor there), so a refusal must also show in what is drawn. A web host shows the
+    // CSS cursors grab, grabbing, copy and not-allowed. HeadlessHost shows nothing and reports the value
+    // (HeadlessHost::cursor()).
+    enum class Cursor : uint8_t { normal, leftRight, upDown, pointingHand, crosshair,
+                                  grab, grabbing, copy, notAllowed };
 }

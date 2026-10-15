@@ -13,6 +13,7 @@
 #include <funkgui/canvas/Prim.h>
 #include <funkgui/canvas/PrimList.h>
 #include <funkgui/core/Col.h>
+#include <funkgui/core/Flatten.h>                    // FSynth G1: the curves' default tolerances
 #include <funkgui/core/Geometry.h>
 #include <funkgui/text/FontAtlasSdf.h>
 #include <funkgui/text/TextStyle.h>
@@ -104,6 +105,33 @@ namespace funkgui
 
         float dpi() const;
         int   missingGlyphs() const;                   // this frame's codepoints not in the atlas
+
+        // ---- FSynth G1 additions: curves as runs of capsule segments (src/canvas/CanvasCurves.cpp) -------------------
+        // Flattened with geom:: (core/Flatten.h) at the frame's dpi() and recorded through polyline(), so there is no
+        // new primitive kind, shader, dump field or SoftRaster branch, and BgfxSink and WebGlSink draw them as they
+        // draw any segment. The colour must be opaque (premix() it over the ground): translucent capsules bead where
+        // their ends overlap, as polyline() says. Angles are radians, 0 = +x, increasing clockwise on screen.
+        // The last argument of arc and cubic, tolDevicePx, is the largest chord error in device px (how far a chord may
+        // stray from its curve), turned into logical px by dpi(): rings default to geom::kArcDevicePx (0.1), cables to
+        // geom::kFlattenDevicePx (0.6). A finer tolerance records more, shorter pieces, at most
+        // geom::kMaxCurvePoints - 1 per call. A tolerance that is not > 0 (or is NaN) records nothing. arcDotted
+        // records no chords and takes no tolerance.
+        // On Linux, without JUCE and on a web host: the same source and the same primitives (platform-neutral).
+        //
+        // arc: geom::arcSegments(r, a0, a1, dpi(), tolDevicePx) capsules of `width` along the circle of radius r, from
+        // a0 to a1. A radius or a width that is not > 0 records nothing; no sweep records one zero-length capsule, a
+        // round dot.
+        void arc(Point centre, float r, float a0, float a1, float width, Col opaque,
+                 float tolDevicePx = geom::kArcDevicePx);
+        // arcDotted: one round dot (a zero-length capsule of diameter dotW) every stepPx of arc length, from a0
+        // towards a1: at the lengths k * stepPx for every k with k * stepPx < r * |a1 - a0| (the half-open arc, as
+        // dotted()'s track), so a0 always carries a dot when the arc has any length and a1 never does. A radius, a
+        // step or a dot width that is not > 0 records nothing; at most 4096 dots. Each dot's centre is placed on the
+        // circle itself (sine and cosine in double), so the dots do not depend on dpi().
+        void arcDotted(Point centre, float r, float a0, float a1, float stepPx, float dotW, Col opaque);
+        // cubic: the Bezier p[0..3] as geom::flattenCubic's pieces at dpi() and tolDevicePx, capsules of `width`. A
+        // null p or a width that is not > 0 records nothing.
+        void cubic(const Point p[4], float width, Col opaque, float tolDevicePx = geom::kFlattenDevicePx);
 
     protected:
         // Appends one Prim stamped with the current tag and live flag and with d2[2] = kind (K3 #16): the HR

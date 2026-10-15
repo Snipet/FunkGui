@@ -128,6 +128,13 @@ namespace funkgui
             part("help=");
             appendOneLine(tail, item.help);
         }
+        // FSynth G1: the table fields, each only when set, so an item without them prints the line it always did.
+        if (item.rows > 0 || item.cols > 0)
+            part(("table=" + std::to_string(item.rows) + "x" + std::to_string(item.cols)).c_str());
+        if (item.row >= 0)
+            part(("row=" + std::to_string(item.row)).c_str());
+        if (item.col >= 0)
+            part(("col=" + std::to_string(item.col)).c_str());
 
         if (tail.empty())
         {

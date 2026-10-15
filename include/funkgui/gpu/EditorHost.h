@@ -39,6 +39,18 @@
 // panel->closeGestures(), setUiAttached(false), FramePump::remove, detachSurface(), then the A11yBridge children, then
 // the Panel. A product's Panel stops its own workers in its destructor or in the derived editor's (02 §5.1).
 //
+// FSynth G1, additive (HostServices.h and panel/Input.h hold the contracts):
+// - Cursors: Panel::cursor() may answer grab, grabbing, copy and notAllowed. grab and copy are JUCE's
+//   DraggingHandCursor and CopyingCursor. grabbing and notAllowed are the system's closed hand and not-allowed sign
+//   on macOS, made once and shared by every editor of the process; on Linux they are JUCE's DraggingHandCursor and
+//   NormalCursor, the stated fallback (src/gpu/Cursors.h).
+// - clipboardText(): juce::SystemClipboard, on both platforms.
+// - announce(): juce::AccessibilityHandler::postAnnouncement. Nothing is spoken on Linux, where JUCE 8.0.4 has no
+//   native accessibility and defines the call empty.
+// - a11yFocus(): the item's A11yBridge child takes JUCE's accessibility focus, and the editor keeps the id as its
+//   focus target across bridge syncs (HostServices.h says when it grabs again and when it lets go). On Linux the same
+//   code runs: JUCE moves its own focused-handler pointer and no assistive technology hears of it.
+//
 // Message thread only.
 
 #include <funkgui/canvas/Canvas.h>
@@ -65,6 +77,7 @@
 namespace funkgui
 {
     class HostServicesJuce;                          // Web Sprint B: src/gpu/HostServicesJuce.h
+    struct EditorCursors;                            // FSynth G1: src/gpu/Cursors.h
 
     struct EditorConfig
     {
@@ -156,6 +169,10 @@ namespace funkgui
         void   dismissMenus() override;
         bool   chooseFiles(const FileRequest&, FilesCallback) override;   // a native juce::FileChooser on this editor
         bool   copyText(std::string_view utf8) override;                  // juce::SystemClipboard
+        // FSynth G1 (HostServices.h): the clipboard read, speech and the screen reader's focus.
+        std::string clipboardText() const override;  // juce::SystemClipboard, through HostServicesJuce
+        void   announce(std::string_view text, Announce priority) override;   // AccessibilityHandler::postAnnouncement
+        void   a11yFocus(uint32_t itemId) override;  // the bridge child's grabFocus(), kept as the focus target
 
         class ParentWatcher;                         // G7b: followPlacement() on an ancestor's move (EditorHost.cpp)
 
@@ -171,6 +188,7 @@ namespace funkgui
         bool   writeCanvasDump(const PrimList&) const;  // dump v2, written beside the path and renamed onto it
         void   onOverflow();
         void   updateCursor();
+        void   grabA11yFocus();                      // FSynth G1: JUCE's focus to the target's handler, if it has one
         void   gpuLog(const juce::String&) const;
         PointerEvent pointer(const juce::MouseEvent&) const;
 
@@ -230,6 +248,15 @@ namespace funkgui
         int   zoomTarget_ = 100;                     // what the next frame applies: HostServices::zoomPercent()
         int   zoomApplied_ = 100;                    // what the editor is sized and drawn at: Diagnostics
         float zoomScale_ = 1.0f;                     // zoomApplied_ / 100: editor px per logical px
+
+        // FSynth G1: the screen reader's focus target (a11yFocus), kept across bridge syncs. 0 = none. `Grabbed` says
+        // the target's handler was given JUCE's focus, so a later sync can tell a target the screen reader left (it
+        // is dropped) from one whose handler the sync replaced (it is grabbed again).
+        uint32_t a11yFocusTarget_ = 0;
+        bool     a11yFocusGrabbed_ = false;
+
+        // FSynth G1: this editor's share of the cursors JUCE has no standard type for (src/gpu/Cursors.h).
+        std::unique_ptr<EditorCursors> cursors_;
 
         // Web Sprint B: the menus, the chooser and their pending callbacks. ~EditorHost lets them go before anything
         // else, and so does an editor that leaves its window (parentHierarchyChanged with no peer).
