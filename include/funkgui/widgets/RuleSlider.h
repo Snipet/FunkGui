@@ -35,6 +35,7 @@
 #include <funkgui/a11y/A11yItem.h>
 #include <funkgui/core/Geometry.h>
 #include <funkgui/panel/Input.h>
+#include <funkgui/widgets/ModOverlay.h>                  // FSynth G2
 #include <funkgui/widgets/ValueModel.h>
 
 #include <cstddef>
@@ -118,6 +119,20 @@ namespace funkgui
         static constexpr float kEndCell    = 16.0f;    // hybrid end cell width (02 §8.1)
         static constexpr float kEndGap     = 4.0f;     // gap between the end cells and the continuous part
 
+        // ---- FSynth G2 additions: the modulation band ---------------------------------------------------------------
+        // A 2 px band at trackY()+6 from lo to hi (signal; ink16 when inert; the edited route's band in accent while
+        // editing) and a 1 x 5 live tick at `live` when liveValid. Nothing is drawn, and nothing moves, while the
+        // overlay is null or has no routes, so every frame a RuleSlider drew before G2 is unchanged.
+        // (FSynth 02 §4.1, §14.1.) Track space maps onto the drawn track as the caret's does: x + t * w, or the
+        // continuous part between a hybrid's end cells. A band narrower than 2 px is drawn 2 px wide, centred, so a
+        // route at depth 0 is seen. The live tick runs from trackY()+5 to +10 and is a live primitive (MOD_DOT) drawn
+        // only when liveValid and not inert. The overlay is kept as ModOverlay.h says (a copy, re-read when its key
+        // changes; settled() is false until then). The cursor is grab over bandContains() when the overlay has routes
+        // and the view is continuous or stepped, and the a11y description gains "modulated by <n> route(s)".
+        // Linux, the JUCE-free builds and a web host: the same code and the same primitives.
+        void setMod(const ModOverlay*);
+        bool bandContains(Point) const;                 // {x, trackY()+3, w, 8}: a product's depth drag
+
     private:
         // Private state: completed by the implementing card (G5); not part of the frozen API.
         enum class Drag : uint8_t { none, continuous, stepped, label, hybrid };
@@ -179,5 +194,13 @@ namespace funkgui
         int   armedLabel_ = -1;                        // detent label armed by pointer down
         float wheelAcc_ = 0.0f;                        // smooth wheel accumulation (stepped, hybrid cells and edges)
         double wheelLast_ = -1.0;                      // nowSec of the last wheel event
+
+        // FSynth G2: the modulation band.
+        float bandX(float t) const noexcept;           // track position -> x on the drawn track
+        void  drawMod(Canvas&, const Theme&) const;    // the band, the edited band and the live tick
+
+        const ModOverlay* mod_ = nullptr;
+        ModOverlay        modView_{};                  // the sanitised copy of *mod_ (routes 0 when mod_ is null)
+        bool              modValid_ = false;           // modView_ holds *mod_ as of modView_.key
     };
 }
