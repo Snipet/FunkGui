@@ -38,6 +38,13 @@ namespace funkgui
         inline constexpr Tag modBand      = 18;   // MOD_BAND      a modulation band: a dial's ring, a slider's band
         inline constexpr Tag modDot       = 19;   // MOD_DOT       the live modulated value (live)
 
+        // ---- TextEditor additions (widgets/TextEditor.h) ------------------------------------------------------------
+        inline constexpr Tag editFrame    = 20;   // EDIT_FRAME    an editor's box, its gutter rule and its scrollbars
+        inline constexpr Tag editGutter   = 21;   // EDIT_GUTTER   its line numbers
+        inline constexpr Tag editText     = 22;   // EDIT_TEXT     its text (the placeholder too) and underlines
+        inline constexpr Tag editSelect   = 23;   // EDIT_SELECT   its selection and the caret row's band
+        inline constexpr Tag editCaret    = 24;   // EDIT_CARET    its caret
+
         inline constexpr Tag lastFunkGui  = 255;  // FunkGui's range is 1..lastFunkGui
         inline constexpr Tag firstProduct = 256;  // a product's tags start here
     }
@@ -58,6 +65,9 @@ namespace funkgui
         // FSynth G2
         { tags::dialTrack, "DIAL_TRACK" },   { tags::dialArc, "DIAL_ARC" },     { tags::dialPointer, "DIAL_POINTER" },
         { tags::dialNotch, "DIAL_NOTCH" },   { tags::modBand, "MOD_BAND" },     { tags::modDot, "MOD_DOT" },
+        // TextEditor
+        { tags::editFrame, "EDIT_FRAME" },   { tags::editGutter, "EDIT_GUTTER" }, { tags::editText, "EDIT_TEXT" },
+        { tags::editSelect, "EDIT_SELECT" }, { tags::editCaret, "EDIT_CARET" },
     };
 
     // A product's tag names (tags >= tags::firstProduct), registered once before the first dump is written or parsed;

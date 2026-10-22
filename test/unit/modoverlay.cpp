@@ -307,8 +307,9 @@ int main(int argc, char** argv)
                            && is(funkgui::tagName(tags::modDot), "MOD_DOT"), 1);
         P.eq("tags.round_trip", funkgui::tagFromName("DIAL_TRACK") == tags::dialTrack
                                 && funkgui::tagFromName("MOD_DOT") == tags::modDot, 1);
-        P.eq("tags.hint_unchanged_20_unnamed", is(funkgui::tagName(tags::hint), "HINT")
-                                               && funkgui::tagName(20) == nullptr, 1);
+        // TextEditor (widgets/TextEditor.h) took 20 to 24 after this card: the first free tag is now 25.
+        P.eq("tags.hint_unchanged_next_unnamed", is(funkgui::tagName(tags::hint), "HINT")
+                                                 && funkgui::tagName(25) == nullptr, 1);
     }
 
     // ---- the dial: nothing without routes, the frame unchanged primitive for primitive -----------------------------
