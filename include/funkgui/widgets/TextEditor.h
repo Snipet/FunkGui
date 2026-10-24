@@ -60,12 +60,14 @@
 //
 // Drawing (tags EDIT_FRAME, EDIT_GUTTER, EDIT_TEXT, EDIT_SELECT, EDIT_CARET): a 1 px ink16 frame with 2 px corners;
 // line numbers right-aligned in ink32 (the caret's line ink70) on the first row of each line, with an ink16 rule; the
-// caret's row banded in ink16 while focused (highlightLine); the selection in accentDim (ink16 while not focused),
-// a space width past a line end when the selection crosses it; the text; a 1.5 px accent caret while focused (and,
-// with blinkCaret, in the first half of each blinkPeriod, which tick() advances: at a host's idle rate, as it needs
-// no full rate); the placeholder in ink32 while the text is empty; 4 px ink32 scrollbars (ink52 while dragged) at
-// the right and the bottom while the text overflows; and the focus ring around the bounds when asked. Everything
-// that scrolls is clipped to the box (Canvas::pushClip), so only the rows in view are recorded.
+// caret's line banded in ink16 while focused (highlightLine; every row of it when it wraps); the selection in
+// accentDim (ink16 while not focused), a space width past a line end when the selection crosses it; the text; a
+// 1.5 px accent caret while focused (and, with blinkCaret, in the first half of each blinkPeriod, which tick()
+// advances: at a host's idle rate, as it needs no full rate); the placeholder in ink32 while the text is empty; 4 px
+// ink32 scrollbars (ink52 while dragged) at the right and the bottom while the text overflows; and the focus ring
+// around the bounds when asked. Everything
+// that scrolls is clipped to the box (Canvas::pushClip), so only the rows in view are recorded, and what scrolls
+// sideways (the band, the selection, the text, the caret) is cut again at the gutter's edge, clear of the numbers.
 //
 // Accessibility: one editableText item (a11yrole::editableText), its value the whole text, its description the
 // caret's line and column (1-based) and the selection's length.
@@ -130,7 +132,7 @@ namespace funkgui
         bool        wordWrap = false;                    // rows break at the box's width (after a blank when one fits)
         bool        readOnly = false;
         bool        autoIndent = true;                   // Return copies the line's leading blanks
-        bool        highlightLine = true;                // the caret's row banded while focused
+        bool        highlightLine = true;                // the caret's line banded while focused
         bool        blinkCaret = false;                  // the caret blinks while focused (tick() drives it)
         float       blinkPeriod = 1.0f;                  // seconds, on for the first half
         float       padding = 6.0f;                      // between the frame (and the gutter) and the text
@@ -297,6 +299,7 @@ namespace funkgui
         bool    eraseForward(bool word, bool toRowEnd);
 
         // drawing
+        void    drawLineNumber(Canvas&, const Theme&, int row, float rowTop) const;
         void    drawRow(Canvas&, const Theme&, int row, float rowTop) const;
 
         TextEditorOptions        options_;

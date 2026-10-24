@@ -31,6 +31,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -1000,6 +1001,32 @@ namespace
         P.eq("draw.empty_box_nothing", f.host.draw().prims.empty(), 1);
         e.setBounds({ 0.0f, 0.0f, 10.0f, 10.0f });
         P.eq("draw.tiny_box_frame_only", countTag(f.host.draw(), tags::editText), 0);
+
+        // Scrolled sideways, what scrolls is cut at the gutter's edge: nothing runs over the line numbers.
+        Fixture g;
+        TextEditor& h = g.ed();
+        h.setText("a line long enough to scroll the box sideways when the caret goes to its far end\nb");
+        h.setFocused(true);
+        h.select({ 0, 0 }, { 0, 82 });
+        const PrimList& l4 = g.host.draw();
+        const float gutterEdge = kBox.x + 1.0f + h.gutterWidth();
+        bool clear = true;
+        for (const Prim& p : l4.prims)
+            if ((p.tag == tags::editText || p.tag == tags::editSelect || p.tag == tags::editCaret)
+                && p.x0 < gutterEdge - 0.5f)
+                clear = false;
+        P.eq("draw.hscroll_scrolled", h.scroll().x > 0.0f, 1);
+        P.eq("draw.hscroll_clear_of_gutter", clear, 1);
+        P.eq("draw.hscroll_numbers_kept", countTag(l4, tags::editGutter), 2);
+
+        // A tick of any length keeps the blink inside its period (1e9 s is a whole number of periods: caret on), and
+        // a tick that is not finite is ignored.
+        TextEditorOptions bo = h.options();
+        bo.blinkCaret = true;
+        h.setOptions(bo);
+        h.tick(1.0e9f);
+        h.tick(std::numeric_limits<float>::infinity());
+        P.eq("draw.blink_long_tick", countTag(g.host.draw(), tags::editCaret), 1);
     }
 
     // ---- accessibility, read-only, fonts ----------------------------------------------------------------------------

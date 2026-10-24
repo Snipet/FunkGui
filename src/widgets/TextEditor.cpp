@@ -1124,11 +1124,9 @@ namespace funkgui
 
     void TextEditor::tick(float dt)
     {
-        if (!focused_ || !options_.blinkCaret || !(options_.blinkPeriod > 0.0f) || !(dt > 0.0f))
+        if (!focused_ || !options_.blinkCaret || !(options_.blinkPeriod > 0.0f) || !(dt > 0.0f) || !std::isfinite(dt))
             return;
-        blinkT_ += dt;
-        while (blinkT_ >= options_.blinkPeriod)
-            blinkT_ -= options_.blinkPeriod;
+        blinkT_ = std::fmod(blinkT_ + dt, options_.blinkPeriod);   // one call, however long the host slept
     }
 
     // ---- input ------------------------------------------------------------------------------------------------------
@@ -1469,16 +1467,25 @@ namespace funkgui
         const float gw = gutterWidth();
         if (!clip.isEmpty() && fontOk_)
         {
-            const float cx0 = c.snapX(clip.x), cy0 = c.snapY(clip.y);
-            const Canvas::ClipScope cs(c, { cx0, cy0, c.snapX(clip.right()) - cx0, c.snapY(clip.bottom()) - cy0 });
-            if (gw > 0.0f)
-            {
-                const Canvas::Scope sc(c, tags::editFrame, false);
-                c.hairlineV(inner.x + gw - 1.0f, clip.y, clip.h, th.ink16);
-            }
+            const float cx0 = c.snapX(clip.x), cy0 = c.snapY(clip.y), cx1 = c.snapX(clip.right());
+            const float cy1 = c.snapY(clip.bottom());
+            const Canvas::ClipScope cs(c, { cx0, cy0, cx1 - cx0, cy1 - cy0 });
             const int rows = rowCount();
             const int first = clampInt(static_cast<int>(std::floor(scrollY_ / rowH_)), 0, rows - 1);
             const int last = clampInt(static_cast<int>(std::floor((scrollY_ + ta.h) / rowH_)), 0, rows - 1);
+            if (gw > 0.0f)
+            {
+                {
+                    const Canvas::Scope sc(c, tags::editFrame, false);
+                    c.hairlineV(inner.x + gw - 1.0f, clip.y, clip.h, th.ink16);
+                }
+                for (int row = first; row <= last; ++row)
+                    drawLineNumber(c, th, row, ta.y + static_cast<float>(row) * rowH_ - scrollY_);
+            }
+            // What scrolls sideways (the band, the selection, the text, the caret) is cut again at the gutter's edge,
+            // so text scrolled to the left never runs over the line numbers.
+            const float tx0 = std::min(c.snapX(inner.x + gw), cx1);
+            const Canvas::ClipScope ts(c, { tx0, cy0, cx1 - tx0, cy1 - cy0 });
             for (int row = first; row <= last; ++row)
                 drawRow(c, th, row, ta.y + static_cast<float>(row) * rowH_ - scrollY_);
             if (!options_.placeholder.empty() && lines_.size() == 1 && lines_[0].empty())
@@ -1510,6 +1517,21 @@ namespace funkgui
         }
         if (focusRing)
             drawFocusRing(c, bounds_, th.accent);
+    }
+
+    void TextEditor::drawLineNumber(Canvas& c, const Theme& th, int row, float rowTop) const
+    {
+        int ln, from, to;
+        rowRange(row, ln, from, to);
+        if (from != 0)
+            return;                                      // a wrapped line is numbered on its first row only
+        const Canvas::Scope sc(c, tags::editGutter, false);
+        char buf[16];
+        std::snprintf(buf, sizeof buf, "%d", ln + 1);
+        TextStyle num = options_.style;
+        num.tabular = true;
+        c.text(buf, innerRect().x + gutterWidth() - kGutterPad, rowTop + textTop_, num,
+               ln == caret_.line ? th.ink70 : th.ink32, Align::right);
     }
 
     void TextEditor::drawRow(Canvas& c, const Theme& th, int row, float rowTop) const
@@ -1549,16 +1571,6 @@ namespace funkgui
                     c.rrect(x0 + xa, rowTop, xb - xa, rowH_, 0.0f, focused_ ? th.accentDim : th.ink16);
                 }
             }
-        }
-        if (gw > 0.0f && from == 0)
-        {
-            const Canvas::Scope sc(c, tags::editGutter, false);
-            char buf[16];
-            std::snprintf(buf, sizeof buf, "%d", ln + 1);
-            TextStyle num = options_.style;
-            num.tabular = true;
-            c.text(buf, inner.x + gw - kGutterPad, rowTop + textTop_, num, ln == caret_.line ? th.ink70 : th.ink32,
-                   Align::right);
         }
         if (cnt <= 0)
             return;
