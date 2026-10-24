@@ -3,6 +3,45 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.17.0 — 2026-10-24 · MINOR: a multi-line text editor, and syntax highlighting
+
+Golden impact: **none** on existing rows on macOS with JUCE and in the JUCE-free core, natively and as wasm32 under node
+(every existing `fg.gallery.*`, `fg.shader.hash`, `fg.shader.web`, `fg.font.probe`, `fg.font.baked` and `fg.a11yline`
+unchanged). Linux x86-64: the JUCE-free core (the `nojuce` preset) passed `tools/verify.sh` with the first commit; with
+JUCE, not run. New rows: `fg.gallery.texteditor` (338: the frame's 330 and 10 a11y line files), byte for byte the
+same files on macOS with and without JUCE and as wasm32. New tests (JUCE-free: every preset, and wasm32 under node):
+`fg.texteditor` (336 spec rows) and `fg.gallery.texteditor` (72 besides its goldens). `fg.modoverlay`'s row that pinned
+tag 20 as unnamed now pins 25, the first free tag; no other test's source changes, and `fg.headers` takes the two new
+headers by its glob. Additive: FCompressor a5fe769 passed its agent, agent-gui and web gates against it unchanged, and
+TestingPlayground and TestingPlaygroundSynth, whose editors are a TextEditor, pass theirs.
+
+- **`TextEditor`** (`funkgui/widgets/TextEditor.h`): a multi-line text field that owns its text, lays it out, draws
+  itself and takes the pointer, the wheel and the keys; the product gives it bounds, options, its host (the clipboard
+  and the keyboard convention) and the input it receives, and reads the text back. Core, JUCE-free, the same on every
+  host. Lines of printable ASCII and tabs (anything else becomes '?', CR LF and CR become LF). A caret and a selection
+  (click, Shift-click, drag, double click a word, triple click or a gutter press a line, Cmd-A); moves by character,
+  word, row and document with a goal column, Home's toggle and the page keys, under both keyboard conventions
+  (`HostServices::commandKeyIsMeta`); Return with auto-indent; Tab, soft tabs, and the indent and outdent of a
+  selection; Backspace and Delete by character, word and row; undo and redo, typing coalesced (at most `maxUndo`
+  steps); copy, cut and paste through `HostServices` (and the editor's own copy where the host reads none, as a web
+  host); `find`; line numbers; the caret line's band; a placeholder; read-only; word wrap; scrolling by the wheel and
+  by draggable scrollbars, everything that scrolls clipped (only the rows in view are recorded) and cut again at the
+  gutter's edge; a caret blink driven by `tick()`; one `editableText` accessibility item. Fonts: `editorFont()`'s
+  presets `code` (12 px, tabular digits, the default), `prose`, `compact` and `large`, or any `TextStyle`. Escape and
+  Return with Cmd are the product's (`key()` returns false).
+- **`Highlighter`** (`funkgui/text/Highlighter.h`): the interface a product implements for its language, one line at
+  a time with a state carried across lines, so the editor keeps each line's start state, re-runs the highlighter
+  after an edit only until a start state comes out unchanged, and tokenises only the rows it draws. `Span` (a run of
+  a line in one style) and `HighlightStyle` (an ink of the theme or a colour, a weight, an underline), and
+  `KeywordHighlighter`, a data-driven one over `KeywordRules` (keywords, types, line and block comments, strings,
+  numbers, operators, preprocessor lines; `cLike()` and `scriptLike()`). `TextEditor::defaultPalette()` fits its
+  eight styles.
+- **Tags** (`canvas/Tags.h`, appended): `editFrame` 20, `editGutter` 21, `editText` 22, `editSelect` 23, `editCaret` 24
+  (`EDIT_FRAME` ... `EDIT_CARET`).
+
+**Consumers**: nothing to do to keep building; the widget is new. A product that shows one routes the Panel's input
+to it while it has the caret (it consumes Tab, the arrows and Return), and gives it `attach(host)` for the clipboard.
+
 ## v0.16.0 — 2026-10-15 · MINOR: a rotary dial, modulation overlays on the dial and the slider
 
 Golden impact: **none** on existing rows on macOS with JUCE and in the JUCE-free core, natively and as wasm32 under node

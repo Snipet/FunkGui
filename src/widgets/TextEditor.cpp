@@ -2,6 +2,7 @@
 
 #include <funkgui/canvas/Canvas.h>
 #include <funkgui/canvas/Tags.h>
+#include <funkgui/core/Ease.h>
 #include <funkgui/core/Theme.h>
 #include <funkgui/panel/HostServices.h>
 #include <funkgui/text/FontService.h>
@@ -161,7 +162,7 @@ namespace funkgui
 
     void TextEditor::setBounds(const Rect& r)
     {
-        const bool widthChanged = r.w != bounds_.w;
+        const bool widthChanged = !ease::sameBits(r.w, bounds_.w);   // no -Wfloat-equal in a consumer's build
         bounds_ = r;
         if (widthChanged)
             relayoutAll();
@@ -623,7 +624,7 @@ namespace funkgui
         lineState_[static_cast<size_t>(a.line)] = startState;
         const int lastChanged = a.line + newCount - 1;
 
-        if (gutterWidth() != gutterBefore)
+        if (!ease::sameBits(gutterWidth(), gutterBefore))
             relayoutAll();                               // the gutter grew or shrank: every row's width moved
         else
         {
