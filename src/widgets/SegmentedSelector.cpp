@@ -53,6 +53,14 @@ namespace funkgui
         return n < 0 ? 0 : (n < r ? n : r);
     }
 
+    void SegmentedSelector::setCells(std::vector<Rect> cells)
+    {
+        cells_ = std::move(cells);
+        hoverAmt_.resize(cells_.size(), 0.0f);
+        if (hovered_ >= static_cast<int>(cells_.size()))
+            hovered_ = -1;
+    }
+
     Rect SegmentedSelector::bounds() const noexcept
     {
         if (cells_.empty())

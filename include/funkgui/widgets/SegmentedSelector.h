@@ -100,6 +100,11 @@ namespace funkgui
         // The union of the cells (the radioGroup's bounds; the focus ring is drawn round it, grown by 2 px).
         Rect bounds() const noexcept;
 
+        // 0.18.0: new cell rectangles (a resizable Panel's layout, Panel.h "Resizing"), and the caption's position. The
+        // hover eases keep their values for the cells that remain; a hovered cell that is gone is not hovered.
+        void setCells(std::vector<Rect> cells);
+        void setCaptionAt(Point at) noexcept { captionAt_ = at; }
+
     private:
         int  cells() const;                              // min(model.count(), cells_.size())
         int  step(int from, int dir) const;              // the next enabled cell from `from` in `dir`, or -1

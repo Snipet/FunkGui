@@ -116,6 +116,9 @@ namespace funkgui
         bool   takesTypedKeys() const;                  // continuous or stepped, with a port
 
         const DialGeom& geom() const noexcept { return geom_; }
+        // 0.18.0: moves the dial (a resizable Panel's layout, Panel.h "Resizing"). Everything reads the geometry when it
+        // draws or hit-tests, so the next frame and the next event see it; a drag in progress goes on.
+        void setGeom(const DialGeom& g) noexcept { geom_ = g; }
         uint32_t a11yId() const noexcept { return a11yId_; }
 
         static constexpr float kSweepDeg = 270.0f;

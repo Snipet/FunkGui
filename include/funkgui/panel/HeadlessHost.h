@@ -55,6 +55,7 @@ namespace funkgui
             int  batches = 0;
             int  batchDepth = 0;
             int  zooms = 0;
+            int  resizes = 0;                        // 0.18.0: resize() calls, taken or not
             // Web Sprint B (v0.12.0): the services. `menus` above stays showParamMenu's count. Each call is counted
             // whether or not it was taken, and its request kept until the next one, answered or not.
             int  menuRequests = 0;                   // showMenu
@@ -80,6 +81,12 @@ namespace funkgui
         void setZoom(std::vector<int> steps, int percent);
         // Lead (v0.8.0): the largest step zoomFits() accepts (a simulated display); 0 (the default) = every step fits.
         void setZoomFitLimit(int maxPercent) { zoomFitLimit_ = maxPercent; }
+
+        // 0.18.0: the user resizes the window to w x h logical px, as EditorHost delivers it (Panel.h "Resizing"):
+        // a resizable Panel gets resize() with the size raised to its minimum, unless that is its size already; a
+        // fixed Panel gets nothing. Returns whether resize() was called; counted in log.resizes either way. The next
+        // draw() is at the Panel's new width() x height().
+        bool resize(int w, int h);
 
         // Web Sprint B (v0.12.0): the services of HostServices.h, scripted. HeadlessHost reports all three and shows
         // nothing: a showMenu or chooseFiles that was taken is pending until the test answers it with one of the calls

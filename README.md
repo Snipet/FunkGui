@@ -18,7 +18,7 @@ Emscripten, on a `<canvas>`, where a WebGL2 sink draws the recorded frame in one
 
 FunkGui is the GUI of [FCompressor](https://github.com/Snipet/FCompressor). HardwareReverb, a private plugin whose GUI
 code FunkGui grew from, has moved onto it too. FunkGui is at 0.x, and its API may change between minor versions.
-Every release is an annotated tag on `main` (latest: `v0.17.0`), and [`CHANGELOG.md`](CHANGELOG.md) says what each
+Every release is an annotated tag on `main` (latest: `v0.18.0`), and [`CHANGELOG.md`](CHANGELOG.md) says what each
 release does to a consumer's golden files.
 
 ![Widgets from FunkGui's gallery: slider states, filled areas and a transfer curve, segmented selectors, latches and a focus ring](docs/images/gallery.png)
@@ -45,7 +45,8 @@ Canvas        records primitives on the CPU into a PrimList; makes no GPU calls
   headless frame's. In a browser, a test page reads back what WebGL2 drew and compares it with `SoftRaster`'s image of
   the same frame.
 - The host scales the Panel uniformly for the display's backing scale and for optional zoom steps; the Panel always
-  draws and takes input in its own logical pixels.
+  draws and takes input in its own logical pixels. A resizable Panel (v0.18.0) lays itself out in any logical size
+  from its minimum: the window follows the user's drag, and the Panel is told its new size between frames.
 
 ## Features by layer
 
@@ -87,10 +88,11 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
 - **gpu**: `EditorHost`, a `juce::AudioProcessorEditor` that runs one Panel on bgfx: Metal on a click-through NSView
   on macOS, Vulkan on an X11 child window of JUCE's peer on Linux (which is XWayland on a Wayland desktop). It handles
   the surface lifecycle with a no-GPU fallback screen, converts JUCE input, mirrors the accessibility items for the
-  screen reader, offers UI zoom steps, serves the menu, the file chooser and the clipboard of `HostServices` through
-  JUCE, and can capture frames. `FramePump` gives every editor in the process one clock (a display link on macOS, a
-  timer on Linux) and one `bgfx::frame()` per tick. On macOS the Objective-C classes are registered at run time under
-  randomised names, so two products using FunkGui in one host never collide.
+  screen reader, offers UI zoom steps, resizes the window for a resizable Panel, serves the menu, the file chooser
+  and the clipboard of `HostServices` through JUCE, and can capture frames. `FramePump` gives every editor in the
+  process one clock (a display link on macOS, a timer on Linux) and one `bgfx::frame()` per tick. On macOS the
+  Objective-C classes are registered at run time under randomised names, so two products using FunkGui in one host
+  never collide.
 - **web** (`FunkGui::web`; Emscripten only, no JUCE): `WebHost`, `EditorHost`'s counterpart on a `<canvas>`. It runs the
   frame clock on `requestAnimationFrame` (about 60 Hz while anything moves, 12 Hz idle, nothing while the document is
   hidden), sizes the canvas for the UI zoom and the device pixel ratio, converts the browser's pointer, wheel and key
@@ -144,7 +146,7 @@ FetchContent_MakeAvailable(JUCE)
 # Options are normal variables set before FetchContent_MakeAvailable(FunkGui); these two are the defaults.
 set(FUNKGUI_WITH_BGFX ON)
 set(FUNKGUI_WITH_PRESETS ON)
-FetchContent_Declare(FunkGui GIT_REPOSITORY https://github.com/Snipet/FunkGui.git GIT_TAG v0.17.0)
+FetchContent_Declare(FunkGui GIT_REPOSITORY https://github.com/Snipet/FunkGui.git GIT_TAG v0.18.0)
 FetchContent_MakeAvailable(FunkGui)
 
 juce_add_plugin(MyPlugin FORMATS AU VST3 Standalone PRODUCT_NAME "My Plugin")   # plus your usual arguments
@@ -158,7 +160,7 @@ For a browser, configure with Emscripten's toolchain (`emcmake cmake …`) and n
 
 ```cmake
 set(FUNKGUI_WITH_JUCE OFF)          # the JUCE-free core; FunkGui::gpu and FunkGui::presets are not defined
-FetchContent_Declare(FunkGui GIT_REPOSITORY https://github.com/Snipet/FunkGui.git GIT_TAG v0.17.0)
+FetchContent_Declare(FunkGui GIT_REPOSITORY https://github.com/Snipet/FunkGui.git GIT_TAG v0.18.0)
 FetchContent_MakeAvailable(FunkGui)
 
 add_executable(my_ui ui.cpp)        # one module for the page: my_ui.js and my_ui.wasm

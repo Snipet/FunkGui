@@ -30,6 +30,24 @@
 // through UiPreferences::revision(). The fit is evaluated when the zoom is chosen or read and when the editor gets a
 // peer. With no zoomSteps (HardwareReverb) none of this runs: the editor is W x H, sized once, as in v0.7.
 //
+// Resizing (0.18.0): a Panel whose resizable() is true (Panel.h "Resizing") gets a resizable editor: the host may
+// resize the window (an AU or VST3 host's window edges, the Standalone's), and JUCE's bottom-right corner resizer
+// takes a drag on the corner's 16 x 16 editor px (it is not drawn: the render view covers it, so a Panel that wants a
+// grip draws one there). The limits are the Panel's minWidth() x minHeight() up to EditorConfig::maxWidth x maxHeight
+// (0: none), in logical px, times the zoom. In resized() the editor's size divided by the zoom, rounded and raised to
+// the minimum, is the new logical size: the Panel gets resize(w, h) at once, before the next frame records, the
+// accessibility mirror is synced on that frame, and EditorConfig::sizeChanged(w, h) tells the product (to keep the size
+// in its state and open the next editor at it: the Panel's width() and height() when the editor is constructed are its
+// opening size). A zoom change keeps the logical size and resizes the window. A fixed Panel is unchanged from v0.17.
+//
+// Unbounded drags (HostServices::setUnboundedDrag; 0.18.0): JUCE's keep-visible mode leaves the pointer visible until
+// it leaves the user area of the editor's display (the menu bar, the Dock, a screen edge, another display), then
+// moves it to the editor's centre and hides it, and when the drag ends would show it at that centre (and pull a
+// visible pointer outside the editor back inside). The editor ends the mode itself instead: a pointer that stayed in
+// the user area stays where it is, and a hidden one is shown at the drag's virtual position (where the pointer would
+// be had nothing moved it) constrained to that user area, which is on the control for a drag that started in the
+// Dock's band and at the screen edge where it vanished otherwise.
+//
 // Capture (02 §5.1 "Diagnostics environment"): CaptureConfig is read once from the <ENV_PREFIX> environment at
 // construction. CANVAS_DUMP pins the FramePump to its fallback clock and ignores the real pointer (HR's captureMode_:
 // a pointer resting over the new window must not hover a widget); UI_FIXED_DT ticks the Panel with a fixed dt, and
@@ -95,6 +113,11 @@ namespace funkgui
                                                      // step when this one is not listed)
         const char* zoomPrefKey = nullptr;           // UiPreferences int key; nullptr = not persisted (this editor
                                                      // only: no other editor follows its choice)
+
+        // Resizing (0.18.0; "Resizing" above): only for a resizable Panel. The largest logical size (0: no limit),
+        // and the product's callback with each new logical size (message thread).
+        int maxWidth = 0, maxHeight = 0;
+        std::function<void(int w, int h)> sizeChanged;
     };
 
     class EditorHost : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget,
@@ -202,6 +225,8 @@ namespace funkgui
         juce::Rectangle<int> fitArea() const;        // the user area of the editor's display (empty: unknown)
         void   refitZoom();                          // the display may have changed: re-fit, resize now if needed
         void   applyZoom();                          // zoomApplied_ = zoomTarget_: setSize, a11y scale
+        void   applyResizeLimits();                  // 0.18.0: the Panel's limits times the zoom ("Resizing")
+        void   followLogicalSize();                  // 0.18.0: resized(): the editor's size / zoom to the Panel
         int    zoomedSize(int logical, int percent) const noexcept;
 
         // Declared first, destroyed last: the Canvas, the bridge's children and the gestures refer to it.
@@ -231,6 +256,7 @@ namespace funkgui
         void*  attachedPeer_ = nullptr;
         std::optional<juce::MouseInputSource> dragSource_;   // from mouseDown to mouseUp (unbounded drag)
         bool   unbounded_ = false;
+        juce::Point<float> dragScreen_;              // 0.18.0: the drag's last virtual screen position ("Unbounded")
 
         bool     firstFrameDone_ = false;
         uint32_t ticks_ = 0;                         // Panel::tick calls
@@ -248,6 +274,8 @@ namespace funkgui
         int   zoomTarget_ = 100;                     // what the next frame applies: HostServices::zoomPercent()
         int   zoomApplied_ = 100;                    // what the editor is sized and drawn at: Diagnostics
         float zoomScale_ = 1.0f;                     // zoomApplied_ / 100: editor px per logical px
+        bool  resizable_ = false;                    // 0.18.0: Panel::resizable() at construction
+        bool  applyingZoom_ = false;                 // applyZoom's setSize: the logical size is not the window's
 
         // FSynth G1: the screen reader's focus target (a11yFocus), kept across bridge syncs. 0 = none. `Grabbed` says
         // the target's handler was given JUCE's focus, so a later sync can tell a target the screen reader left (it
