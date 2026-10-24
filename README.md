@@ -60,7 +60,9 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
   tag and a live flag for tests. Nested clipping, a text dump format, fingerprints, and `SoftRaster`, a CPU rasteriser
   that mirrors the fragment shader.
 - **text**: an SDF font atlas baked on the CPU, through JUCE, from the bundled JetBrains Mono subset (printable ASCII
-  and 19 symbols), text measurement and fitting, and `LineEdit`, the state of a one-line text field. A build without
+  and 19 symbols), text measurement and fitting, `LineEdit`, the state of a one-line text field, and `Highlighter`, the
+  per-line, stateful tokeniser interface the multi-line editor highlights through, with `KeywordHighlighter`, a
+  data-driven one (keywords, types, comments, strings, numbers, operators, preprocessor lines). A build without
   JUCE loads `fonts/FunkGuiAtlas-macos.bin` instead, the committed bake from macOS (`fg.font.baked` holds it to a fresh
   bake, bit for bit).
 - **panel**: the `Panel` interface; `HostServices`, what a Panel may ask of its host, including (from v0.12.0) a popup
@@ -72,8 +74,11 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
   `GestureController`, which wraps every write in a begin/end gesture: drags, clicks, wheel bursts and batches of
   several parameters.
 - **widgets**: `RuleSlider` (a label, a value and a 1 px rule with a caret; detents; live, stepped, locked, derived
-  and n/a states), `SegmentedSelector`, `LatchToggle`, `AttachedWord`, `ThemeCells`, `HintLine`, `FocusRing` and
-  `DwellSelector`. Widgets render models the product implements and write only through `GestureController`.
+  and n/a states), `Dial`, `SegmentedSelector`, `LatchToggle`, `AttachedWord`, `ThemeCells`, `HintLine`, `FocusRing`,
+  `DwellSelector` and `TextEditor`, a multi-line text editor (caret, selection, word and line moves, undo, the
+  clipboard through `HostServices`, find, line numbers, word wrap, scrolling, syntax highlighting through a
+  `Highlighter`, font presets `code`, `prose`, `compact` and `large` or any `TextStyle`). Controls render models the
+  product implements and write only through `GestureController`.
 - **a11y**: the accessibility items a Panel lists, and their one-line text form for tests.
 - **prefs**, **live**, **juce**: UI preferences (theme, zoom, integer keys) behind a storage backend: with JUCE a
   machine-wide file in `~/Library/Application Support/<product>/` (Linux: `~/.config/<product>/`), without JUCE memory
