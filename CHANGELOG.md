@@ -3,6 +3,30 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.18.0 — 2026-10-24 · MINOR: resizable Panels, and the pointer after an unbounded drag
+
+Golden impact: **none** (no drawing changes; every existing row unchanged on macOS with JUCE, in the JUCE-free core
+and as wasm32 under node). New tests: `fg.headless.resize` (19 spec rows) and `fg.widgets.relayout` (13), JUCE-free,
+in every preset and as wasm32 under node; `fg.editorhost.resize` (44, GPU). Linux not run. Additive: a Panel that
+does not override the new virtuals is fixed as before. FCompressor a5fe769 passed its agent, agent-gui and web gates
+against it unchanged; TestingPlayground and TestingPlaygroundSynth, whose editors resize, pass theirs.
+
+- **Resizable Panels** (`panel/Panel.h` "Resizing"): `resizable()`, `minWidth()`, `minHeight()` and `resize(w, h)`,
+  defaults keeping a Panel fixed. A resizable Panel lays itself out in any logical size from its minimum; the host
+  calls `resize` between frames, never during `tick()` or `draw()`.
+- **`EditorHost`** resizes for such a Panel: the host's window edges and JUCE's corner resizer, limits from the
+  Panel's minimum to `EditorConfig::maxWidth` x `maxHeight` (0: none), both times the zoom; `resized()` gives the Panel
+  its new logical size before the next frame, syncs the accessibility mirror and calls `EditorConfig::sizeChanged`
+  (the product keeps the size and opens the next editor at it). A zoom change keeps the logical size.
+- **`HeadlessHost::resize`** drives it in a probe (clamped to the minimum; counted in `log.resizes`). `WebHost` keeps a
+  Panel at the size it opened at.
+- **Unbounded drags** (`HostServices::setUnboundedDrag`): when the drag ends, the pointer stays where it is if it never
+  left the display's user area, and otherwise appears where the drag virtually ended, constrained to that area,
+  instead of at the editor's centre (JUCE's keep-visible mode). A drag that starts in the Dock's band no longer snaps
+  the pointer to the middle of the editor.
+- **Relayout setters**: `Dial::setGeom`, `SegmentedSelector::setCells` and `setCaptionAt`, so a Panel can move its
+  widgets in `resize`.
+
 ## v0.17.0 — 2026-10-24 · MINOR: a multi-line text editor, and syntax highlighting
 
 Golden impact: **none** on existing rows on macOS with JUCE and in the JUCE-free core, natively and as wasm32 under node
