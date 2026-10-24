@@ -30,6 +30,14 @@
 // through UiPreferences::revision(). The fit is evaluated when the zoom is chosen or read and when the editor gets a
 // peer. With no zoomSteps (HardwareReverb) none of this runs: the editor is W x H, sized once, as in v0.7.
 //
+// Unbounded drags (HostServices::setUnboundedDrag; 0.18.0): JUCE's keep-visible mode leaves the pointer visible until
+// it leaves the user area of the editor's display (the menu bar, the Dock, a screen edge, another display), then
+// moves it to the editor's centre and hides it, and when the drag ends would show it at that centre (and pull a
+// visible pointer outside the editor back inside). The editor ends the mode itself instead: a pointer that stayed in
+// the user area stays where it is, and a hidden one is shown at the drag's virtual position (where the pointer would
+// be had nothing moved it) constrained to that user area, which is on the control for a drag that started in the
+// Dock's band and at the screen edge where it vanished otherwise.
+//
 // Capture (02 §5.1 "Diagnostics environment"): CaptureConfig is read once from the <ENV_PREFIX> environment at
 // construction. CANVAS_DUMP pins the FramePump to its fallback clock and ignores the real pointer (HR's captureMode_:
 // a pointer resting over the new window must not hover a widget); UI_FIXED_DT ticks the Panel with a fixed dt, and
@@ -231,6 +239,7 @@ namespace funkgui
         void*  attachedPeer_ = nullptr;
         std::optional<juce::MouseInputSource> dragSource_;   // from mouseDown to mouseUp (unbounded drag)
         bool   unbounded_ = false;
+        juce::Point<float> dragScreen_;              // 0.18.0: the drag's last virtual screen position ("Unbounded")
 
         bool     firstFrameDone_ = false;
         uint32_t ticks_ = 0;                         // Panel::tick calls

@@ -748,6 +748,7 @@ namespace funkgui
     {
         nudgeFullRate();
         dragSource_ = e.source;                      // a widget that starts a drag asks for unbounded movement
+        dragScreen_ = e.getScreenPosition().toFloat();
         panel_->pointerDown(pointer(e));
         updateCursor();
     }
@@ -755,12 +756,14 @@ namespace funkgui
     void EditorHost::mouseDrag(const juce::MouseEvent& e)
     {
         nudgeFullRate();
+        dragScreen_ = e.getScreenPosition().toFloat();         // virtual in unbounded mode: JUCE's offset included
         panel_->pointerDrag(pointer(e));
         updateCursor();
     }
 
     void EditorHost::mouseUp(const juce::MouseEvent& e)
     {
+        dragScreen_ = e.getScreenPosition().toFloat();
         panel_->pointerUp(pointer(e));
         if (unbounded_)
             setUnboundedDrag(false);                 // the widget ended its drag (or never started one)
@@ -945,7 +948,17 @@ namespace funkgui
             return;
         }
         if (unbounded_ && dragSource_.has_value())
-            dragSource_->enableUnboundedMouseMovement(false, false);
+        {
+            // 0.18.0 ("Unbounded drags" in EditorHost.h). JUCE hides the pointer and parks it at the editor's centre
+            // while the drag's position is outside the display's user area, and keep-visible mode leaves a pointer
+            // it never hid where it is; shown again at the virtual position constrained to that area, a hidden
+            // pointer reappears where the user was dragging, and a visible one does not move.
+            const auto area = getParentMonitorArea().reduced(2, 2).toFloat();
+            const auto shown = area.getConstrainedPoint(dragScreen_);
+            dragSource_->enableUnboundedMouseMovement(false, true);
+            dragSource_->setScreenPosition(shown);
+            gpuLog("unbounded drag ends at " + dragScreen_.toString() + ": the pointer at " + shown.toString());
+        }
         unbounded_ = false;
     }
 
