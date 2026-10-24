@@ -211,7 +211,8 @@ namespace funkgui
         jassert(w == panel_->width() && h == panel_->height());   // the Panel lays out in exactly this space
         logicalW_ = w;
         logicalH_ = h;
-        setResizable(false, false);
+        resizable_ = panel_->resizable();            // 0.18.0 ("Resizing"): the limits follow, after the zoom
+        setResizable(resizable_, resizable_);
 
         // The preference is machine-wide and another host may have changed it since this process first read it
         // (HR :153-156). UI_THEME overrides it without persisting.
@@ -223,6 +224,7 @@ namespace funkgui
         // The zoom follows the same preference file (G7c): W x H exactly when there are no steps and no pin.
         initZoom();
         applyZoom();
+        applyResizeLimits();
 
         panel_->attach(*this);
         if (config_.setUiAttached)
@@ -419,6 +421,7 @@ namespace funkgui
 
     void EditorHost::resized()
     {
+        followLogicalSize();
         if (!surfaceOk_) return;
         auto* peer = getPeer();
         if (peer == nullptr) return;
@@ -1177,6 +1180,39 @@ namespace funkgui
         return d != nullptr ? d->userArea : juce::Rectangle<int>();
     }
 
+    void EditorHost::applyResizeLimits()
+    {
+        if (!resizable_)
+            return;
+        constexpr int kNoLimit = 16384;              // editor px
+        const int minW = zoomedSize(std::max(1, panel_->minWidth()), zoomApplied_);
+        const int minH = zoomedSize(std::max(1, panel_->minHeight()), zoomApplied_);
+        const int maxW = config_.maxWidth > 0 ? std::max(minW, zoomedSize(config_.maxWidth, zoomApplied_)) : kNoLimit;
+        const int maxH = config_.maxHeight > 0 ? std::max(minH, zoomedSize(config_.maxHeight, zoomApplied_)) : kNoLimit;
+        applyingZoom_ = true;                        // a clamp of the current size here is not a new logical size
+        setResizeLimits(minW, minH, maxW, maxH);
+        applyingZoom_ = false;
+    }
+
+    void EditorHost::followLogicalSize()
+    {
+        if (!resizable_ || applyingZoom_ || !(zoomScale_ > 0.0f) || getWidth() <= 0 || getHeight() <= 0)
+            return;
+        const int w = std::max(panel_->minWidth(), juce::roundToInt(static_cast<float>(getWidth()) / zoomScale_));
+        const int h = std::max(panel_->minHeight(), juce::roundToInt(static_cast<float>(getHeight()) / zoomScale_));
+        if (w == logicalW_ && h == logicalH_)
+            return;
+        logicalW_ = w;
+        logicalH_ = h;
+        if (w != panel_->width() || h != panel_->height())
+            panel_->resize(w, h);
+        a11ySyncedAt_ = -1.0e9;                      // the next frame mirrors the items where they are now
+        nudgeFullRate();
+        gpuLog("resized: " + juce::String(w) + " x " + juce::String(h) + " logical");
+        if (config_.sizeChanged)
+            config_.sizeChanged(w, h);
+    }
+
     int EditorHost::fitZoom(int chosen) const
     {
         const auto area = fitArea();
@@ -1208,12 +1244,17 @@ namespace funkgui
         zoomApplied_ = zoomTarget_;
         zoomScale_ = static_cast<float>(zoomApplied_) / 100.0f;
         a11y_.setScale(zoomScale_);
+        if (before != zoomApplied_)
+            applyResizeLimits();                     // limits in editor px follow the zoom; the logical size stays
         const int w = zoomedSize(logicalW_, zoomApplied_);
         const int h = zoomedSize(logicalH_, zoomApplied_);
         if (w == getWidth() && h == getHeight())
             return;
-        // resized() moves the render view and resizes the drawable at once; the host follows the editor's size.
+        // resized() moves the render view and resizes the drawable at once; the host follows the editor's size. The
+        // logical size is kept: dividing the zoomed size by the zoom again could round it to a neighbour.
+        applyingZoom_ = true;
         setSize(w, h);
+        applyingZoom_ = false;
         if (before != zoomApplied_)
             gpuLog("zoom: " + juce::String(zoomApplied_) + " % (" + juce::String(w) + " x " + juce::String(h)
                    + "), chosen " + juce::String(zoomChosen_) + " %" + (zoomPin_ > 0 ? ", pinned" : ""));

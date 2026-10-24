@@ -45,7 +45,8 @@ Canvas        records primitives on the CPU into a PrimList; makes no GPU calls
   headless frame's. In a browser, a test page reads back what WebGL2 drew and compares it with `SoftRaster`'s image of
   the same frame.
 - The host scales the Panel uniformly for the display's backing scale and for optional zoom steps; the Panel always
-  draws and takes input in its own logical pixels.
+  draws and takes input in its own logical pixels. A resizable Panel (v0.18.0) lays itself out in any logical size
+  from its minimum: the window follows the user's drag, and the Panel is told its new size between frames.
 
 ## Features by layer
 
@@ -87,10 +88,11 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
 - **gpu**: `EditorHost`, a `juce::AudioProcessorEditor` that runs one Panel on bgfx: Metal on a click-through NSView
   on macOS, Vulkan on an X11 child window of JUCE's peer on Linux (which is XWayland on a Wayland desktop). It handles
   the surface lifecycle with a no-GPU fallback screen, converts JUCE input, mirrors the accessibility items for the
-  screen reader, offers UI zoom steps, serves the menu, the file chooser and the clipboard of `HostServices` through
-  JUCE, and can capture frames. `FramePump` gives every editor in the process one clock (a display link on macOS, a
-  timer on Linux) and one `bgfx::frame()` per tick. On macOS the Objective-C classes are registered at run time under
-  randomised names, so two products using FunkGui in one host never collide.
+  screen reader, offers UI zoom steps, resizes the window for a resizable Panel, serves the menu, the file chooser
+  and the clipboard of `HostServices` through JUCE, and can capture frames. `FramePump` gives every editor in the
+  process one clock (a display link on macOS, a timer on Linux) and one `bgfx::frame()` per tick. On macOS the
+  Objective-C classes are registered at run time under randomised names, so two products using FunkGui in one host
+  never collide.
 - **web** (`FunkGui::web`; Emscripten only, no JUCE): `WebHost`, `EditorHost`'s counterpart on a `<canvas>`. It runs the
   frame clock on `requestAnimationFrame` (about 60 Hz while anything moves, 12 Hz idle, nothing while the document is
   hidden), sizes the canvas for the UI zoom and the device pixel ratio, converts the browser's pointer, wheel and key

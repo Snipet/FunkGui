@@ -1,6 +1,7 @@
 #pragma once
 
-// The GPU-free UI unit (02 §3.5): layout, input, drawing and accessibility for one fixed-size window. Not a
+// The GPU-free UI unit (02 §3.5): layout, input, drawing and accessibility for one window, fixed-size unless the Panel
+// is resizable (below). Not a
 // juce::Component and no GPU: EditorHost runs it live, HeadlessHost runs it in a console probe with a fixed dt. A Panel
 // follows the determinism rules of 02 §3.7: no wall clock (time comes only from tick(dt) and
 // HostServices::nowSeconds()), every ease through funkgui::ease, draw() reads state and never advances it, no getenv
@@ -25,7 +26,7 @@ namespace funkgui
         virtual ~Panel() = default;
 
         virtual void  attach(HostServices&) = 0;         // called once by the host before the first tick
-        virtual int   width() const = 0;                 // fixed logical size
+        virtual int   width() const = 0;                 // the logical size (fixed unless resizable(), below)
         virtual int   height() const = 0;
         virtual void  tick(float dt) = 0;                // every eased value; seconds, never frames
         virtual void  idle(double /*nowSec*/) {}         // >= 10 Hz even while the display link is stopped: closes
@@ -56,5 +57,17 @@ namespace funkgui
         virtual void  filesDragEnter(const std::vector<std::string>&, float /*x*/, float /*y*/) {}
         virtual void  filesDragMove(float /*x*/, float /*y*/) {}
         virtual void  filesDragExit() {}
+
+        // Resizing (0.18.0; the defaults keep a Panel fixed). A Panel whose resizable() is true lays out in any
+        // logical size from minWidth() x minHeight() up: the host calls resize(w, h) before the first frame drawn at a
+        // new size, and width() and height() answer w and h from then on. resize() runs on the host's thread (the
+        // message thread under EditorHost) between frames, never during tick() or draw(), and is called only with a
+        // size at or above the minimum and different from the current one. EditorHost lets the user drag the window
+        // (gpu/EditorHost.h "Resizing"); HeadlessHost::resize drives it in a probe. WebHost does not resize: there a
+        // resizable Panel keeps the size it opened at.
+        virtual bool  resizable() const { return false; }
+        virtual int   minWidth() const { return width(); }
+        virtual int   minHeight() const { return height(); }
+        virtual void  resize(int /*w*/, int /*h*/) {}
     };
 }

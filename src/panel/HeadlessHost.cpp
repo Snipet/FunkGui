@@ -474,6 +474,19 @@ namespace funkgui
 
     int HeadlessHost::zoomPercent() const { return zoomPercent_; }
 
+    bool HeadlessHost::resize(int w, int h)
+    {
+        ++log.resizes;
+        if (!panel_.resizable())
+            return false;
+        w = std::max(w, panel_.minWidth());
+        h = std::max(h, panel_.minHeight());
+        if (w == panel_.width() && h == panel_.height())
+            return false;
+        panel_.resize(w, h);
+        return true;
+    }
+
     void HeadlessHost::setZoomPercent(int percent)
     {
         ++log.zooms;
