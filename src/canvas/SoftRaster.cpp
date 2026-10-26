@@ -187,8 +187,58 @@ namespace funkgui
                                    static_cast<float>(clear.b) / 255.0f, static_cast<float>(clear.a) / 255.0f });
         const std::vector<uint8_t>& field = atlas.pixels();
 
-        for (const Prim& p : list.prims)
+        // v0.19.0: a shader draw's placeholder (SoftRaster.h shaderPlaceholder), opaque, over rect ∩ clip.
+        const auto placeholder = [&fb, W, H, scale, dpi](const ShaderDraw& s)
         {
+            float x0 = s.rect.x, y0 = s.rect.y, x1 = s.rect.x + s.rect.w, y1 = s.rect.y + s.rect.h;
+            if (s.clipped)
+            {
+                x0 = std::max(x0, s.clip.x);
+                y0 = std::max(y0, s.clip.y);
+                x1 = std::min(x1, s.clip.x + s.clip.w);
+                y1 = std::min(y1, s.clip.y + s.clip.h);
+            }
+            if (!(x1 > x0) || !(y1 > y0) || !(s.rect.w > 0.0f) || !(s.rect.h > 0.0f))
+                return;
+            const int sx0 = std::max(0, firstAtOrAfter(x0, scale)), sx1 = std::min(W, firstAtOrAfter(x1, scale));
+            const int sy0 = std::max(0, firstAtOrAfter(y0, scale)), sy1 = std::min(H, firstAtOrAfter(y1, scale));
+            const float edge = 1.0f / dpi;                    // one device px
+            const auto rgba = [](Col c) noexcept
+            {
+                return Rgba{ static_cast<float>(c.r) / 255.0f, static_cast<float>(c.g) / 255.0f,
+                             static_cast<float>(c.b) / 255.0f, 1.0f };
+            };
+            const Rgba fill = rgba(shaderPlaceholder::fill), stripe = rgba(shaderPlaceholder::stripe),
+                       border = rgba(shaderPlaceholder::border);
+            for (int y = sy0; y < sy1; ++y)
+            {
+                const float fy = (static_cast<float>(y) + 0.5f) / scale;
+                if (fy < y0 || !(fy < y1))
+                    continue;                                 // the half-open rule, as for a primitive
+                const float ly = fy - s.rect.y;
+                Rgba* row = &fb[static_cast<size_t>(y) * static_cast<size_t>(W)];
+                for (int x = sx0; x < sx1; ++x)
+                {
+                    const float fx = (static_cast<float>(x) + 0.5f) / scale;
+                    if (fx < x0 || !(fx < x1))
+                        continue;
+                    const float lx = fx - s.rect.x;
+                    if (lx < edge || ly < edge || !(lx < s.rect.w - edge) || !(ly < s.rect.h - edge))
+                        row[x] = border;
+                    else if (std::fmod(lx + ly, shaderPlaceholder::stripePeriod) < shaderPlaceholder::stripeWidth)
+                        row[x] = stripe;
+                    else
+                        row[x] = fill;
+                }
+            }
+        };
+        std::size_t nextShader = 0;                           // each shader draw before prims[at] (PrimList.h)
+
+        for (std::size_t i = 0; i < list.prims.size(); ++i)
+        {
+            for (; nextShader < list.shaders.size() && list.shaders[nextShader].at <= i; ++nextShader)
+                placeholder(list.shaders[nextShader]);
+            const Prim& p = list.prims[i];
             if (!(p.x1 > p.x0) || !(p.y1 > p.y0))
                 continue;                                     // empty or not finite: the GPU draws nothing either
             const int sx0 = std::max(0, firstAtOrAfter(p.x0, scale));
@@ -225,6 +275,8 @@ namespace funkgui
                 }
             }
         }
+        for (; nextShader < list.shaders.size(); ++nextShader)
+            placeholder(list.shaders[nextShader]);            // recorded after the last primitive
 
         // Box filter to the physical size and round once.
         img.rgba.assign(static_cast<size_t>(img.w) * static_cast<size_t>(img.h) * 4u, 0);

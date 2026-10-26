@@ -75,7 +75,7 @@ namespace funkgui
             bool    l;                                 // the live flag to restore
         };
 
-        // ---- v0.9.0 addition: clipping (FCompressor's smooth-scrolling lists) ------------------------------------------
+        // ---- v0.9.0 addition: clipping (FCompressor's smooth-scrolling lists) ---------------------------------------
         // Every primitive recorded from pushClip() to its popClip() is cropped to the rectangle, intersected with the
         // clips around it. A primitive's quad is cut at the rectangle's edges and its local coordinates (a glyph's
         // atlas uvs) are interpolated to the new corners, so each sample inside draws as the uncropped primitive's did;
@@ -106,7 +106,7 @@ namespace funkgui
         float dpi() const;
         int   missingGlyphs() const;                   // this frame's codepoints not in the atlas
 
-        // ---- FSynth G1 additions: curves as runs of capsule segments (src/canvas/CanvasCurves.cpp) -------------------
+        // ---- FSynth G1 additions: curves as runs of capsule segments (src/canvas/CanvasCurves.cpp) ------------------
         // Flattened with geom:: (core/Flatten.h) at the frame's dpi() and recorded through polyline(), so there is no
         // new primitive kind, shader, dump field or SoftRaster branch, and BgfxSink and WebGlSink draw them as they
         // draw any segment. The colour must be opaque (premix() it over the ground): translucent capsules bead where
@@ -132,6 +132,19 @@ namespace funkgui
         // cubic: the Bezier p[0..3] as geom::flattenCubic's pieces at dpi() and tolDevicePx, capsules of `width`. A
         // null p or a width that is not > 0 records nothing.
         void cubic(const Point p[4], float width, Col opaque, float tolDevicePx = geom::kFlattenDevicePx);
+
+        // ---- v0.19.0 addition: custom shaders (src/canvas/Canvas.cpp) -----------------------------------------------
+        // Records a shader draw (canvas/PrimList.h ShaderDraw): the rectangle r (logical px) filled by the fragment
+        // shader the host registered under `id` (gpu/ShaderLibrary.h), at this point in the order: what was recorded
+        // before it draws under it, what is recorded after it over it. Kept with it: the clip in force (the open clips
+        // intersected, or none), the current tag and live flag, and params[0..nParams) as u_params, the rest 0
+        // (nParams is clamped to 0..ShaderDraw::kMaxParams; a null params gives none).
+        // Records nothing when r is not finite or not > 0 wide and high, or when the clip in force leaves none of it.
+        // The rectangle itself is never cut: v_uv runs 0..1 across all of r, and the clip becomes the GPU's scissor
+        // when the frame is drawn. A clip popped later moves `at` to the primitives that clip kept, so the order holds.
+        // Drawn by BgfxSink with the registered program; by SoftRaster as a placeholder; by WebGlSink not at all.
+        // Plain C++: the same on Linux, without JUCE and on a web host.
+        void shader(uint32_t id, const Rect& r, const float* params = nullptr, int nParams = 0);
 
     protected:
         // Appends one Prim stamped with the current tag and live flag and with d2[2] = kind (K3 #16): the HR

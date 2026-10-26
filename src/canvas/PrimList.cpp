@@ -25,6 +25,13 @@
 //   overflow 3                                            (only when FrameInfo::overflows > 0)
 //   axis LEVEL x 556 748 -42 6 lin y 332 140 -42 6 lin    (one per AxisRec; "-" for an absent axis)
 //   p 38.5 38.5 57.5 49.5  c0 ffe4eaec c1 ffe4eaec  d0 -9.5 -5.5 8 4  e0 9.5 5.5  d1 0 0 0 0  d2 0 0 0 0  t SLOT_LABEL
+//   shader 7 at 1  rect 10 20 200 100  clip -  params 0.5 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0  live 0  t SLOT_LABEL
+//
+// v0.19.0, shader draws (Canvas::shader): a "shader" line is written before the "p" line of prims[at] (after the last
+// "p" line when at == prims.size()), so the dump reads in drawing order; "at" says the position again, and the parser
+// holds it to the number of "p" lines before it. Its fields: the program id (decimal), the rect x y w h, the clip
+// x y w h or "-", all 16 params, live 0 or 1, and the tag as on a "p" line. A dump without shader draws is byte for
+// byte what v0.18.0 wrote.
 //
 // Choices where 02 §3.8 is silent (G3):
 // - Floats are "%.9g" everywhere (an exact float round trip) except fps, which keeps HR's "%.1f" (a measurement).
@@ -130,6 +137,7 @@ namespace funkgui
         info = FrameInfo{};
         prims.clear();
         axes.clear();
+        shaders.clear();
         missingGlyphs = 0;
         std::fill(std::begin(missingFirst), std::end(missingFirst), 0u);
     }
@@ -157,6 +165,26 @@ namespace funkgui
                 return fprintfC(f, " %s -", axisName) >= 0;
             return fprintfC(f, " %s %.9g %.9g %.9g %.9g %s", axisName, dbl(m.px0), dbl(m.px1), dbl(m.v0),
                              dbl(m.v1), m.log ? "log" : "lin") >= 0;
+        }
+
+        // v0.19.0: one "shader" line (the file comment has its grammar).
+        bool writeShader(std::FILE* f, const ShaderDraw& s)
+        {
+            bool ok = fprintfC(f, "shader %u at %u  rect %.9g %.9g %.9g %.9g  clip", static_cast<unsigned>(s.id),
+                               static_cast<unsigned>(s.at), dbl(s.rect.x), dbl(s.rect.y), dbl(s.rect.w),
+                               dbl(s.rect.h)) >= 0;
+            if (s.clipped)
+                ok = ok && fprintfC(f, " %.9g %.9g %.9g %.9g", dbl(s.clip.x), dbl(s.clip.y), dbl(s.clip.w),
+                                    dbl(s.clip.h)) >= 0;
+            else
+                ok = ok && fprintfC(f, " -") >= 0;
+            ok = ok && fprintfC(f, "  params") >= 0;
+            for (const float v : s.params)
+                ok = ok && fprintfC(f, " %.9g", dbl(v)) >= 0;
+            ok = ok && fprintfC(f, "  live %d", s.live ? 1 : 0) >= 0;
+            if (s.tag != tags::none)
+                ok = ok && fprintfC(f, "  t %s", tagText(s.tag).c_str()) >= 0;
+            return ok && fprintfC(f, "\n") >= 0;
         }
     }
 
@@ -192,8 +220,12 @@ namespace funkgui
             put(fprintfC(f, "\n"));
         }
 
-        for (const Prim& p : prims)
+        std::size_t nextShader = 0;                      // v0.19.0: each shader draw goes before prims[at]
+        for (std::size_t i = 0; i < prims.size(); ++i)
         {
+            for (; nextShader < shaders.size() && shaders[nextShader].at <= i; ++nextShader)
+                ok = ok && writeShader(f, shaders[nextShader]);
+            const Prim& p = prims[i];
             put(fprintfC(f,
                          "p %.9g %.9g %.9g %.9g  c0 %08x c1 %08x  d0 %.9g %.9g %.9g %.9g  e0 %.9g %.9g  "
                          "d1 %.9g %.9g %.9g %.9g  d2 %.9g %.9g %.9g %.9g",
@@ -207,6 +239,8 @@ namespace funkgui
             if (!ok)
                 return false;
         }
+        for (; nextShader < shaders.size(); ++nextShader)
+            ok = ok && writeShader(f, shaders[nextShader]);
         return ok && std::fflush(f) == 0 && std::ferror(f) == 0;
     }
 
@@ -442,6 +476,47 @@ namespace funkgui
             return true;
         }
 
+        // v0.19.0: shader ID at N  rect X Y W H  clip (X Y W H | -)  params P0..P15  live (0|1)  [t NAME]
+        bool parseShader(const std::vector<std::string_view>& tk, ShaderDraw& s)
+        {
+            s = ShaderDraw{};
+            size_t i = 0;
+            const auto word = [&tk, &i](std::string_view w) { return i < tk.size() && tk[i++] == w; };
+            const auto floats = [&tk, &i](float* v, int n)
+            {
+                for (int k = 0; k < n; ++k)
+                    if (i >= tk.size() || !toFloat(tk[i++], v[k]))
+                        return false;
+                return true;
+            };
+            const auto u32 = [&tk, &i](uint32_t& v) { return i < tk.size() && toU32(tk[i++], v); };
+            float r[4] = {};
+            if (!word("shader") || !u32(s.id) || !word("at") || !u32(s.at) || !word("rect") || !floats(r, 4)
+                || !word("clip"))
+                return false;
+            s.rect = { r[0], r[1], r[2], r[3] };
+            if (i < tk.size() && tk[i] == "-")
+                ++i;
+            else
+            {
+                float c[4] = {};
+                if (!floats(c, 4))
+                    return false;
+                s.clip = { c[0], c[1], c[2], c[3] };
+                s.clipped = true;
+            }
+            if (!word("params") || !floats(s.params, ShaderDraw::kMaxParams) || !word("live") || i >= tk.size())
+                return false;
+            if (tk[i] == "1")
+                s.live = true;
+            else if (tk[i] != "0")
+                return false;
+            ++i;
+            if (i < tk.size() && (!word("t") || i >= tk.size() || !toTag(tk[i++], s.tag)))
+                return false;
+            return i == tk.size();
+        }
+
         bool parseGlyphs(const std::vector<std::string_view>& tk, PrimList& out)
         {
             if (tk.size() < 3 || tk.size() > 3 + std::size(out.missingFirst) || tk[1] != "missing"
@@ -532,6 +607,13 @@ namespace funkgui
                     if (!parseAxis(tk, a))
                         return false;
                     out.axes.push_back(a);
+                }
+                else if (v2 && k == "shader")
+                {
+                    ShaderDraw s;
+                    if (!parseShader(tk, s) || s.at != out.prims.size())
+                        return false;
+                    out.shaders.push_back(s);
                 }
                 else
                     return false;

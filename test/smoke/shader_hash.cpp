@@ -8,6 +8,10 @@
 // another bgfx fails a spec row (03 §2.5; S0 review R-G1 #9): the stamp of the shaderc in use, which
 // cmake/FunkGuiDeps.cmake reads and <funkgui/shaders/shaderc_stamp.h> carries, must name the pinned bgfx.cmake SHA. The
 // bgfx chunk magic is a spec row too.
+//
+// v0.19.0 adds vs_custom (shaders/vs_custom.sc with shaders/varying_custom.def.sc: the vertex half of every custom
+// program, gpu/ShaderLibrary.h) in both profiles, as shader.vs_custom.<ext>.*. FunkGui's test fragment shader
+// (fs_custom_test) is not pinned here: fg.shader.library checks that it links and fg.shader.draw what it draws.
 
 #include <cstddef>
 #include <cstdint>
@@ -18,6 +22,8 @@
 #include <funkgui/shaders/fs_ui.mtl.h>
 #include <funkgui/shaders/fs_ui.spv.h>
 #include <funkgui/shaders/shaderc_stamp.h>
+#include <funkgui/shaders/vs_custom.mtl.h>
+#include <funkgui/shaders/vs_custom.spv.h>
 #include <funkgui/shaders/vs_ui.mtl.h>
 #include <funkgui/shaders/vs_ui.spv.h>
 #include <funkgui/test/Harness.h>
@@ -45,6 +51,15 @@ namespace
         P.hash("shader.fs_ui" + sfx + ".hash", T::fnv1a(fs, fsBytes));
         P.num("shader.fs_ui" + sfx + ".bytes", static_cast<double>(fsBytes), T::Tol::exact());
     }
+
+    // v0.19.0: one more vertex shader, keyed with its profile's extension in both profiles.
+    void vertex(T::Probe& P, const char* name, const char* ext, const uint8_t* vs, std::size_t vsBytes)
+    {
+        const std::string key = std::string("shader.") + name + "." + ext;
+        P.eq(key + ".magic", magic(vs, vsBytes, 'V'), 1);
+        P.hash(key + ".hash", T::fnv1a(vs, vsBytes));
+        P.num(key + ".bytes", static_cast<double>(vsBytes), T::Tol::exact());
+    }
 }
 
 int main(int argc, char** argv)
@@ -54,5 +69,7 @@ int main(int argc, char** argv)
     P.eq("shaderc.stamp_is_pin", std::string_view(FUNKGUI_SHADERC_STAMP) == FUNKGUI_SHADERC_PIN_STAMP, 1);
     profile(P, "", vs_ui_mtl, sizeof vs_ui_mtl, fs_ui_mtl, sizeof fs_ui_mtl);
     profile(P, "spv", vs_ui_spv, sizeof vs_ui_spv, fs_ui_spv, sizeof fs_ui_spv);
+    vertex(P, "vs_custom", "mtl", vs_custom_mtl, sizeof vs_custom_mtl);
+    vertex(P, "vs_custom", "spv", vs_custom_spv, sizeof vs_custom_spv);
     return P.finish();
 }

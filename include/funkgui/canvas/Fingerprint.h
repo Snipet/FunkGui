@@ -36,6 +36,13 @@ namespace funkgui
         int   statics = 0, live = 0, texts = 0, rrects = 0, segments = 0, areas = 0;
         float maxX = 0.0f, maxY = 0.0f;
         std::vector<std::pair<Tag, int>> tagCounts;   // ascending tag, tags that occur only
+        // v0.19.0: shader draws (PrimList::shaders) hashed into `geometry`, after every primitive, in order. Each mixes
+        // its id, its position `at`, its rect, whether it was clipped and its clip ({} when not), quantised as the
+        // primitives' floats are; its params are not hashed (values, like colours) and its tag is counted in tagCounts.
+        // A live one (Canvas::setLive) is left out under excludeLive and counted in `live` either way; the hashed ones
+        // count here and stretch maxX / maxY to their rect's right and bottom edges. A frame without shader draws
+        // hashes exactly as before v0.19.0. legacyHr ignores them (HR had none).
+        int   shaders = 0;
     };
 
     Fingerprint fingerprint(const PrimList&, const FingerprintOptions& = {});
@@ -43,5 +50,6 @@ namespace funkgui
     // The fingerprint as golden rows of a Harness v2 probe: <prefix>.geometry and <prefix>.text as hash rows, the
     // counts and extents as exact num rows, and <prefix>.tag.<NAME> per tag. (02 §3.9 wrote this against a
     // test::Metric list; Harness v2, frozen at FZ0, records rows on the Probe itself, so the sink is the Probe.)
+    // v0.19.0: <prefix>.shaders (exact) only when it is not 0, so a frame without shader draws has the rows it had.
     void addMetrics(test::Probe&, std::string_view prefix, const Fingerprint&);
 }

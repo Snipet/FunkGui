@@ -9,9 +9,10 @@
 //
 //   funkgui_framerender --fingerprint <dump> [--legacy-hr]
 //       Prints the fingerprint, one "<key> <value>" line each: geometry, text (hashes), statics, live, texts, rrects,
-//       segments, areas, max_x, max_y, tag.<name>, view_w, view_h, glyphs_missing (FingerprintOptions defaults: live
-//       primitives, colours and text gamma left out). Live parity (03 §3.6) compares its geometry line with the
-//       headless probe's hash of the same state. --legacy-hr prints HR's layout.* metrics instead (below).
+//       segments, areas, max_x, max_y, shaders (v0.19.0, when not 0), tag.<name>, view_w, view_h, glyphs_missing
+//       (FingerprintOptions defaults: live primitives, colours and text gamma left out). Live parity (03 §3.6) compares
+//       its geometry line with the headless probe's hash of the same state. --legacy-hr prints HR's layout.* metrics
+//       instead (below).
 //
 //   funkgui_framerender --fingerprint <dump> [--legacy-hr] --check <probe> --golden-root <dir>
 //                       --arch arm64|x86_64|wasm32 [--bless-to <dir>] [--results <dir>] [--only <glob>] [--verbose]
@@ -115,6 +116,8 @@ namespace
         std::printf("statics %d\nlive %d\ntexts %d\nrrects %d\nsegments %d\nareas %d\n", fp.statics, fp.live,
                     fp.texts, fp.rrects, fp.segments, fp.areas);
         std::printf("max_x %.9g\nmax_y %.9g\n", static_cast<double>(fp.maxX), static_cast<double>(fp.maxY));
+        if (fp.shaders != 0)                         // v0.19.0, as addMetrics: only a frame with shader draws
+            std::printf("shaders %d\n", fp.shaders);
         for (const auto& [tag, count] : fp.tagCounts)
             std::printf("tag.%s %d\n", tagKey(tag).c_str(), count);
         std::printf("view_w %d\nview_h %d\nglyphs_missing %u\n", l.info.logicalW, l.info.logicalH, l.missingGlyphs);

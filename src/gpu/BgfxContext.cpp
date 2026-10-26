@@ -1,5 +1,7 @@
 #include <funkgui/gpu/BgfxContext.h>
 
+#include "ShaderLibraryDetail.h"
+
 #include <funkgui/gpu/NativeSurface.h>
 #include <funkgui/text/FontService.h>
 
@@ -184,6 +186,9 @@ namespace funkgui
         // caller reaches here precisely on that path before shutting bgfx
         // down. destroy() on an invalid handle is a no-op in bgfx.
         auto drop = [](auto& h) { if (bgfx::isValid(h)) bgfx::destroy(h); h = BGFX_INVALID_HANDLE; };
+        // v0.19.0: the custom programs (gpu/ShaderLibrary.h) go first, while bgfx is still up; their binaries stay, and
+        // each is built again the first time it is drawn after the next initialisation.
+        shaders::detail::releaseGpu();
         drop(progUi_);
         drop(fsUi_);
         drop(vsUi_);
