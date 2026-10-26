@@ -109,10 +109,20 @@ namespace funkgui
             return static_cast<float>(static_cast<double>(l0) + (static_cast<double>(l1) - static_cast<double>(l0)) * t);
         };
 
+        // v0.19.0: the shader draws recorded inside this clip sit between its primitives; as those are dropped each
+        // draw's position follows (it keeps the primitives before it that survive). They are the tail of the vector
+        // whose `at` lies past clip.first (at never decreases along it); a draw at clip.first itself stays put.
+        std::vector<ShaderDraw>& shaders = list_.shaders;
+        std::size_t s = shaders.size();
+        while (s > 0 && shaders[s - 1].at > clip.first)
+            --s;
+
         std::vector<Prim>& prims = list_.prims;
         std::size_t keep = clip.first;
         for (std::size_t i = clip.first; i < prims.size(); ++i)
         {
+            for (; s < shaders.size() && shaders[s].at <= i; ++s)
+                shaders[s].at = static_cast<uint32_t>(keep);
             Prim p = prims[i];
             const bool outside = !(p.x1 > cx0) || !(p.x0 < cx1) || !(p.y1 > cy0) || !(p.y0 < cy1);
             if (outside || clip.r.isEmpty())
@@ -139,7 +149,40 @@ namespace funkgui
             }
             prims[keep++] = p;
         }
+        for (; s < shaders.size(); ++s)
+            shaders[s].at = static_cast<uint32_t>(keep); // recorded after the clip's last primitive
         prims.resize(keep);                              // shrinking keeps the capacity
+    }
+
+    // ---- v0.19.0: shader draws --------------------------------------------------------------------------------------
+
+    void Canvas::shader(uint32_t id, const Rect& r, const float* params, int nParams)
+    {
+        if (!std::isfinite(r.x) || !std::isfinite(r.y) || !std::isfinite(r.w) || !std::isfinite(r.h) || r.isEmpty())
+            return;
+        ShaderDraw d;
+        if (clipDepth_ > 0)
+        {
+            // The innermost clip that took effect: each is already intersected with the ones around it, and a push
+            // beyond kMaxClips was ignored.
+            const int top = std::min(clipDepth_, kMaxClips) - 1;
+            const Rect& c = clips_[static_cast<std::size_t>(top)].r;
+            const float x0 = std::max(r.x, c.x), y0 = std::max(r.y, c.y);
+            const float x1 = std::min(r.right(), c.right()), y1 = std::min(r.bottom(), c.bottom());
+            if (c.isEmpty() || !(x1 > x0) || !(y1 > y0))
+                return;                                  // clipped away: nothing to draw, nothing recorded
+            d.clip = c;
+            d.clipped = true;
+        }
+        d.id = id;
+        d.at = static_cast<uint32_t>(list_.prims.size());
+        d.rect = r;
+        d.live = live_;
+        d.tag = tag_;
+        const int n = params == nullptr ? 0 : std::clamp(nParams, 0, ShaderDraw::kMaxParams);
+        for (int i = 0; i < n; ++i)
+            d.params[i] = params[i];
+        list_.shaders.push_back(d);
     }
 
     int Canvas::clipDepth() const noexcept { return clipDepth_; }

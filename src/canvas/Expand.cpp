@@ -1,5 +1,7 @@
 #include <funkgui/canvas/Expand.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 
 // The CPU half of BgfxSink (02 §3.2, SPRINTS §7 D9): a Prim back into HR's six non-indexed vertices a, b, c, a, c, d
@@ -61,5 +63,84 @@ namespace funkgui
             expand(p, dst);
             dst += kVerticesPerPrim;
         }
+    }
+}
+
+// ---- v0.19.0: shader draws (canvas/Expand.h) ------------------------------------------------------------------------
+
+namespace funkgui
+{
+    void expandShader(const ShaderDraw& s, Vtx* out) noexcept
+    {
+        const float x0 = s.rect.x, y0 = s.rect.y, x1 = s.rect.x + s.rect.w, y1 = s.rect.y + s.rect.h;
+        const auto at = [&s](float px, float py, float u, float v) noexcept
+        {
+            Vtx r{};
+            r.x = px;
+            r.y = py;
+            r.d0[0] = u;
+            r.d0[1] = v;
+            r.d0[2] = u * s.rect.w;                  // exactly 0 or w (and h): u and v are 0 or 1
+            r.d0[3] = v * s.rect.h;
+            return r;
+        };
+        const Vtx a = at(x0, y0, 0.0f, 0.0f);
+        const Vtx b = at(x1, y0, 1.0f, 0.0f);
+        const Vtx c = at(x1, y1, 1.0f, 1.0f);
+        const Vtx d = at(x0, y1, 0.0f, 1.0f);
+        out[0] = a;
+        out[1] = b;
+        out[2] = c;
+        out[3] = a;
+        out[4] = c;
+        out[5] = d;
+    }
+
+    void drawSteps(const PrimList& list, std::vector<DrawStep>& out)
+    {
+        out.clear();
+        const auto n = static_cast<uint32_t>(list.prims.size());
+        uint32_t cursor = 0;                         // the first primitive not yet in a step
+        for (std::size_t i = 0; i < list.shaders.size(); ++i)
+        {
+            const uint32_t at = std::min(list.shaders[i].at, n);
+            if (at > cursor)
+            {
+                out.push_back({ DrawStep::Kind::prims, cursor, at - cursor });
+                cursor = at;
+            }
+            out.push_back({ DrawStep::Kind::shader, static_cast<uint32_t>(i), 1u });
+        }
+        if (cursor < n)
+            out.push_back({ DrawStep::Kind::prims, cursor, n - cursor });
+    }
+
+    PixelRect shaderPixels(const ShaderDraw& s, const FrameInfo& info, int physW, int physH) noexcept
+    {
+        PixelRect px;
+        if (info.logicalW <= 0 || info.logicalH <= 0 || physW <= 0 || physH <= 0)
+            return px;
+        float x0 = s.rect.x, y0 = s.rect.y, x1 = s.rect.x + s.rect.w, y1 = s.rect.y + s.rect.h;
+        if (s.clipped)
+        {
+            x0 = std::max(x0, s.clip.x);
+            y0 = std::max(y0, s.clip.y);
+            x1 = std::min(x1, s.clip.x + s.clip.w);
+            y1 = std::min(y1, s.clip.y + s.clip.h);
+        }
+        const float sx = static_cast<float>(physW) / static_cast<float>(info.logicalW);
+        const float sy = static_cast<float>(physH) / static_cast<float>(info.logicalH);
+        // The first pixel whose centre (i + 0.5) / scale is at or after the edge, clamped to 0..limit (NaN -> 0).
+        const auto first = [](float edge, float scale, int limit) noexcept
+        {
+            const float f = std::ceil(edge * scale - 0.5f);
+            return f > 0.0f ? (f < static_cast<float>(limit) ? static_cast<int>(f) : limit) : 0;
+        };
+        const int px0 = first(x0, sx, physW), px1 = first(x1, sx, physW);
+        const int py0 = first(y0, sy, physH), py1 = first(y1, sy, physH);
+        if (px1 <= px0 || py1 <= py0)
+            return px;
+        px = { px0, py0, px1 - px0, py1 - py0 };
+        return px;
     }
 }

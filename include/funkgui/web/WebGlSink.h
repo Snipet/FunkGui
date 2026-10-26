@@ -40,6 +40,11 @@
 // and submit() returns Result::lost; on the restore it builds the program, the buffer and the texture again, so the
 // next submit() draws. The loss event is answered with preventDefault(), without which a browser never restores.
 //
+// Shader draws (v0.19.0, Canvas::shader): the stated fallback is that they draw nothing here (a browser has no shaderc
+// and FunkGui::web has no custom-program registry); the primitives around them draw as ever, still as one draw call,
+// and a frame of shader draws alone is `empty`. SoftRaster draws a placeholder for them, the native sink the host's
+// program (canvas/PrimList.h ShaderDraw).
+//
 // This header is plain C++ (it compiles on every host); the class is defined only in FunkGui::web. Main thread only.
 // No pacing, no input and no canvas sizing policy here: those are the web host's.
 

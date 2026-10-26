@@ -3,6 +3,29 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.19.0 — 2026-10-26 · MINOR: custom shaders
+
+Golden impact: **none** on existing rows (a frame without shader draws records, hashes, dumps and draws exactly as
+before, in one draw call); `fg.shader.hash` gains four rows pinning the new vertex shader. New tests:
+`fg.canvas.shader` (every preset, wasm32 too), `fg.shader.library` and `fg.shader.draw` (headless Metal read-back:
+pixels, the clip and the order; skipped without a Metal device). Linux not run (its path checks SPIR-V by magic and
+size only). FCompressor a5fe769 passed its agent and agent-gui gates against it unchanged (529/529);
+TestingPlayground and TestingPlaygroundSynth draw their `.gui` files' shaders with it.
+
+- **`Canvas::shader(id, rect, params, n)`** records a rectangle filled by a host's own fragment shader, in order with
+  the primitives (what was recorded before draws under it, what comes after over it), with the clip in force as a
+  scissor and up to 16 params (`u_params`). `PrimList::shaders`, `ShaderDraw`; the dump gains `shader` lines in
+  drawing order; fingerprints hash shader draws into geometry only when there are some.
+- **`gpu/ShaderLibrary.h`** (`funkgui::shaders`): a process-wide registry of programs, each FunkGui's vertex shader
+  (`shaders/vs_custom.sc`) with the host's fragment shader, compiled at run time with the pinned bgfx's shaderc.
+  `set(id, binary, size, why)` checks the binary (bgfx header, stage, renderer, the `$input v_uv, v_px` varyings, no
+  textures, only FunkGui's and bgfx's uniforms, and on macOS Metal's own compiler, which would otherwise abort the
+  process inside bgfx) and keeps it, so programs come back after bgfx restarts; `remove`, `has`, `target()` (shaderc's
+  `--platform` and `-p`), and the texts a host compiles with: `varyingDef()`, `fragmentPrelude()`, `bgfxShaderSh()`.
+- **`BgfxSink`** splits a frame at each shader draw (`drawSteps`), the view sequential; `lastDrawCalls()`.
+  `SoftRaster` draws a striped placeholder (`shaderPlaceholder`); `WebGlSink` draws nothing for them (the web has no
+  registry).
+
 ## v0.18.0 — 2026-10-24 · MINOR: resizable Panels, and the pointer after an unbounded drag
 
 Golden impact: **none** (no drawing changes; every existing row unchanged on macOS with JUCE, in the JUCE-free core

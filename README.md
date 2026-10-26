@@ -18,7 +18,7 @@ Emscripten, on a `<canvas>`, where a WebGL2 sink draws the recorded frame in one
 
 FunkGui is the GUI of [FCompressor](https://github.com/Snipet/FCompressor). HardwareReverb, a private plugin whose GUI
 code FunkGui grew from, has moved onto it too. FunkGui is at 0.x, and its API may change between minor versions.
-Every release is an annotated tag on `main` (latest: `v0.18.0`), and [`CHANGELOG.md`](CHANGELOG.md) says what each
+Every release is an annotated tag on `main` (latest: `v0.19.0`), and [`CHANGELOG.md`](CHANGELOG.md) says what each
 release does to a consumer's golden files.
 
 ![Widgets from FunkGui's gallery: slider states, filled areas and a transfer curve, segmented selectors, latches and a focus ring](docs/images/gallery.png)
@@ -34,6 +34,7 @@ Panel         your UI: one fixed logical size, tick(dt), draw(Canvas&, Theme&), 
 Canvas        records primitives on the CPU into a PrimList; makes no GPU calls
   |
   +-- EditorHost + BgfxSink   live: a juce::AudioProcessorEditor; bgfx on Metal or Vulkan, one draw call per frame
+                              (plus one per custom-shader rectangle and one for the run after it)
   +-- WebHost + WebGlSink     browser: a <canvas>, no JUCE; WebGL2, one draw call per frame
   +-- HeadlessHost            tests: fixed dt, synthetic input -> frame dump, fingerprint, PNG, accessibility list
 ```
@@ -59,7 +60,8 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
 - **canvas**: the recorder. Rounded rectangles (per-corner radii, borders, soft edges), hairlines snapped to device
   pixels, segments, polylines, filled areas and strips, discs, dotted rules and text. Each primitive carries a semantic
   tag and a live flag for tests. Nested clipping, a text dump format, fingerprints, and `SoftRaster`, a CPU rasteriser
-  that mirrors the fragment shader.
+  that mirrors the fragment shader. `shader()` (v0.19.0) records a rectangle that a host's own fragment shader fills,
+  in order with the primitives and under the clip in force; `SoftRaster` draws it as a striped placeholder.
 - **text**: an SDF font atlas baked on the CPU, through JUCE, from the bundled JetBrains Mono subset (printable ASCII
   and 19 symbols), text measurement and fitting, `LineEdit`, the state of a one-line text field, and `Highlighter`, the
   per-line, stateful tokeniser interface the multi-line editor highlights through, with `KeywordHighlighter`, a
@@ -92,7 +94,11 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
   and the clipboard of `HostServices` through JUCE, and can capture frames. `FramePump` gives every editor in the
   process one clock (a display link on macOS, a timer on Linux) and one `bgfx::frame()` per tick. On macOS the
   Objective-C classes are registered at run time under randomised names, so two products using FunkGui in one host
-  never collide.
+  never collide. `ShaderLibrary.h` (`funkgui::shaders`, v0.19.0) registers custom fragment shaders by id: a host
+  compiles one at run time with bgfx's shaderc (`target()`, `varyingDef()`, `fragmentPrelude()` and `bgfxShaderSh()`
+  give it what to compile with), `set()` checks it (on macOS Metal compiles it too) and links it with FunkGui's own
+  vertex shader, and `BgfxSink` draws it wherever a Canvas recorded `shader()`, with its rectangle, the frame's clock
+  and 16 parameters as uniforms.
 - **web** (`FunkGui::web`; Emscripten only, no JUCE): `WebHost`, `EditorHost`'s counterpart on a `<canvas>`. It runs the
   frame clock on `requestAnimationFrame` (about 60 Hz while anything moves, 12 Hz idle, nothing while the document is
   hidden), sizes the canvas for the UI zoom and the device pixel ratio, converts the browser's pointer, wheel and key
@@ -100,7 +106,7 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
   `clipboardText` reads empty there); it has no file chooser, no IME, no file drops and no accessibility mirror.
   `WebHostConfig::beforeTick` (v0.14.0) is a product's function called just before each tick of the Panel. `WebGlSink`
   draws a recorded frame with WebGL2 in one draw call, from shader text generated out of the same `shaders/*.sc`, and
-  rebuilds its resources after a context loss. `installLocalStoragePrefs()` (`WebPrefs.h`) keeps the UI preferences in
+  rebuilds its resources after a context loss; it draws nothing for a custom-shader rectangle. `installLocalStoragePrefs()` (`WebPrefs.h`) keeps the UI preferences in
   `localStorage`. `WebInput.h` and `WebClock.h` are the input and clock rules as header-only C++, tested natively and
   under node. Every header is plain C++ and compiles on every host; `WebHost`, `WebGlSink` and
   `installLocalStoragePrefs()` are defined only under Emscripten. The menu and the clipboard live behind
@@ -146,7 +152,7 @@ FetchContent_MakeAvailable(JUCE)
 # Options are normal variables set before FetchContent_MakeAvailable(FunkGui); these two are the defaults.
 set(FUNKGUI_WITH_BGFX ON)
 set(FUNKGUI_WITH_PRESETS ON)
-FetchContent_Declare(FunkGui GIT_REPOSITORY https://github.com/Snipet/FunkGui.git GIT_TAG v0.18.0)
+FetchContent_Declare(FunkGui GIT_REPOSITORY https://github.com/Snipet/FunkGui.git GIT_TAG v0.19.0)
 FetchContent_MakeAvailable(FunkGui)
 
 juce_add_plugin(MyPlugin FORMATS AU VST3 Standalone PRODUCT_NAME "My Plugin")   # plus your usual arguments
@@ -160,7 +166,7 @@ For a browser, configure with Emscripten's toolchain (`emcmake cmake …`) and n
 
 ```cmake
 set(FUNKGUI_WITH_JUCE OFF)          # the JUCE-free core; FunkGui::gpu and FunkGui::presets are not defined
-FetchContent_Declare(FunkGui GIT_REPOSITORY https://github.com/Snipet/FunkGui.git GIT_TAG v0.18.0)
+FetchContent_Declare(FunkGui GIT_REPOSITORY https://github.com/Snipet/FunkGui.git GIT_TAG v0.19.0)
 FetchContent_MakeAvailable(FunkGui)
 
 add_executable(my_ui ui.cpp)        # one module for the page: my_ui.js and my_ui.wasm
@@ -338,7 +344,8 @@ src/                 the implementations, same layout; only src/gpu/ touches bgf
 src/juce/, nojuce/   the core's sources that need JUCE, and their JUCE-free counterparts (FUNKGUI_WITH_JUCE=OFF)
 src/web/             FunkGui::web, the only library sources that include Emscripten's headers
 shaders/             the bgfx vertex and fragment shaders: one program, four primitive kinds; WebGL2 gets the same
-                     program as generated GLSL ES 3.00 text
+                     program as generated GLSL ES 3.00 text. vs_custom.sc, varying_custom.def.sc and
+                     fs_custom_prelude.sc: the vertex half, varyings and head of a host's custom shaders
 fonts/               the JetBrains Mono subset, the upstream face it was cut from, their licence, and
                      FunkGuiAtlas-macos.bin, the atlas baked on macOS for builds without JUCE
 cmake/               FunkGuiDeps.cmake (pins and dependency checks), FunkGuiTargets.cmake (targets and functions),

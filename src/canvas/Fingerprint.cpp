@@ -177,6 +177,26 @@ namespace funkgui
             fp.maxY = std::max(fp.maxY, p.y1);
             countTag(fp.tagCounts, p.tag);
         }
+
+        // v0.19.0: the shader draws, after every primitive (Fingerprint.h says what is hashed). None: nothing mixed.
+        for (const ShaderDraw& s : list.shaders)
+        {
+            if (s.live)
+                ++fp.live;
+            if (s.live && opt.excludeLive)
+                continue;
+            mix32(geometry, s.id);
+            mix32(geometry, s.at);
+            const std::array<float, 8> v = { s.rect.x, s.rect.y, s.rect.w, s.rect.h,
+                                             s.clip.x, s.clip.y, s.clip.w, s.clip.h };
+            mix32(geometry, s.clipped ? 1u : 0u);
+            for (const float x : v)
+                mix32(geometry, static_cast<uint32_t>(quantise(x, quantum)));
+            ++fp.shaders;
+            fp.maxX = std::max(fp.maxX, s.rect.right());
+            fp.maxY = std::max(fp.maxY, s.rect.bottom());
+            countTag(fp.tagCounts, s.tag);
+        }
         fp.geometry = geometry;
         fp.text = text;
         return fp;
@@ -196,6 +216,8 @@ namespace funkgui
         P.num(pre + ".areas", fp.areas, T::Tol::exact());
         P.num(pre + ".max_x", static_cast<double>(fp.maxX), T::Tol::abs(0.01));
         P.num(pre + ".max_y", static_cast<double>(fp.maxY), T::Tol::abs(0.01));
+        if (fp.shaders != 0)                             // v0.19.0: only a frame with shader draws has the row
+            P.num(pre + ".shaders", fp.shaders, T::Tol::exact());
         for (const auto& [tag, count] : fp.tagCounts)
         {
             // Golden keys are lower case: SLOT_LABEL -> <prefix>.tag.slot_label; an unnamed tag by its number.
