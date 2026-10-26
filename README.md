@@ -18,7 +18,7 @@ Emscripten, on a `<canvas>`, where a WebGL2 sink draws the recorded frame in one
 
 FunkGui is the GUI of [FCompressor](https://github.com/Snipet/FCompressor). HardwareReverb, a private plugin whose GUI
 code FunkGui grew from, has moved onto it too. FunkGui is at 0.x, and its API may change between minor versions.
-Every release is an annotated tag on `main` (latest: `v0.18.0`), and [`CHANGELOG.md`](CHANGELOG.md) says what each
+Every release is an annotated tag on `main` (latest: `v0.19.0`), and [`CHANGELOG.md`](CHANGELOG.md) says what each
 release does to a consumer's golden files.
 
 ![Widgets from FunkGui's gallery: slider states, filled areas and a transfer curve, segmented selectors, latches and a focus ring](docs/images/gallery.png)
@@ -152,7 +152,7 @@ FetchContent_MakeAvailable(JUCE)
 # Options are normal variables set before FetchContent_MakeAvailable(FunkGui); these two are the defaults.
 set(FUNKGUI_WITH_BGFX ON)
 set(FUNKGUI_WITH_PRESETS ON)
-FetchContent_Declare(FunkGui GIT_REPOSITORY https://github.com/Snipet/FunkGui.git GIT_TAG v0.18.0)
+FetchContent_Declare(FunkGui GIT_REPOSITORY https://github.com/Snipet/FunkGui.git GIT_TAG v0.19.0)
 FetchContent_MakeAvailable(FunkGui)
 
 juce_add_plugin(MyPlugin FORMATS AU VST3 Standalone PRODUCT_NAME "My Plugin")   # plus your usual arguments
@@ -166,7 +166,7 @@ For a browser, configure with Emscripten's toolchain (`emcmake cmake …`) and n
 
 ```cmake
 set(FUNKGUI_WITH_JUCE OFF)          # the JUCE-free core; FunkGui::gpu and FunkGui::presets are not defined
-FetchContent_Declare(FunkGui GIT_REPOSITORY https://github.com/Snipet/FunkGui.git GIT_TAG v0.18.0)
+FetchContent_Declare(FunkGui GIT_REPOSITORY https://github.com/Snipet/FunkGui.git GIT_TAG v0.19.0)
 FetchContent_MakeAvailable(FunkGui)
 
 add_executable(my_ui ui.cpp)        # one module for the page: my_ui.js and my_ui.wasm
