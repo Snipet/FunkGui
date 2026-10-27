@@ -1,10 +1,14 @@
 #include <funkgui/canvas/SoftRaster.h>
 
+#include <funkgui/canvas/Expand.h>
+#include <funkgui/canvas/Images.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <vector>
 
 // The CPU rasteriser (02 §4.3, §5.10): shaders/fs_ui.sc evaluated per sample, so a PrimList can be looked at with no
@@ -25,6 +29,12 @@
 //   are decoded as int(d2[3] + 0.5) (bit 1 strokes the bottom edge, bit 2 both; bit 0, live, changes nothing), where
 //   the shader takes mod(floor(f * 0.5 + 0.01), 2) and mod(floor(f * 0.25 + 0.01), 2); fg.softraster.area checks the
 //   two decodes agree for flags 0..7 against the shader's own text.
+//
+// v0.20.0, image draws (Canvas::image): shaders/fs_image.sc evaluated per sample the same way, over the samples of
+// dst grown by kImageApron ∩ the clip (the GPU's quad and scissor), from the registry's picture as it is when
+// rasterise() runs (canvas/Images.h): the level and the sampling rectangle are canvas/Expand.h's imageLevel and
+// imageSampling, v_px is the sample's offset from dst's top-left corner, and the level is sampled bilinearly with
+// clamped edges, as the GPU's texture2DLod at that level. A picture that is not registered draws nothing.
 //
 // The image is the frame's physical size, round(logical * dpi) per axis (dpi <= 0.05 or not finite draws at 1x, as
 // Canvas::begin), sampled at supersample x supersample points per physical pixel (1..4) and box-filtered down.
@@ -74,6 +84,24 @@ namespace funkgui
                 return static_cast<float>(px[static_cast<size_t>(y) * W + static_cast<size_t>(x)]) / 255.0f;
             };
             return mixf(mixf(at(x0, y0), at(x1, y0), tx), mixf(at(x0, y1), at(x1, y1), tx), ty);
+        }
+
+        // v0.20.0: texture2DLod(s_image, (u, v), level) on one premultiplied RGBA8 level of w x h texels: bilinear over
+        // texel centres, clamped to the edge texels (as sampleAtlas; the sampling rectangle is clamped before).
+        Rgba sampleTexels(const uint8_t* px, int w, int h, float u, float v) noexcept
+        {
+            const float fx = std::clamp(u * static_cast<float>(w) - 0.5f, 0.0f, static_cast<float>(w - 1));
+            const float fy = std::clamp(v * static_cast<float>(h) - 0.5f, 0.0f, static_cast<float>(h - 1));
+            const int x0 = static_cast<int>(fx), y0 = static_cast<int>(fy);
+            const int x1 = std::min(x0 + 1, w - 1), y1 = std::min(y0 + 1, h - 1);
+            const float tx = fx - static_cast<float>(x0), ty = fy - static_cast<float>(y0);
+            const auto at = [px, w](int x, int y, int c) noexcept {
+                return static_cast<float>(px[(static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x))
+                                                 * 4u + static_cast<size_t>(c)]) / 255.0f;
+            };
+            const auto channel = [&](int c) noexcept
+            { return mixf(mixf(at(x0, y0, c), at(x1, y0, c), tx), mixf(at(x0, y1, c), at(x1, y1, c), tx), ty); };
+            return { channel(0), channel(1), channel(2), channel(3) };
         }
 
         // The flags as the mirror reads them (02 §4.3): int(d2[3] + 0.5), 0 when that is not a small non-negative
@@ -232,21 +260,79 @@ namespace funkgui
                 }
             }
         };
-        std::size_t nextShader = 0;                           // each shader draw before prims[at] (PrimList.h)
-
-        for (std::size_t i = 0; i < list.prims.size(); ++i)
+        // v0.20.0: an image draw (canvas/PrimList.h ImageDraw has the rule; shaders/fs_image.sc is its GPU twin).
+        const auto image = [&fb, W, H, scale, aa, dpi](const ImageDraw& m)
         {
-            for (; nextShader < list.shaders.size() && list.shaders[nextShader].at <= i; ++nextShader)
-                placeholder(list.shaders[nextShader]);
-            const Prim& p = list.prims[i];
+            const std::shared_ptr<const images::Picture> pic = images::picture(m.id);
+            if (pic == nullptr || !(m.dst.w > 0.0f) || !(m.dst.h > 0.0f))
+                return;                                       // not registered (now): nothing, as on the GPU
+            float x0 = m.dst.x - kImageApron, y0 = m.dst.y - kImageApron;
+            float x1 = m.dst.x + m.dst.w + kImageApron, y1 = m.dst.y + m.dst.h + kImageApron;
+            if (m.clipped)
+            {
+                x0 = std::max(x0, m.clip.x);
+                y0 = std::max(y0, m.clip.y);
+                x1 = std::min(x1, m.clip.x + m.clip.w);
+                y1 = std::min(y1, m.clip.y + m.clip.h);
+            }
+            if (!(x1 > x0) || !(y1 > y0))
+                return;
+            const int sx0 = std::max(0, firstAtOrAfter(x0, scale)), sx1 = std::min(W, firstAtOrAfter(x1, scale));
+            const int sy0 = std::max(0, firstAtOrAfter(y0, scale)), sy1 = std::min(H, firstAtOrAfter(y1, scale));
+            const int level = imageLevel(m, dpi, pic->w, pic->h);
+            const ImageSampling smp = imageSampling(m, level, pic->w, pic->h);
+            const images::Level& lv = pic->levels[static_cast<size_t>(level)];
+            const uint8_t* texels = pic->level(level);
+            const float bx = m.dst.w * 0.5f, by = m.dst.h * 0.5f;
+            const float r = std::min(m.radius, std::min(bx, by));
+            for (int y = sy0; y < sy1; ++y)
+            {
+                const float fy = (static_cast<float>(y) + 0.5f) / scale;
+                if (fy < y0 || !(fy < y1))
+                    continue;                                 // the half-open rule, as for a primitive
+                const float ly = fy - m.dst.y;                // v_px.y
+                const float sv = std::clamp(smp.v0 + (ly / m.dst.h) * smp.dv, smp.loV, smp.hiV);
+                Rgba* row = &fb[static_cast<size_t>(y) * static_cast<size_t>(W)];
+                for (int x = sx0; x < sx1; ++x)
+                {
+                    const float fx = (static_cast<float>(x) + 0.5f) / scale;
+                    if (fx < x0 || !(fx < x1))
+                        continue;
+                    const float lx = fx - m.dst.x;            // v_px.x
+                    // The mask: an rrect's signed distance and edge (fs_ui.sc), centre-relative.
+                    const float qx = std::abs(lx - bx) - bx + r, qy = std::abs(ly - by) - by + r;
+                    const float mx = std::max(qx, 0.0f), my = std::max(qy, 0.0f);
+                    const float d = std::sqrt(mx * mx + my * my) + std::min(std::max(qx, qy), 0.0f) - r;
+                    const float cover = (1.0f - smoothstep(-aa, aa, d)) * m.opacity;
+                    if (!(cover > 0.0f))
+                        continue;
+                    const float su = std::clamp(smp.u0 + (lx / m.dst.w) * smp.du, smp.loU, smp.hiU);
+                    const Rgba t = sampleTexels(texels, lv.w, lv.h, su, sv);
+                    const float a = clamp01(t.a * cover);
+                    if (!(a > 0.0f))
+                        continue;
+                    // Unpremultiplied, then blended as a primitive is.
+                    const float k = 1.0f / std::max(t.a, 1e-5f);
+                    Rgba& o = row[x];
+                    o.r = std::min(t.r * k, 1.0f) * a + o.r * (1.0f - a);
+                    o.g = std::min(t.g * k, 1.0f) * a + o.g * (1.0f - a);
+                    o.b = std::min(t.b * k, 1.0f) * a + o.b * (1.0f - a);
+                    o.a = a + o.a * (1.0f - a);
+                }
+            }
+        };
+
+        // One primitive: fs_ui.sc per sample (the file comment).
+        const auto primitive = [&fb, W, H, scale, aa, &field](const Prim& p)
+        {
             if (!(p.x1 > p.x0) || !(p.y1 > p.y0))
-                continue;                                     // empty or not finite: the GPU draws nothing either
+                return;                                       // empty or not finite: the GPU draws nothing either
             const int sx0 = std::max(0, firstAtOrAfter(p.x0, scale));
             const int sx1 = std::min(W, firstAtOrAfter(p.x1, scale));
             const int sy0 = std::max(0, firstAtOrAfter(p.y0, scale));
             const int sy1 = std::min(H, firstAtOrAfter(p.y1, scale));
             if (sx0 >= sx1 || sy0 >= sy1)
-                continue;
+                return;
 
             const Rgba c0 = unpack(p.c0), c1 = unpack(p.c1);
             const float qw = p.x1 - p.x0, qh = p.y1 - p.y0;
@@ -274,9 +360,22 @@ namespace funkgui
                     d.a = a + d.a * (1.0f - a);
                 }
             }
+        };
+
+        // In drawing order (canvas/Expand.h drawSteps): runs of primitives, and each shader draw (v0.19.0) and image
+        // draw (v0.20.0) between them at its place. Without either, one run of every primitive.
+        std::vector<DrawStep> steps;
+        drawSteps(list, steps);
+        for (const DrawStep& step : steps)
+        {
+            if (step.kind == DrawStep::Kind::shader)
+                placeholder(list.shaders[step.first]);
+            else if (step.kind == DrawStep::Kind::image)
+                image(list.images[step.first]);
+            else
+                for (std::size_t i = step.first; i < static_cast<std::size_t>(step.first) + step.count; ++i)
+                    primitive(list.prims[i]);
         }
-        for (; nextShader < list.shaders.size(); ++nextShader)
-            placeholder(list.shaders[nextShader]);            // recorded after the last primitive
 
         // Box filter to the physical size and round once.
         img.rgba.assign(static_cast<size_t>(img.w) * static_cast<size_t>(img.h) * 4u, 0);

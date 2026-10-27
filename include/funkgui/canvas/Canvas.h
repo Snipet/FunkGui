@@ -146,12 +146,36 @@ namespace funkgui
         // Plain C++: the same on Linux, without JUCE and on a web host.
         void shader(uint32_t id, const Rect& r, const float* params = nullptr, int nParams = 0);
 
+        // ---- v0.20.0 addition: images (src/canvas/Canvas.cpp) -------------------------------------------------------
+        // Records an image draw (canvas/PrimList.h ImageDraw): the picture registered under `id` (canvas/Images.h)
+        // stretched over dst (logical px), sampling its sub-rectangle uv (0..1 of the picture: a caller crops to cover
+        // a dst of another aspect with it), with corners rounded to `radius` logical px (antialiased as an rrect's are)
+        // and its alpha multiplied by opacity; at this point in the order, as shader() is: what was recorded before it
+        // draws under it, what is recorded after it over it. Kept with it: the clip in force (a scissor when drawn;
+        // the quad is never cut), the current tag and live flag.
+        // - Records nothing (and counts nothing) when dst is not finite or not > 0 wide and high, or when uv is empty
+        //   once clamped to 0..1 (a uv with a coordinate that is not finite is taken as the whole picture).
+        // - Otherwise an id the registry does not hold now records nothing and counts one in PrimList::missingImages,
+        //   inside the clip or not (the draw statistics HeadlessHost::draw() returns; images.size() counts the image
+        //   draws recorded), and a dst the clip in force leaves nothing of records nothing.
+        // - A radius that is negative or not finite is 0 (one larger than half the shorter side makes a pill or a
+        //   disc, as rrect()); an opacity is clamped to 0..1 (not finite: 0) and recorded even when 0, so a fading
+        //   picture keeps its place in the layout.
+        // Drawn by every sink: SoftRaster, BgfxSink and WebGlSink. Plain C++: the same on Linux, without JUCE and on a
+        // web host.
+        void image(uint32_t id, const Rect& dst, float radius = 0.0f, float opacity = 1.0f,
+                   const Rect& uv = { 0.0f, 0.0f, 1.0f, 1.0f });
+
     protected:
         // Appends one Prim stamped with the current tag and live flag and with d2[2] = kind (K3 #16): the HR
         // primitives (Canvas.cpp, G3) and the new ones (CanvasShapes.cpp, G4) both append through it.
         Prim& emit(PrimKind);
 
     private:
+        // v0.20.0: the clip in force for a draw of r (shader() and image()): false when it leaves nothing of r, else
+        // clip and clipped as a ShaderDraw or an ImageDraw keeps them.
+        bool clipFor(const Rect& r, Rect& clip, bool& clipped) const noexcept;
+
         // Private state: completed by the implementing card (G3); not part of the frozen API.
         const FontAtlasSdf& atlas_;
         PrimList list_;

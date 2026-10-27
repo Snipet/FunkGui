@@ -288,13 +288,16 @@ endfunction()
 #=======================================================================================================================
 # FunkGuiShaderText (v0.12.0): the UI program as GLSL ES 3.00 text, <funkgui/shaders/ui.es300.h> in
 # ${FUNKGUI_GENERATED_DIR}, for the WebGL2 sink (FunkGui::web, below). cmake/FunkGuiShaderText.cmake writes it from
-# shaders/{vs_ui,fs_ui,varying.def}.sc with CMake alone (no shaderc, no bgfx, no JUCE), so the target exists in every
+# shaders/{vs_ui,fs_ui,varying.def}.sc (v0.20.0: and the image program, shaders/{vs_custom,fs_image,
+# varying_custom.def}.sc) with CMake alone (no shaderc, no bgfx, no JUCE), so the target exists in every
 # configuration and on every host, and fg.shader.web pins the same bytes in all of them. Nothing depends on it but
 # FunkGui::web and that test: no other build runs it.
 #=======================================================================================================================
 set(_fg_text_header ${FUNKGUI_GENERATED_DIR}/funkgui/shaders/ui.es300.h)
 set(_fg_text_inputs ${PROJECT_SOURCE_DIR}/shaders/vs_ui.sc ${PROJECT_SOURCE_DIR}/shaders/fs_ui.sc
-                    ${PROJECT_SOURCE_DIR}/shaders/varying.def.sc)
+                    ${PROJECT_SOURCE_DIR}/shaders/varying.def.sc
+                    ${PROJECT_SOURCE_DIR}/shaders/vs_custom.sc ${PROJECT_SOURCE_DIR}/shaders/fs_image.sc
+                    ${PROJECT_SOURCE_DIR}/shaders/varying_custom.def.sc)   # v0.20.0: the image program too
 file(MAKE_DIRECTORY ${FUNKGUI_GENERATED_DIR}/funkgui/shaders)
 add_custom_command(OUTPUT ${_fg_text_header}
   COMMAND ${CMAKE_COMMAND} -DFUNKGUI_SHADER_DIR=${PROJECT_SOURCE_DIR}/shaders -DFUNKGUI_SHADER_OUT=${_fg_text_header}
@@ -467,9 +470,11 @@ if(FUNKGUI_WITH_BGFX)
   # puts in front of its main() (shaders/fs_custom_prelude.sc) and test/shaders/fs_custom_test.main.sc, joined at
   # configure time, a fragment shader built exactly as a host builds one at run time. vs_ui and fs_ui are compiled as
   # they always were.
+  # v0.20.0 added fs_image (Canvas::image's fragment shader, linked with vs_custom: canvas/PrimList.h ImageDraw).
   set(_fg_shader_list vs_ui=vertex=${PROJECT_SOURCE_DIR}/shaders/vs_ui.sc=varying.def
                       fs_ui=fragment=${PROJECT_SOURCE_DIR}/shaders/fs_ui.sc=varying.def
-                      vs_custom=vertex=${PROJECT_SOURCE_DIR}/shaders/vs_custom.sc=varying_custom.def)
+                      vs_custom=vertex=${PROJECT_SOURCE_DIR}/shaders/vs_custom.sc=varying_custom.def
+                      fs_image=fragment=${PROJECT_SOURCE_DIR}/shaders/fs_image.sc=varying_custom.def)
   if(FUNKGUI_BUILD_TESTS)
     set(_fg_test_sc ${FunkGui_BINARY_DIR}/funkgui-test-shaders/fs_custom_test.sc)
     set(_fg_test_parts ${PROJECT_SOURCE_DIR}/shaders/fs_custom_prelude.sc

@@ -1,5 +1,6 @@
 #include <funkgui/gpu/BgfxContext.h>
 
+#include "ImageGpu.h"
 #include "ShaderLibraryDetail.h"
 
 #include <funkgui/gpu/NativeSurface.h>
@@ -189,6 +190,9 @@ namespace funkgui
         // v0.19.0: the custom programs (gpu/ShaderLibrary.h) go first, while bgfx is still up; their binaries stay, and
         // each is built again the first time it is drawn after the next initialisation.
         shaders::detail::releaseGpu();
+        // v0.20.0: the image program and the picture textures likewise (src/gpu/ImageGpu.h); the pictures stay in the
+        // registry and are uploaded again at their first draw after the next initialisation.
+        images::gpu::releaseGpu();
         drop(progUi_);
         drop(fsUi_);
         drop(vsUi_);

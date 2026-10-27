@@ -8,8 +8,10 @@ $output v_uv, v_px
 // shader gets v_uv (0..1 across the rect, y down) and v_px (logical px from the rect's top-left corner), interpolated.
 //
 // Compiled with shaders/varying_custom.def.sc, the varyings a host's fragment shader is compiled with too
-// (shaders::varyingDef()). bgfx links the two only when the fragment shader's $input names exactly this $output's set
-// (shaderc hashes the sorted names): v_px and v_uv, whichever the fragment shader reads.
+// (shaders::varyingDef()). bgfx links the two only when the fragment shader's input line names exactly this shader's
+// output set (shaderc hashes the sorted names): v_px and v_uv, whichever the fragment shader reads. v0.20.0: also the
+// vertex half of FunkGui's image program (shaders/fs_image.sc), and turned into GLSL ES 3.00 for WebGL2 by
+// cmake/FunkGuiShaderText.cmake, which refuses the directive character anywhere but on the directive lines.
 
 #include <bgfx_shader.sh>
 

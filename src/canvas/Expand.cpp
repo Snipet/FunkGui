@@ -1,5 +1,7 @@
 #include <funkgui/canvas/Expand.h>
 
+#include <funkgui/canvas/Images.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -101,25 +103,54 @@ namespace funkgui
         out.clear();
         const auto n = static_cast<uint32_t>(list.prims.size());
         uint32_t cursor = 0;                         // the first primitive not yet in a step
-        for (std::size_t i = 0; i < list.shaders.size(); ++i)
+        std::size_t s = 0, m = 0;                    // the next shader draw, the next image draw
+        while (s < list.shaders.size() || m < list.images.size())
         {
-            const uint32_t at = std::min(list.shaders[i].at, n);
+            // v0.20.0: recording order between the two kinds (an image draw follows shaders[0 .. shaderAt)).
+            const bool image = m < list.images.size()
+                               && (s >= list.shaders.size() || list.images[m].shaderAt <= s);
+            const uint32_t at = std::min(image ? list.images[m].at : list.shaders[s].at, n);
             if (at > cursor)
             {
                 out.push_back({ DrawStep::Kind::prims, cursor, at - cursor });
                 cursor = at;
             }
-            out.push_back({ DrawStep::Kind::shader, static_cast<uint32_t>(i), 1u });
+            if (image)
+                out.push_back({ DrawStep::Kind::image, static_cast<uint32_t>(m++), 1u });
+            else
+                out.push_back({ DrawStep::Kind::shader, static_cast<uint32_t>(s++), 1u });
         }
         if (cursor < n)
             out.push_back({ DrawStep::Kind::prims, cursor, n - cursor });
     }
 
+    namespace
+    {
+        // The pixels whose centres lie in the half-open [x0, x1) x [y0, y1) (logical px) of a physW x physH frame.
+        PixelRect pixelsOf(float x0, float y0, float x1, float y1, const FrameInfo& info, int physW, int physH) noexcept
+        {
+            PixelRect px;
+            if (info.logicalW <= 0 || info.logicalH <= 0 || physW <= 0 || physH <= 0)
+                return px;
+            const float sx = static_cast<float>(physW) / static_cast<float>(info.logicalW);
+            const float sy = static_cast<float>(physH) / static_cast<float>(info.logicalH);
+            // The first pixel whose centre (i + 0.5) / scale is at or after the edge, clamped to 0..limit (NaN -> 0).
+            const auto first = [](float edge, float scale, int limit) noexcept
+            {
+                const float f = std::ceil(edge * scale - 0.5f);
+                return f > 0.0f ? (f < static_cast<float>(limit) ? static_cast<int>(f) : limit) : 0;
+            };
+            const int px0 = first(x0, sx, physW), px1 = first(x1, sx, physW);
+            const int py0 = first(y0, sy, physH), py1 = first(y1, sy, physH);
+            if (px1 <= px0 || py1 <= py0)
+                return px;
+            px = { px0, py0, px1 - px0, py1 - py0 };
+            return px;
+        }
+    }
+
     PixelRect shaderPixels(const ShaderDraw& s, const FrameInfo& info, int physW, int physH) noexcept
     {
-        PixelRect px;
-        if (info.logicalW <= 0 || info.logicalH <= 0 || physW <= 0 || physH <= 0)
-            return px;
         float x0 = s.rect.x, y0 = s.rect.y, x1 = s.rect.x + s.rect.w, y1 = s.rect.y + s.rect.h;
         if (s.clipped)
         {
@@ -128,19 +159,97 @@ namespace funkgui
             x1 = std::min(x1, s.clip.x + s.clip.w);
             y1 = std::min(y1, s.clip.y + s.clip.h);
         }
-        const float sx = static_cast<float>(physW) / static_cast<float>(info.logicalW);
-        const float sy = static_cast<float>(physH) / static_cast<float>(info.logicalH);
-        // The first pixel whose centre (i + 0.5) / scale is at or after the edge, clamped to 0..limit (NaN -> 0).
-        const auto first = [](float edge, float scale, int limit) noexcept
+        return pixelsOf(x0, y0, x1, y1, info, physW, physH);
+    }
+}
+
+// ---- v0.20.0: image draws (canvas/Expand.h) -------------------------------------------------------------------------
+
+namespace funkgui
+{
+    void expandImage(const ImageDraw& m, Vtx* out) noexcept
+    {
+        constexpr float e = kImageApron;
+        const float w = m.dst.w, h = m.dst.h;
+        const auto at = [&m, w, h](float px, float py) noexcept
         {
-            const float f = std::ceil(edge * scale - 0.5f);
-            return f > 0.0f ? (f < static_cast<float>(limit) ? static_cast<int>(f) : limit) : 0;
+            Vtx r{};
+            r.x = m.dst.x + px;
+            r.y = m.dst.y + py;
+            r.d0[0] = px / w;
+            r.d0[1] = py / h;
+            r.d0[2] = px;
+            r.d0[3] = py;
+            return r;
         };
-        const int px0 = first(x0, sx, physW), px1 = first(x1, sx, physW);
-        const int py0 = first(y0, sy, physH), py1 = first(y1, sy, physH);
-        if (px1 <= px0 || py1 <= py0)
-            return px;
-        px = { px0, py0, px1 - px0, py1 - py0 };
-        return px;
+        const Vtx a = at(-e, -e);
+        const Vtx b = at(w + e, -e);
+        const Vtx c = at(w + e, h + e);
+        const Vtx d = at(-e, h + e);
+        out[0] = a;
+        out[1] = b;
+        out[2] = c;
+        out[3] = a;
+        out[4] = c;
+        out[5] = d;
+    }
+
+    PixelRect imagePixels(const ImageDraw& m, const FrameInfo& info, int physW, int physH) noexcept
+    {
+        float x0 = m.dst.x - kImageApron, y0 = m.dst.y - kImageApron;
+        float x1 = m.dst.x + m.dst.w + kImageApron, y1 = m.dst.y + m.dst.h + kImageApron;
+        if (m.clipped)
+        {
+            x0 = std::max(x0, m.clip.x);
+            y0 = std::max(y0, m.clip.y);
+            x1 = std::min(x1, m.clip.x + m.clip.w);
+            y1 = std::min(y1, m.clip.y + m.clip.h);
+        }
+        return pixelsOf(x0, y0, x1, y1, info, physW, physH);
+    }
+
+    int imageLevel(const ImageDraw& m, float dpi, int picW, int picH) noexcept
+    {
+        const int levels = images::levelCount(picW, picH);
+        if (levels <= 1)
+            return 0;
+        // Texels of the picture per device px along each axis; the larger one decides.
+        const float dw = m.dst.w * dpi, dh = m.dst.h * dpi;
+        const float rx = m.uv.w * static_cast<float>(picW) / dw;
+        const float ry = m.uv.h * static_cast<float>(picH) / dh;
+        const float ratio = std::max(rx, ry);
+        if (!std::isfinite(ratio) || !(ratio >= 2.0f))
+            return 0;
+        int level = 0;
+        float step = 2.0f;                           // 2^(level + 1)
+        while (level + 1 < levels && ratio >= step)
+        {
+            ++level;
+            step *= 2.0f;
+        }
+        return level;
+    }
+
+    ImageSampling imageSampling(const ImageDraw& m, int level, int picW, int picH) noexcept
+    {
+        ImageSampling s;
+        s.u0 = m.uv.x;
+        s.v0 = m.uv.y;
+        s.du = m.uv.w;
+        s.dv = m.uv.h;
+        const int lw = std::max(1, picW >> std::clamp(level, 0, 30));
+        const int lh = std::max(1, picH >> std::clamp(level, 0, 30));
+        // Half a texel of the level inside each edge of uv; the middle when uv is narrower than one texel.
+        const auto range = [](float start, float size, int texels, float& lo, float& hi) noexcept
+        {
+            const float half = 0.5f / static_cast<float>(texels);
+            lo = start + half;
+            hi = start + size - half;
+            if (!(hi >= lo))
+                lo = hi = start + size * 0.5f;
+        };
+        range(m.uv.x, m.uv.w, lw, s.loU, s.hiU);
+        range(m.uv.y, m.uv.h, lh, s.loV, s.hiV);
+        return s;
     }
 }

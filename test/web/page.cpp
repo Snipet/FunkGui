@@ -34,6 +34,12 @@
 //    case draws again, within the same bounds of SoftRaster and byte for byte what it drew before the loss.
 // 7. The sink is destroyed and a new one on the same canvas draws the first case byte for byte again.
 //
+// v0.20.0, pictures (Canvas::image): the scene of 4 also holds four image draws (a 2 x 2 checker scaled up, rounded
+// and translucent; a 64 x 64 one-texel checker shown small enough to sample a coarser level; a pill-shaped uv crop; a
+// half-opaque picture under a clip on device pixels), so every frame above compares them with SoftRaster too, and the
+// restore of 6 proves the textures come back. After the hard edges, a picture replaced under its id is drawn in its new
+// pixels and a removed one draws nothing, both within the same bounds of SoftRaster (which reads the same registry).
+//
 // The bounds are measured, not derived. SoftRaster evaluates in float on the CPU and rounds a frame once at the end; a
 // GPU rounds to 8 bits after every primitive, interpolates the varyings itself, filters the atlas with fixed-point
 // weights and has its own sqrt, inversesqrt and pow. Measured with Chrome 154 on an Apple M5 (2026-10-01), all frames:
@@ -57,6 +63,7 @@
 // their y edges left on pixel centres.
 
 #include <funkgui/canvas/Canvas.h>
+#include <funkgui/canvas/Images.h>
 #include <funkgui/canvas/Prim.h>
 #include <funkgui/canvas/PrimList.h>
 #include <funkgui/canvas/SoftRaster.h>
@@ -225,6 +232,46 @@ namespace
         }
     }
 
+    // ---- v0.20.0: the pictures the scene draws (canvas/Images.h) ----------------------------------------------------
+    constexpr uint32_t kPictureChecker = 1, kPictureFine = 2, kPictureRow = 3, kPictureWhite = 4;
+
+    void putTexel(std::vector<uint8_t>& v, int i, Col c)
+    {
+        v[static_cast<std::size_t>(i) * 4u] = c.r;
+        v[static_cast<std::size_t>(i) * 4u + 1u] = c.g;
+        v[static_cast<std::size_t>(i) * 4u + 2u] = c.b;
+        v[static_cast<std::size_t>(i) * 4u + 3u] = c.a;
+    }
+
+    void setWhite(Col c)
+    {
+        const uint8_t texel[4] = { c.r, c.g, c.b, c.a };
+        funkgui::images::set(kPictureWhite, 1, 1, texel);
+    }
+
+    void registerPictures()
+    {
+        std::vector<uint8_t> v(16);
+        putTexel(v, 0, Col{ 230, 40, 40, 255 });
+        putTexel(v, 1, Col{ 40, 230, 60, 255 });
+        putTexel(v, 2, Col{ 40, 60, 230, 200 });
+        putTexel(v, 3, Col{ 250, 250, 250, 255 });
+        funkgui::images::set(kPictureChecker, 2, 2, v.data());
+        putTexel(v, 0, Col{ 255, 0, 0, 255 });
+        putTexel(v, 1, Col{ 0, 255, 0, 255 });
+        putTexel(v, 2, Col{ 0, 0, 255, 255 });
+        putTexel(v, 3, Col{ 255, 255, 0, 255 });
+        funkgui::images::set(kPictureRow, 4, 1, v.data());
+        std::vector<uint8_t> fine(64u * 64u * 4u);
+        for (int i = 0; i < 64 * 64; ++i)
+        {
+            const uint8_t g = ((i % 64) + (i / 64)) % 2 == 0 ? 20 : 235;
+            putTexel(fine, i, Col{ g, g, g, 255 });
+        }
+        funkgui::images::set(kPictureFine, 64, 64, fine.data());
+        setWhite(Col{ 255, 255, 255, 255 });
+    }
+
     // ---- the scene: every kind, real text, overlaps and a clip ------------------------------------------------------
     void scene(Canvas& c, const Theme& th)
     {
@@ -287,6 +334,16 @@ namespace
                funkgui::Align::right);
         c.text("ATTACK  RELEASE  RATIO  KNEE  MIX", 468.0f, 244.0f, funkgui::type::kMicro, th.ink32,
                funkgui::Align::right);
+
+        // pictures (v0.20.0): in the free box right of the areas, x 330 .. 470, y 116 .. 176; the clip's edges on
+        // multiples of 4 logical px, so on device px at every dpi of kCases
+        c.image(kPictureChecker, { 332.25f, 118.5f, 40.0f, 40.0f }, 6.0f, 0.9f);
+        c.image(kPictureFine, { 380.0f, 118.0f, 20.0f, 20.0f }, 2.0f);
+        c.image(kPictureRow, { 408.0f, 118.0f, 56.0f, 12.0f }, 6.0f, 1.0f, { 0.25f, 0.0f, 0.5f, 1.0f });
+        {
+            const Canvas::ClipScope clip(c, funkgui::Rect{ 408.0f, 136.0f, 28.0f, 24.0f });
+            c.image(kPictureWhite, { 400.0f, 132.0f, 60.0f, 40.0f }, 0.0f, 0.5f);
+        }
 
         // order and clipping: text under a translucent panel, text over it, a row cut by a clip (on a device px at
         // dpi 1, 1.25 and 2: multiples of 4 logical px)
@@ -437,7 +494,7 @@ namespace
         const WebGlSink::Result result = page.sink->submit(list, soft.w, soft.h);
         const Image gl = page.sink->readPixels();
         const bool drew = result == WebGlSink::Result::submitted && page.sink->frameCount() == framesBefore + 1
-                       && page.sink->lastVertexCount() == list.prims.size() * 6u;
+                       && page.sink->lastVertexCount() == (list.prims.size() + list.images.size()) * 6u;
         if (!drew)
         {
             fail(label + ": submit() returned " + resultName(result) + " (frame count "
@@ -447,9 +504,10 @@ namespace
         }
         const Diff d = compare(gl, soft);
         const std::size_t glDrawn = drawnPixels(gl, list.info.clear), softDrawn = drawnPixels(soft, list.info.clear);
-        say("         %s: %d x %d px, %zu prims, %u vertices, frame %u; pixels drawn WebGL %zu, SoftRaster %zu",
-            label.c_str(), gl.w, gl.h, list.prims.size(), page.sink->lastVertexCount(), page.sink->frameCount(),
-            glDrawn, softDrawn);
+        say("         %s: %d x %d px, %zu prims, %zu pictures, %u vertices, frame %u; pixels drawn WebGL %zu, "
+            "SoftRaster %zu",
+            label.c_str(), gl.w, gl.h, list.prims.size(), list.images.size(), page.sink->lastVertexCount(),
+            page.sink->frameCount(), glDrawn, softDrawn);
         say("         %s: %s", label.c_str(), describe(d).c_str());
         if (!within(d))
             fail(label + ": WebGL is outside the bounds against SoftRaster (largest difference "
@@ -472,13 +530,16 @@ namespace
             for (const Prim& p : list.prims)
                 ++counts[kindOf(p)];
             const std::string label = std::string(phase) + ", " + k.name;
-            say("frame    %s: %zu prims (rrect %d, text %d, segment %d, area %d), missing glyphs %u", label.c_str(),
-                list.prims.size(), counts[0], counts[1], counts[2], counts[3], list.missingGlyphs);
+            say("frame    %s: %zu prims (rrect %d, text %d, segment %d, area %d), missing glyphs %u, pictures %zu "
+                "(missing %u)", label.c_str(), list.prims.size(), counts[0], counts[1], counts[2], counts[3],
+                list.missingGlyphs, list.images.size(), list.missingImages);
             for (int kind = 0; kind < kKinds; ++kind)
                 if (counts[kind] == 0)
                     fail(label + ": the scene recorded no " + kKindNames[kind] + " primitive");
             if (list.missingGlyphs != 0)
                 fail(label + ": the atlas lacks glyphs the scene draws");
+            if (list.images.size() != 4 || list.missingImages != 0)
+                fail(label + ": the scene did not record its four pictures");
             out.push_back(drawAndCompare(label, list, true));
             if (kindsAlone)
                 for (int kind = 0; kind < kKinds; ++kind)
@@ -644,6 +705,26 @@ namespace
         return a.w == b.w && a.h == b.h && a.w > 0 && a.rgba == b.rgba;
     }
 
+    // ---- v0.20.0: a picture replaced and removed under the sink ----------------------------------------------------
+    void pictures()
+    {
+        const Case& k = kCases[2];                   // dpi 2
+        const PrimList list = record(*page.canvas, k);
+        const Image first = drawAndCompare(std::string("pictures, ") + k.name, list, true);
+        setWhite(Col{ 250, 40, 40, 255 });
+        const Image replaced = drawAndCompare(std::string("pictures, the white one replaced by red, ") + k.name, list,
+                                              true);
+        check(replaced.w > 0 && !sameImage(replaced, first),
+              "a picture replaced under its id is drawn in its new pixels (the old texture is not drawn)");
+        funkgui::images::remove(kPictureRow);
+        const Image removed = drawAndCompare(std::string("pictures, the row removed, ") + k.name, list, true);
+        check(removed.w > 0 && !sameImage(removed, replaced),
+              "a removed picture draws nothing (its draw recorded before the removal)");
+        registerPictures();                          // as they were: the restore below compares with the first frames
+        const Image back = drawAndCompare(std::string("pictures, registered again, ") + k.name, list, true);
+        check(sameImage(back, first), "the pictures registered again draw the first frame byte for byte");
+    }
+
     // A sink that cannot have a context: it must say so and refuse, never throw.
     void refuses(const char* selector, const char* what)
     {
@@ -759,6 +840,7 @@ namespace
             return;
         }
         page.canvas = std::make_unique<Canvas>(*page.atlas);
+        registerPictures();
 
         // ---- 2. sinks that cannot have a context
         refuses("#funkgui-no-such-canvas", "a selector that names no element");
@@ -813,6 +895,7 @@ namespace
         // ---- 4. the frames
         drawCases("first", true, page.before);
         hardEdges();
+        pictures();
 
         // ---- 5. the loss (continues in afterLoss, once the browser has delivered the event)
         if (fg_page_lose() == 0)

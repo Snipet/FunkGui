@@ -37,6 +37,9 @@ namespace funkgui
     }
 
     // The frame at its physical size (logical size * info.dpi), supersampled per axis and box-filtered down.
+    // v0.20.0: image draws (Canvas::image) are drawn, not a placeholder: the pictures of the registry
+    // (canvas/Images.h) as it holds them while this runs, by the rule of canvas/PrimList.h ImageDraw, which
+    // shaders/fs_image.sc follows on the GPU.
     Image rasterise(const PrimList&, const FontAtlasSdf&, int supersample = 2);
 
     // An RGBA PNG; false when the file cannot be written.
