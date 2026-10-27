@@ -34,7 +34,9 @@ namespace funkgui
 
         void  tick(int frames, float dt = 1.0f / 60.0f);             // Panel::tick + the simulated clock
         int   settle(int maxFrames = 600, float dt = 1.0f / 60.0f);  // tick until !wantsFullRate(); returns frames used
-        const PrimList& draw();                                      // one frame into the owned Canvas
+        // One frame into the owned Canvas. Its statistics are the list's: missingGlyphs, and (v0.20.0) images.size()
+        // pictures drawn and missingImages Canvas::image calls of ids not registered (canvas/Images.h).
+        const PrimList& draw();
         void  move(float x, float y);
         void  click(float x, float y, Mods = {});
         void  doubleClick(float x, float y, Mods = {});

@@ -1,5 +1,6 @@
 #include <funkgui/web/WebGlSink.h>
 
+#include <funkgui/canvas/Images.h>
 #include <funkgui/shaders/ui.es300.h>
 #include <funkgui/text/FontService.h>
 
@@ -14,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 
 // WebGlSink (v0.12.0; FCompressor ADR-93, docs/sprints/web/map-render.md): BgfxSink::submit and the part of
 // BgfxContext it draws with (the vertex layout, the program, the uniform, the font texture), call for call on WebGL2
@@ -100,6 +102,60 @@ namespace funkgui
             log = trimmed(std::move(log));
             glDeleteShader(shader);
             return 0;
+        }
+
+        // A linked program of the two texts, or 0 with what failed in `error` ("" when the context went away).
+        GLuint link(const char* vsText, const char* fsText, const char* what, std::uintptr_t context,
+                    std::string& error)
+        {
+            std::string log;
+            const GLuint vs = compile(GL_VERTEX_SHADER, vsText, log);
+            if (vs == 0)
+            {
+                if (!emscripten_is_webgl_context_lost(context))
+                    error = std::string("the ") + what + " vertex shader did not compile: " + log;
+                return 0;
+            }
+            const GLuint fs = compile(GL_FRAGMENT_SHADER, fsText, log);
+            if (fs == 0)
+            {
+                glDeleteShader(vs);
+                if (!emscripten_is_webgl_context_lost(context))
+                    error = std::string("the ") + what + " fragment shader did not compile: " + log;
+                return 0;
+            }
+            const GLuint program = glCreateProgram();
+            glAttachShader(program, vs);
+            glAttachShader(program, fs);
+            glLinkProgram(program);
+            glDeleteShader(vs);                      // the program keeps them until it is deleted
+            glDeleteShader(fs);
+            GLint linked = GL_FALSE;
+            glGetProgramiv(program, GL_LINK_STATUS, &linked);
+            if (linked == GL_TRUE)
+                return program;
+            GLint length = 0;
+            glGetProgramiv(program, GL_INFO_LOG_LENGTH, &length);
+            log.assign(static_cast<std::size_t>(std::max(length, 1)), '\0');
+            glGetProgramInfoLog(program, static_cast<GLsizei>(log.size()), nullptr, log.data());
+            glDeleteProgram(program);
+            if (!emscripten_is_webgl_context_lost(context))
+                error = std::string("the ") + what + " program did not link: " + trimmed(std::move(log));
+            return 0;
+        }
+
+        // Points the program's attributes of kAttributes at the bound buffer (one vertex array is bound).
+        void pointAttributes(GLuint program)
+        {
+            for (const Attribute& a : kAttributes)
+            {
+                const GLint location = glGetAttribLocation(program, a.name);
+                if (location < 0)
+                    continue;                        // the program does not read it
+                glEnableVertexAttribArray(static_cast<GLuint>(location));
+                glVertexAttribPointer(static_cast<GLuint>(location), a.size, a.type, a.normalised, sizeof(Vtx),
+                                      reinterpret_cast<const void*>(a.offset));
+            }
         }
     }
 
@@ -200,6 +256,17 @@ namespace funkgui
             glDeleteTextures(1, &texture_);
         program_ = vertexArray_ = buffer_ = texture_ = 0;
         uViewSize_ = -1;
+        // v0.20.0: the image program and this context's picture textures.
+        if (imageProgram_ != 0)
+            glDeleteProgram(imageProgram_);
+        if (imageVertexArray_ != 0)
+            glDeleteVertexArrays(1, &imageVertexArray_);
+        for (const ImageTexture& t : imageTextures_)
+            glDeleteTextures(1, &t.name);
+        imageTextures_.clear();
+        imageProgram_ = imageVertexArray_ = 0;
+        uImageViewSize_ = uImageRect_ = uImageUv_ = uImageClamp_ = uImageMask_ = -1;
+        imagesSwept_ = 0;
         lastW_ = lastH_ = 0;                         // nothing this context drew is left to read back
     }
 
@@ -213,42 +280,9 @@ namespace funkgui
         while (glGetError() != GL_NO_ERROR) {}       // only this build's errors count below
 
         // ---- the program: shaders/vs_ui.sc + fs_ui.sc as GLSL ES 3.00
-        std::string log;
-        const GLuint vs = compile(GL_VERTEX_SHADER, shaders::vs_ui_es300, log);
-        if (vs == 0)
-        {
-            if (!emscripten_is_webgl_context_lost(context_))
-                error_ = "the vertex shader did not compile: " + log;
+        program_ = link(shaders::vs_ui_es300, shaders::fs_ui_es300, "UI", context_, error_);
+        if (program_ == 0)
             return false;
-        }
-        const GLuint fs = compile(GL_FRAGMENT_SHADER, shaders::fs_ui_es300, log);
-        if (fs == 0)
-        {
-            glDeleteShader(vs);
-            if (!emscripten_is_webgl_context_lost(context_))
-                error_ = "the fragment shader did not compile: " + log;
-            return false;
-        }
-        program_ = glCreateProgram();
-        glAttachShader(program_, vs);
-        glAttachShader(program_, fs);
-        glLinkProgram(program_);
-        glDeleteShader(vs);                          // the program keeps them until it is deleted
-        glDeleteShader(fs);
-        GLint linked = GL_FALSE;
-        glGetProgramiv(program_, GL_LINK_STATUS, &linked);
-        if (linked != GL_TRUE)
-        {
-            GLint length = 0;
-            glGetProgramiv(program_, GL_INFO_LOG_LENGTH, &length);
-            log.assign(static_cast<std::size_t>(std::max(length, 1)), '\0');
-            glGetProgramInfoLog(program_, static_cast<GLsizei>(log.size()), nullptr, log.data());
-            const bool gone = emscripten_is_webgl_context_lost(context_);
-            drop();
-            if (!gone)
-                error_ = "the program did not link: " + trimmed(std::move(log));
-            return false;
-        }
         glUseProgram(program_);
         uViewSize_ = glGetUniformLocation(program_, "u_viewSize");
         glUniform1i(glGetUniformLocation(program_, "s_texColor"), 0);
@@ -258,15 +292,29 @@ namespace funkgui
         glBindVertexArray(vertexArray_);
         glGenBuffers(1, &buffer_);
         glBindBuffer(GL_ARRAY_BUFFER, buffer_);
-        for (const Attribute& a : kAttributes)
+        pointAttributes(program_);
+
+        // ---- v0.20.0: the image program (shaders/vs_custom.sc + fs_image.sc), its own vertex array over the same
+        // buffer (it reads a_position and a_texcoord0 of the same Vtx), its sampler on texture unit 0
+        imageProgram_ = link(shaders::vs_custom_es300, shaders::fs_image_es300, "image", context_, error_);
+        if (imageProgram_ == 0)
         {
-            const GLint location = glGetAttribLocation(program_, a.name);
-            if (location < 0)
-                continue;                            // the program does not read it
-            glEnableVertexAttribArray(static_cast<GLuint>(location));
-            glVertexAttribPointer(static_cast<GLuint>(location), a.size, a.type, a.normalised, sizeof(Vtx),
-                                  reinterpret_cast<const void*>(a.offset));
+            drop();
+            return false;
         }
+        glUseProgram(imageProgram_);
+        uImageViewSize_ = glGetUniformLocation(imageProgram_, "u_viewSize");
+        uImageRect_ = glGetUniformLocation(imageProgram_, "u_imageRect");
+        uImageUv_ = glGetUniformLocation(imageProgram_, "u_imageUv");
+        uImageClamp_ = glGetUniformLocation(imageProgram_, "u_imageClamp");
+        uImageMask_ = glGetUniformLocation(imageProgram_, "u_imageMask");
+        glUniform1i(glGetUniformLocation(imageProgram_, "s_image"), 0);
+        glGenVertexArrays(1, &imageVertexArray_);
+        glBindVertexArray(imageVertexArray_);
+        glBindBuffer(GL_ARRAY_BUFFER, buffer_);
+        pointAttributes(imageProgram_);
+        glBindVertexArray(vertexArray_);
+        glUseProgram(program_);
 
         // ---- the atlas: FontService's CPU bake (02 §3.4), the pixels the recorder laid this frame's text out
         // against; R8, linear, clamped, no mips, as BgfxContext's texture
@@ -336,23 +384,31 @@ namespace funkgui
                      static_cast<float>(info.clear.b) / 255.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         ++frames_;
-        if (list.prims.empty())
+        sweepImages();                               // v0.20.0: textures of removed or replaced pictures go
+        if (list.prims.empty() && list.images.empty())
             return Result::empty;
 
+        // The primitives' vertices, then (v0.20.0) each image draw's six, in list order, in one buffer.
         expand(list, scratch_);
+        const auto imageVertices = static_cast<GLint>(scratch_.size());
+        if (!list.images.empty())
+        {
+            scratch_.resize(scratch_.size() + list.images.size() * static_cast<std::size_t>(kVerticesPerPrim));
+            Vtx* dst = scratch_.data() + imageVertices;
+            for (const ImageDraw& m : list.images)
+            {
+                expandImage(m, dst);
+                dst += kVerticesPerPrim;
+            }
+        }
         const auto n = static_cast<GLsizei>(scratch_.size());
 
-        glUseProgram(program_);
-        glBindVertexArray(vertexArray_);
         glBindBuffer(GL_ARRAY_BUFFER, buffer_);
         glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(scratch_.size() * sizeof(Vtx)), scratch_.data(),
                      GL_STREAM_DRAW);
 
         const float dpi = info.dpi > 0.05f ? info.dpi : 1.0f;     // HR's guard on the backing scale
-        glUniform4f(uViewSize_, static_cast<float>(info.logicalW), static_cast<float>(info.logicalH), 1.0f / dpi,
-                    info.seconds);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, texture_);
+        const float aa = 1.0f / dpi;
 
         // BGFX_STATE_WRITE_RGB | WRITE_A | BLEND_ALPHA: no depth, no culling, source-over in the stored values.
         glDisable(GL_DEPTH_TEST);
@@ -361,9 +417,132 @@ namespace funkgui
         glEnable(GL_BLEND);
         glBlendEquation(GL_FUNC_ADD);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glDrawArrays(GL_TRIANGLES, 0, n);
+        glActiveTexture(GL_TEXTURE0);
+
+        // The draw calls in drawing order (drawSteps). Shader draws draw nothing here and split no run: the runs on
+        // either side of one are one draw call, so a frame without image draws is the one call it always was.
+        drawSteps(list, steps_);
+        GLint runFirst = 0;
+        GLsizei runCount = 0;
+        const auto flushRun = [&]()
+        {
+            if (runCount == 0)
+                return;
+            glUseProgram(program_);
+            glBindVertexArray(vertexArray_);
+            glUniform4f(uViewSize_, static_cast<float>(info.logicalW), static_cast<float>(info.logicalH), aa,
+                        info.seconds);
+            glBindTexture(GL_TEXTURE_2D, texture_);
+            glDisable(GL_SCISSOR_TEST);
+            glDrawArrays(GL_TRIANGLES, runFirst, runCount);
+            runCount = 0;
+        };
+        for (const DrawStep& step : steps_)
+        {
+            if (step.kind == DrawStep::Kind::shader)
+                continue;
+            if (step.kind == DrawStep::Kind::prims)
+            {
+                const auto first = static_cast<GLint>(step.first) * kVerticesPerPrim;
+                if (runCount == 0)
+                    runFirst = first;
+                runCount += static_cast<GLsizei>(step.count) * kVerticesPerPrim;   // runs are contiguous
+                continue;
+            }
+            flushRun();
+            // v0.20.0: one image draw (BgfxSink's call for call: canvas/PrimList.h ImageDraw).
+            const ImageDraw& m = list.images[step.first];
+            int w = 0, h = 0;
+            const GLuint name = imageTexture(m.id, w, h);
+            const PixelRect px = imagePixels(m, info, physW, physH);
+            if (name == 0 || px.w <= 0 || px.h <= 0)
+                continue;                            // no picture, or nothing of it on screen
+            const int level = imageLevel(m, dpi, w, h);
+            const ImageSampling smp = imageSampling(m, level, w, h);
+            glUseProgram(imageProgram_);
+            glBindVertexArray(imageVertexArray_);
+            glUniform4f(uImageViewSize_, static_cast<float>(info.logicalW), static_cast<float>(info.logicalH), aa,
+                        info.seconds);
+            glUniform4f(uImageRect_, m.dst.x, m.dst.y, m.dst.w, m.dst.h);
+            glUniform4f(uImageUv_, smp.u0, smp.v0, smp.du, smp.dv);
+            glUniform4f(uImageClamp_, smp.loU, smp.loV, smp.hiU, smp.hiV);
+            glUniform4f(uImageMask_, m.radius, m.opacity, static_cast<float>(level), 0.0f);
+            glBindTexture(GL_TEXTURE_2D, name);
+            // The scissor: imagePixels' rows from the top, in GL's window coordinates from the bottom.
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(px.x, physH - px.y - px.h, px.w, px.h);
+            glDrawArrays(GL_TRIANGLES, imageVertices + static_cast<GLint>(step.first) * kVerticesPerPrim,
+                         kVerticesPerPrim);
+        }
+        flushRun();
+        glDisable(GL_SCISSOR_TEST);
         lastVertices_ = static_cast<uint32_t>(n);
         return Result::submitted;
+    }
+
+    // ---- v0.20.0: picture textures (web/WebGlSink.h) ----------------------------------------------------------------
+
+    uint32_t WebGlSink::imageTexture(uint32_t id, int& w, int& h)
+    {
+        w = h = 0;
+        const std::shared_ptr<const images::Picture> pic = images::picture(id);
+        if (pic == nullptr)
+            return 0;
+        auto it = std::find_if(imageTextures_.begin(), imageTextures_.end(),
+                               [id](const ImageTexture& t) { return t.id == id; });
+        if (it != imageTextures_.end() && it->revision != pic->revision)
+        {
+            glDeleteTextures(1, &it->name);          // an older revision
+            imageTextures_.erase(it);
+            it = imageTextures_.end();
+        }
+        if (it == imageTextures_.end())
+        {
+            // Every level of the chain, so the texture is complete for LINEAR_MIPMAP_LINEAR and textureLod reads the
+            // level asked for exactly.
+            ImageTexture t;
+            t.id = id;
+            t.revision = pic->revision;
+            glGenTextures(1, &t.name);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, t.name);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            const auto count = static_cast<GLint>(pic->levels.size());
+            for (GLint l = 0; l < count; ++l)
+            {
+                const images::Level& lv = pic->levels[static_cast<std::size_t>(l)];
+                glTexImage2D(GL_TEXTURE_2D, l, GL_RGBA8, lv.w, lv.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pic->level(l));
+            }
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, count - 1);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            imageTextures_.push_back(t);
+            it = imageTextures_.end() - 1;
+        }
+        w = pic->w;
+        h = pic->h;
+        return it->name;
+    }
+
+    void WebGlSink::sweepImages()
+    {
+        const uint64_t generation = images::generation();   // first: a change during the scan sweeps again next time
+        if (generation == imagesSwept_)
+            return;
+        for (auto it = imageTextures_.begin(); it != imageTextures_.end();)
+        {
+            const std::shared_ptr<const images::Picture> now = images::picture(it->id);
+            if (now != nullptr && now->revision == it->revision)
+            {
+                ++it;
+                continue;
+            }
+            glDeleteTextures(1, &it->name);
+            it = imageTextures_.erase(it);
+        }
+        imagesSwept_ = generation;
     }
 
     Image WebGlSink::readPixels()

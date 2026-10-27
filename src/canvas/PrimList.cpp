@@ -1,5 +1,6 @@
 #include <funkgui/canvas/PrimList.h>
 
+#include <funkgui/canvas/Expand.h>
 #include <funkgui/canvas/Tags.h>
 
 #include <algorithm>
@@ -26,6 +27,14 @@
 //   axis LEVEL x 556 748 -42 6 lin y 332 140 -42 6 lin    (one per AxisRec; "-" for an absent axis)
 //   p 38.5 38.5 57.5 49.5  c0 ffe4eaec c1 ffe4eaec  d0 -9.5 -5.5 8 4  e0 9.5 5.5  d1 0 0 0 0  d2 0 0 0 0  t SLOT_LABEL
 //   shader 7 at 1  rect 10 20 200 100  clip -  params 0.5 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0  live 0  t SLOT_LABEL
+//   image 3 at 1 shader 1  dst 10 20 64 48  uv 0 0.125 1 0.75  radius 6  opacity 1  clip -  live 0  t SLOT_LABEL
+//   images missing 2                                      (only when PrimList::missingImages > 0, after "glyphs")
+//
+// v0.20.0, image draws (Canvas::image): an "image" line at its place in drawing order (canvas/Expand.h drawSteps):
+// among the "p" lines by `at`, among the "shader" lines by `shader` (its shaderAt), both of which the parser holds to
+// the lines of each kind before it. Its fields: the picture id, the dst x y w h, the uv x y w h, the radius, the
+// opacity, the clip x y w h or "-", live 0 or 1, and the tag as on a "p" line. A dump without image draws and without
+// missed pictures is byte for byte what v0.19.0 wrote.
 //
 // v0.19.0, shader draws (Canvas::shader): a "shader" line is written before the "p" line of prims[at] (after the last
 // "p" line when at == prims.size()), so the dump reads in drawing order; "at" says the position again, and the parser
@@ -138,6 +147,8 @@ namespace funkgui
         prims.clear();
         axes.clear();
         shaders.clear();
+        images.clear();
+        missingImages = 0;
         missingGlyphs = 0;
         std::fill(std::begin(missingFirst), std::end(missingFirst), 0u);
     }
@@ -186,6 +197,26 @@ namespace funkgui
                 ok = ok && fprintfC(f, "  t %s", tagText(s.tag).c_str()) >= 0;
             return ok && fprintfC(f, "\n") >= 0;
         }
+
+        // v0.20.0: one "image" line (the file comment has its grammar).
+        bool writeImage(std::FILE* f, const ImageDraw& m)
+        {
+            bool ok = fprintfC(f, "image %u at %u shader %u  dst %.9g %.9g %.9g %.9g  uv %.9g %.9g %.9g %.9g  "
+                                  "radius %.9g  opacity %.9g  clip",
+                               static_cast<unsigned>(m.id), static_cast<unsigned>(m.at),
+                               static_cast<unsigned>(m.shaderAt), dbl(m.dst.x), dbl(m.dst.y), dbl(m.dst.w),
+                               dbl(m.dst.h), dbl(m.uv.x), dbl(m.uv.y), dbl(m.uv.w), dbl(m.uv.h), dbl(m.radius),
+                               dbl(m.opacity)) >= 0;
+            if (m.clipped)
+                ok = ok && fprintfC(f, " %.9g %.9g %.9g %.9g", dbl(m.clip.x), dbl(m.clip.y), dbl(m.clip.w),
+                                    dbl(m.clip.h)) >= 0;
+            else
+                ok = ok && fprintfC(f, " -") >= 0;
+            ok = ok && fprintfC(f, "  live %d", m.live ? 1 : 0) >= 0;
+            if (m.tag != tags::none)
+                ok = ok && fprintfC(f, "  t %s", tagText(m.tag).c_str()) >= 0;
+            return ok && fprintfC(f, "\n") >= 0;
+        }
     }
 
     bool PrimList::writeText(std::FILE* f) const
@@ -210,6 +241,9 @@ namespace funkgui
                 put(fprintfC(f, " U+%04X", static_cast<unsigned>(cp)));
         put(fprintfC(f, "\n"));
 
+        if (missingImages > 0)                           // v0.20.0: only a frame that missed a picture has it
+            put(fprintfC(f, "images missing %u\n", static_cast<unsigned>(missingImages)));
+
         if (info.overflows > 0)
             put(fprintfC(f, "overflow %u\n", static_cast<unsigned>(info.overflows)));
 
@@ -220,27 +254,39 @@ namespace funkgui
             put(fprintfC(f, "\n"));
         }
 
-        std::size_t nextShader = 0;                      // v0.19.0: each shader draw goes before prims[at]
-        for (std::size_t i = 0; i < prims.size(); ++i)
+        // In drawing order (canvas/Expand.h drawSteps): runs of "p" lines, with each shader draw (v0.19.0) and image
+        // draw (v0.20.0) at its place between them. Without either, every "p" line in order, as before.
+        std::vector<DrawStep> steps;
+        drawSteps(*this, steps);
+        for (const DrawStep& step : steps)
         {
-            for (; nextShader < shaders.size() && shaders[nextShader].at <= i; ++nextShader)
-                ok = ok && writeShader(f, shaders[nextShader]);
-            const Prim& p = prims[i];
-            put(fprintfC(f,
-                         "p %.9g %.9g %.9g %.9g  c0 %08x c1 %08x  d0 %.9g %.9g %.9g %.9g  e0 %.9g %.9g  "
-                         "d1 %.9g %.9g %.9g %.9g  d2 %.9g %.9g %.9g %.9g",
-                         dbl(p.x0), dbl(p.y0), dbl(p.x1), dbl(p.y1), static_cast<unsigned>(p.c0),
-                         static_cast<unsigned>(p.c1), dbl(p.d0[0]), dbl(p.d0[1]), dbl(p.d0[2]), dbl(p.d0[3]),
-                         dbl(p.e0[0]), dbl(p.e0[1]), dbl(p.d1[0]), dbl(p.d1[1]), dbl(p.d1[2]), dbl(p.d1[3]),
-                         dbl(p.d2[0]), dbl(p.d2[1]), dbl(p.d2[2]), dbl(p.d2[3])));
-            if (p.tag != tags::none)
-                put(fprintfC(f, "  t %s", tagText(p.tag).c_str()));
-            put(fprintfC(f, "\n"));
-            if (!ok)
-                return false;
+            if (step.kind == DrawStep::Kind::shader)
+            {
+                ok = ok && writeShader(f, shaders[step.first]);
+                continue;
+            }
+            if (step.kind == DrawStep::Kind::image)
+            {
+                ok = ok && writeImage(f, images[step.first]);
+                continue;
+            }
+            for (std::size_t i = step.first; i < static_cast<std::size_t>(step.first) + step.count; ++i)
+            {
+                const Prim& p = prims[i];
+                put(fprintfC(f,
+                             "p %.9g %.9g %.9g %.9g  c0 %08x c1 %08x  d0 %.9g %.9g %.9g %.9g  e0 %.9g %.9g  "
+                             "d1 %.9g %.9g %.9g %.9g  d2 %.9g %.9g %.9g %.9g",
+                             dbl(p.x0), dbl(p.y0), dbl(p.x1), dbl(p.y1), static_cast<unsigned>(p.c0),
+                             static_cast<unsigned>(p.c1), dbl(p.d0[0]), dbl(p.d0[1]), dbl(p.d0[2]), dbl(p.d0[3]),
+                             dbl(p.e0[0]), dbl(p.e0[1]), dbl(p.d1[0]), dbl(p.d1[1]), dbl(p.d1[2]), dbl(p.d1[3]),
+                             dbl(p.d2[0]), dbl(p.d2[1]), dbl(p.d2[2]), dbl(p.d2[3])));
+                if (p.tag != tags::none)
+                    put(fprintfC(f, "  t %s", tagText(p.tag).c_str()));
+                put(fprintfC(f, "\n"));
+                if (!ok)
+                    return false;
+            }
         }
-        for (; nextShader < shaders.size(); ++nextShader)
-            ok = ok && writeShader(f, shaders[nextShader]);
         return ok && std::fflush(f) == 0 && std::ferror(f) == 0;
     }
 
@@ -517,6 +563,59 @@ namespace funkgui
             return i == tk.size();
         }
 
+        // v0.20.0: image ID at N shader S  dst X Y W H  uv U V W H  radius R  opacity O  clip (X Y W H | -)
+        //          live (0|1)  [t NAME]
+        // What Canvas::image never records is refused: a dst or uv that is not finite or not > 0 wide and high, a uv
+        // outside 0..1 (to rounding), a radius below 0 and an opacity outside 0..1.
+        bool parseImage(const std::vector<std::string_view>& tk, ImageDraw& m)
+        {
+            m = ImageDraw{};
+            size_t i = 0;
+            const auto word = [&tk, &i](std::string_view w) { return i < tk.size() && tk[i++] == w; };
+            const auto floats = [&tk, &i](float* v, int n)
+            {
+                for (int k = 0; k < n; ++k)
+                    if (i >= tk.size() || !toFloat(tk[i++], v[k]) || !std::isfinite(v[k]))
+                        return false;
+                return true;
+            };
+            const auto u32 = [&tk, &i](uint32_t& v) { return i < tk.size() && toU32(tk[i++], v); };
+            float d[4] = {}, u[4] = {};
+            if (!word("image") || !u32(m.id) || !word("at") || !u32(m.at) || !word("shader") || !u32(m.shaderAt)
+                || !word("dst") || !floats(d, 4) || !word("uv") || !floats(u, 4) || !word("radius")
+                || !floats(&m.radius, 1) || !word("opacity") || !floats(&m.opacity, 1) || !word("clip"))
+                return false;
+            m.dst = { d[0], d[1], d[2], d[3] };
+            m.uv = { u[0], u[1], u[2], u[3] };
+            // Canvas stores uv as x and w = right - x of edges clamped to 0..1, so x + w may round past 1 by an ulp.
+            constexpr float kRounding = 1.0e-6f;
+            const bool uvInside = u[0] >= 0.0f && u[1] >= 0.0f && u[0] + u[2] <= 1.0f + kRounding
+                                  && u[1] + u[3] <= 1.0f + kRounding;
+            if (m.dst.isEmpty() || m.uv.isEmpty() || !uvInside || m.radius < 0.0f || m.opacity < 0.0f
+                || m.opacity > 1.0f)
+                return false;
+            if (i < tk.size() && tk[i] == "-")
+                ++i;
+            else
+            {
+                float c[4] = {};
+                if (!floats(c, 4))
+                    return false;
+                m.clip = { c[0], c[1], c[2], c[3] };
+                m.clipped = true;
+            }
+            if (!word("live") || i >= tk.size())
+                return false;
+            if (tk[i] == "1")
+                m.live = true;
+            else if (tk[i] != "0")
+                return false;
+            ++i;
+            if (i < tk.size() && (!word("t") || i >= tk.size() || !toTag(tk[i++], m.tag)))
+                return false;
+            return i == tk.size();
+        }
+
         bool parseGlyphs(const std::vector<std::string_view>& tk, PrimList& out)
         {
             if (tk.size() < 3 || tk.size() > 3 + std::size(out.missingFirst) || tk[1] != "missing"
@@ -535,7 +634,8 @@ namespace funkgui
 
         bool parseLines(std::string_view text, PrimList& out)
         {
-            enum : uint32_t { kClear = 1u << 0, kView = 1u << 1, kGlyphs = 1u << 2, kOverflow = 1u << 3 };
+            enum : uint32_t { kClear = 1u << 0, kView = 1u << 1, kGlyphs = 1u << 2, kOverflow = 1u << 3,
+                              kImages = 1u << 4 };
             uint32_t seen = 0;
             bool v2 = false, first = true;
             std::vector<std::string_view> tk;
@@ -614,6 +714,21 @@ namespace funkgui
                     if (!parseShader(tk, s) || s.at != out.prims.size())
                         return false;
                     out.shaders.push_back(s);
+                }
+                else if (v2 && k == "image")
+                {
+                    ImageDraw m;
+                    if (!parseImage(tk, m) || m.at != out.prims.size() || m.shaderAt != out.shaders.size())
+                        return false;
+                    out.images.push_back(m);
+                }
+                else if (v2 && k == "images")
+                {
+                    // "images missing N", N > 0 (a frame that missed none has no such line)
+                    if ((seen & kImages) != 0 || tk.size() != 3 || tk[1] != "missing"
+                        || !toU32(tk[2], out.missingImages) || out.missingImages == 0)
+                        return false;
+                    seen |= kImages;
                 }
                 else
                     return false;

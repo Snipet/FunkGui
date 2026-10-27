@@ -1,16 +1,19 @@
 #include <funkgui/gpu/BgfxSink.h>
 
+#include "ImageGpu.h"
 #include "ShaderLibraryDetail.h"
 
 #include <funkgui/gpu/BgfxContext.h>
 
 #include <cstring>
+#include <memory>
 
 // BgfxSink::submit (02 §3.4, §4.5; G7): the snapshot's SdfCanvas::begin()/end() (gpu/SdfCanvas.cpp, HR
 // Source/gui/SdfCanvas.cpp) split at the recorder: the view setup and the single draw call are HR's call for call,
 // and the vertex stream is funkgui::expand's, which fg.canvas.expansion proves equal to HR's vertices bit for bit.
 // v0.19.0: a frame with shader draws is the same calls, split into the runs funkgui::drawSteps gives, with each
 // shader draw submitted between them (gpu/BgfxSink.h); without shader draws there is one run, so one draw call.
+// v0.20.0: image draws are split out the same way, each one draw call with the image program (src/gpu/ImageGpu.h).
 
 namespace funkgui
 {
@@ -46,7 +49,8 @@ namespace funkgui
 
         lastVertices_ = 0;
         lastDraws_ = 0;
-        if (list.prims.empty() && list.shaders.empty())
+        images::gpu::sweep();                        // v0.20.0: textures of removed or replaced pictures go
+        if (list.prims.empty() && list.shaders.empty() && list.images.empty())
             return Result::empty;
 
         expand(list, scratch_);
@@ -59,6 +63,18 @@ namespace funkgui
             for (const ShaderDraw& s : list.shaders)
             {
                 expandShader(s, dst);
+                dst += kVerticesPerPrim;
+            }
+        }
+        const auto imageVertices = static_cast<uint32_t>(scratch_.size());
+        if (!list.images.empty())
+        {
+            // v0.20.0: each image draw's quad after those, in list order.
+            scratch_.resize(scratch_.size() + list.images.size() * static_cast<size_t>(kVerticesPerPrim));
+            Vtx* dst = scratch_.data() + imageVertices;
+            for (const ImageDraw& m : list.images)
+            {
+                expandImage(m, dst);
                 dst += kVerticesPerPrim;
             }
         }
@@ -93,6 +109,37 @@ namespace funkgui
                 ++lastDraws_;
                 continue;
             }
+            if (step.kind == DrawStep::Kind::image)
+            {
+                // v0.20.0: one picture with the image program (shaders/fs_image.sc; canvas/PrimList.h ImageDraw).
+                const ImageDraw& m = list.images[step.first];
+                std::shared_ptr<const images::Picture> pic;
+                const bgfx::TextureHandle texture = images::gpu::texture(m.id, pic);
+                const bgfx::ProgramHandle program = images::gpu::program();
+                const PixelRect px = imagePixels(m, info, physW, physH);
+                if (!bgfx::isValid(texture) || !bgfx::isValid(program) || pic == nullptr || px.w <= 0 || px.h <= 0)
+                    continue;                        // no picture, no program, or nothing of it on screen
+                const int level = imageLevel(m, dpi, pic->w, pic->h);
+                const ImageSampling smp = imageSampling(m, level, pic->w, pic->h);
+                const images::gpu::Uniforms& u = images::gpu::uniforms();
+                const float rect[4] = { m.dst.x, m.dst.y, m.dst.w, m.dst.h };
+                const float uv[4] = { smp.u0, smp.v0, smp.du, smp.dv };
+                const float clamp[4] = { smp.loU, smp.loV, smp.hiU, smp.hiV };
+                const float mask[4] = { m.radius, m.opacity, static_cast<float>(level), 0.0f };
+                bgfx::setUniform(ctx.uViewSize(), viewSize);
+                bgfx::setUniform(u.rect, rect);
+                bgfx::setUniform(u.uv, uv);
+                bgfx::setUniform(u.clamp, clamp);
+                bgfx::setUniform(u.mask, mask);
+                bgfx::setTexture(0, u.sImage, texture);
+                bgfx::setScissor(px16(px.x), px16(px.y), px16(px.w), px16(px.h));
+                bgfx::setVertexBuffer(0, &tvb, imageVertices + step.first * static_cast<uint32_t>(kVerticesPerPrim),
+                                      static_cast<uint32_t>(kVerticesPerPrim));
+                bgfx::setState(kState);
+                bgfx::submit(view, program);
+                ++lastDraws_;
+                continue;
+            }
             const ShaderDraw& s = list.shaders[step.first];
             const bgfx::ProgramHandle program = shaders::detail::program(s.id);
             const PixelRect px = shaderPixels(s, info, physW, physH);
@@ -112,4 +159,6 @@ namespace funkgui
         lastVertices_ = n;
         return Result::submitted;
     }
+
+    uint32_t BgfxSink::imageTextureCount() noexcept { return images::gpu::textureCount(); }
 }

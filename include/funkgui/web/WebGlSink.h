@@ -41,9 +41,19 @@
 // next submit() draws. The loss event is answered with preventDefault(), without which a browser never restores.
 //
 // Shader draws (v0.19.0, Canvas::shader): the stated fallback is that they draw nothing here (a browser has no shaderc
-// and FunkGui::web has no custom-program registry); the primitives around them draw as ever, still as one draw call,
-// and a frame of shader draws alone is `empty`. SoftRaster draws a placeholder for them, the native sink the host's
-// program (canvas/PrimList.h ShaderDraw).
+// and FunkGui::web has no custom-program registry); the primitives around them draw as ever, still as one draw
+// call (v0.20.0: one per run between image draws), and a frame of shader draws alone is `empty`. SoftRaster draws
+// a placeholder for them, the native sink the host's program (canvas/PrimList.h ShaderDraw).
+//
+// Image draws (v0.20.0, Canvas::image; canvas/PrimList.h ImageDraw): drawn as on the native sink, each one draw call
+// between the runs of primitives at its place (drawSteps; the shader draws, which draw nothing here, split no run),
+// with FunkGui's image program as GLSL ES 3.00 text generated from shaders/vs_custom.sc and fs_image.sc
+// (<funkgui/shaders/ui.es300.h> vs_custom_es300, fs_image_es300), the same uniforms, scissor, level and sampling
+// rectangle as BgfxSink, and one RGBA8 texture per picture id held by this sink: the registry's premultiplied level
+// chain (canvas/Images.h; every level uploaded, LINEAR_MIPMAP_LINEAR, clamped, sampled with textureLod at the draw's
+// level), uploaded at the first draw of each revision, deleted at the start of the first submit() after
+// images::remove() or a replacement, with the sink, and with a lost context (uploaded again after the restore). A
+// frame of image draws alone is `submitted`; lastVertexCount() counts their vertices too.
 //
 // This header is plain C++ (it compiles on every host); the class is defined only in FunkGui::web. Main thread only.
 // No pacing, no input and no canvas sizing policy here: those are the web host's.
@@ -61,9 +71,9 @@ namespace funkgui
     class WebGlSink
     {
     public:
-        // submitted: cleared and drawn. empty: cleared, the list has no primitive (or the size is below 1 x 1: nothing
-        // at all). lost: the context is lost, nothing was drawn. unavailable: there is no context or its resources
-        // could not be built (error()), nothing was drawn.
+        // submitted: cleared and drawn. empty: cleared, the list has no primitive and no image draw (or the size is
+        // below 1 x 1: nothing at all). lost: the context is lost, nothing was drawn. unavailable: there is no
+        // context or its resources could not be built (error()), nothing was drawn.
         enum class Result : uint8_t { submitted, empty, lost, unavailable };
 
         // Creates the WebGL2 context on the canvas `canvasSelector` names (document.querySelector: "#editor") and
@@ -91,7 +101,8 @@ namespace funkgui
 
         // One frame. Gives the canvas a physW x physH drawing buffer when it has another size (its width and height
         // attributes, never its CSS size), sets the viewport to it, clears to list.info.clear with alpha 1 and, unless
-        // the list is empty, expands it into one buffer and draws it with one call. u_viewSize is taken from
+        // the list is empty, expands it into one buffer and draws it with one call (v0.20.0: plus one per image draw
+        // and one for each run of primitives after one). u_viewSize is taken from
         // list.info (dpi <= 0.05 counts as 1, as on the native sink). The browser presents the canvas when the caller
         // returns to its event loop.
         Result submit(const PrimList& list, int physW, int physH);
@@ -130,7 +141,24 @@ namespace funkgui
         uint32_t texture_ = 0;
         int      uViewSize_ = -1;                    // uniform location
 
-        std::vector<Vtx> scratch_;                   // 6 * prims, capacity kept across frames
+        // v0.20.0: the image program (vs_custom + fs_image), its vertex array over buffer_, its uniforms, and this
+        // context's picture textures (id, the registry's revision, the GL name), swept by images::generation().
+        uint32_t imageProgram_ = 0;
+        uint32_t imageVertexArray_ = 0;
+        int      uImageViewSize_ = -1, uImageRect_ = -1, uImageUv_ = -1, uImageClamp_ = -1, uImageMask_ = -1;
+        struct ImageTexture
+        {
+            uint32_t id = 0;
+            uint64_t revision = 0;
+            uint32_t name = 0;
+        };
+        std::vector<ImageTexture> imageTextures_;
+        uint64_t imagesSwept_ = 0;
+        uint32_t imageTexture(uint32_t id, int& w, int& h);  // its GL name and size; 0 when id is not registered
+        void sweepImages();
+        std::vector<DrawStep> steps_;                // the frame's draw calls (drawSteps), capacity kept
+
+        std::vector<Vtx> scratch_;                   // 6 * (prims + image draws), capacity kept across frames
         uint32_t frames_ = 0;
         uint32_t restores_ = 0;
         uint32_t lastVertices_ = 0;

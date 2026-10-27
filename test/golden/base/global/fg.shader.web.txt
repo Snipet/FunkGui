@@ -4,3 +4,7 @@ shader.vs_ui.es300.hash	11af222eb51e65ba	exact
 shader.vs_ui.es300.bytes	1143	exact
 shader.fs_ui.es300.hash	f0b63cd8d9b77842	exact
 shader.fs_ui.es300.bytes	7312	exact
+shader.vs_custom.es300.hash	46747e99fa3f3389	exact
+shader.vs_custom.es300.bytes	1712	exact
+shader.fs_image.es300.hash	af6fd92e9b639c96	exact
+shader.fs_image.es300.bytes	2434	exact

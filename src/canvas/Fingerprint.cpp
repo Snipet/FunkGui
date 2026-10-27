@@ -197,6 +197,27 @@ namespace funkgui
             fp.maxY = std::max(fp.maxY, s.rect.bottom());
             countTag(fp.tagCounts, s.tag);
         }
+
+        // v0.20.0: the image draws, after the shader draws (Fingerprint.h says what is hashed). None: nothing mixed.
+        for (const ImageDraw& m : list.images)
+        {
+            if (m.live)
+                ++fp.live;
+            if (m.live && opt.excludeLive)
+                continue;
+            mix32(geometry, m.id);
+            mix32(geometry, m.at);
+            mix32(geometry, m.shaderAt);
+            mix32(geometry, m.clipped ? 1u : 0u);
+            const std::array<float, 13> v = { m.dst.x,  m.dst.y,  m.dst.w,  m.dst.h,  m.uv.x,   m.uv.y,  m.uv.w,
+                                              m.uv.h,   m.radius, m.clip.x, m.clip.y, m.clip.w, m.clip.h };
+            for (const float x : v)
+                mix32(geometry, static_cast<uint32_t>(quantise(x, quantum)));
+            ++fp.images;
+            fp.maxX = std::max(fp.maxX, m.dst.right());
+            fp.maxY = std::max(fp.maxY, m.dst.bottom());
+            countTag(fp.tagCounts, m.tag);
+        }
         fp.geometry = geometry;
         fp.text = text;
         return fp;
@@ -218,6 +239,8 @@ namespace funkgui
         P.num(pre + ".max_y", static_cast<double>(fp.maxY), T::Tol::abs(0.01));
         if (fp.shaders != 0)                             // v0.19.0: only a frame with shader draws has the row
             P.num(pre + ".shaders", fp.shaders, T::Tol::exact());
+        if (fp.images != 0)                              // v0.20.0: only a frame with image draws has the row
+            P.num(pre + ".images", fp.images, T::Tol::exact());
         for (const auto& [tag, count] : fp.tagCounts)
         {
             // Golden keys are lower case: SLOT_LABEL -> <prefix>.tag.slot_label; an unnamed tag by its number.

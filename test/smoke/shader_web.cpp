@@ -24,6 +24,11 @@
 // - vs_ui attributes: a_position, a_color0, a_color1, a_texcoord0, a_texcoord1, a_texcoord2 at locations 0..5, the
 //   order of funkgui::Vtx's fields (offsets 0, 8, 12, 16, 32, 48), with canvas/Expand.h's types.
 // - fs_ui output: `out vec4 fg_FragColor`, which the code assigns.
+//
+// v0.20.0: the image program (Canvas::image; WebGlSink draws it), shaders/vs_custom.sc and fs_image.sc with
+// shaders/varying_custom.def.sc's types, as shader.vs_custom.es300.* and shader.fs_image.es300.*: the same spec rows,
+// the attributes vs_custom reads (a_position, a_texcoord0 at locations 0 and 1, the varyings v_uv and v_px out), and
+// fs_image's output. The UI program's texts are generated exactly as before (their rows do not move).
 
 #include <funkgui/shaders/ui.es300.h>
 #include <funkgui/test/Harness.h>
@@ -240,6 +245,8 @@ int main(int argc, char** argv)
 
     stage(P, "shader.vs_ui.es300", vs_ui_es300, sizeof vs_ui_es300 - 1, "vs_ui.sc", false);
     stage(P, "shader.fs_ui.es300", fs_ui_es300, sizeof fs_ui_es300 - 1, "fs_ui.sc", true);
+    stage(P, "shader.vs_custom.es300", vs_custom_es300, sizeof vs_custom_es300 - 1, "vs_custom.sc", false);
+    stage(P, "shader.fs_image.es300", fs_image_es300, sizeof fs_image_es300 - 1, "fs_image.sc", true);
 
     // The attributes WebGlSink points at funkgui::Vtx: the order of its fields, one location each.
     {
@@ -254,6 +261,23 @@ int main(int argc, char** argv)
     {
         const std::string fs = code(fs_ui_es300);
         P.eq("shader.fs_ui.es300.output",
+             fs.find("\nout vec4 fg_FragColor;\n") != std::string::npos
+                 && fs.find("fg_FragColor = ") != std::string::npos,
+             1);
+    }
+    // v0.20.0: the image program's interface, as WebGlSink binds it (by name: a_position and a_texcoord0 of Vtx).
+    {
+        const std::string vs = code(vs_custom_es300);
+        const bool in = vs.find("layout(location = 0) in vec2 a_position;\n") != std::string::npos
+                        && vs.find("layout(location = 1) in vec4 a_texcoord0;\n") != std::string::npos
+                        && vs.find("layout(location = 2)") == std::string::npos;
+        const bool out = vs.find("\nout vec2 v_uv;\n") != std::string::npos
+                         && vs.find("\nout vec2 v_px;\n") != std::string::npos;
+        P.eq("shader.vs_custom.es300.attributes", in && out, 1);
+        const std::string fs = code(fs_image_es300);
+        P.eq("shader.fs_image.es300.inputs", fs.find("\nin vec2 v_uv;\n") != std::string::npos
+                                                 && fs.find("\nin vec2 v_px;\n") != std::string::npos, 1);
+        P.eq("shader.fs_image.es300.output",
              fs.find("\nout vec4 fg_FragColor;\n") != std::string::npos
                  && fs.find("fg_FragColor = ") != std::string::npos,
              1);

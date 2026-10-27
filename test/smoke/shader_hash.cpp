@@ -12,6 +12,9 @@
 // v0.19.0 adds vs_custom (shaders/vs_custom.sc with shaders/varying_custom.def.sc: the vertex half of every custom
 // program, gpu/ShaderLibrary.h) in both profiles, as shader.vs_custom.<ext>.*. FunkGui's test fragment shader
 // (fs_custom_test) is not pinned here: fg.shader.library checks that it links and fg.shader.draw what it draws.
+//
+// v0.20.0 adds fs_image (shaders/fs_image.sc with shaders/varying_custom.def.sc: the fragment half of the image
+// program, Canvas::image) in both profiles, as shader.fs_image.<ext>.*; fg.image.draw checks what it draws.
 
 #include <cstddef>
 #include <cstdint>
@@ -19,6 +22,8 @@
 #include <string>
 #include <string_view>
 
+#include <funkgui/shaders/fs_image.mtl.h>
+#include <funkgui/shaders/fs_image.spv.h>
 #include <funkgui/shaders/fs_ui.mtl.h>
 #include <funkgui/shaders/fs_ui.spv.h>
 #include <funkgui/shaders/shaderc_stamp.h>
@@ -52,13 +57,13 @@ namespace
         P.num("shader.fs_ui" + sfx + ".bytes", static_cast<double>(fsBytes), T::Tol::exact());
     }
 
-    // v0.19.0: one more vertex shader, keyed with its profile's extension in both profiles.
-    void vertex(T::Probe& P, const char* name, const char* ext, const uint8_t* vs, std::size_t vsBytes)
+    // v0.19.0: one more shader, keyed with its profile's extension in both profiles (v0.20.0: of either stage).
+    void one(T::Probe& P, const char* name, const char* ext, char stage, const uint8_t* bin, std::size_t bytes)
     {
         const std::string key = std::string("shader.") + name + "." + ext;
-        P.eq(key + ".magic", magic(vs, vsBytes, 'V'), 1);
-        P.hash(key + ".hash", T::fnv1a(vs, vsBytes));
-        P.num(key + ".bytes", static_cast<double>(vsBytes), T::Tol::exact());
+        P.eq(key + ".magic", magic(bin, bytes, stage), 1);
+        P.hash(key + ".hash", T::fnv1a(bin, bytes));
+        P.num(key + ".bytes", static_cast<double>(bytes), T::Tol::exact());
     }
 }
 
@@ -69,7 +74,9 @@ int main(int argc, char** argv)
     P.eq("shaderc.stamp_is_pin", std::string_view(FUNKGUI_SHADERC_STAMP) == FUNKGUI_SHADERC_PIN_STAMP, 1);
     profile(P, "", vs_ui_mtl, sizeof vs_ui_mtl, fs_ui_mtl, sizeof fs_ui_mtl);
     profile(P, "spv", vs_ui_spv, sizeof vs_ui_spv, fs_ui_spv, sizeof fs_ui_spv);
-    vertex(P, "vs_custom", "mtl", vs_custom_mtl, sizeof vs_custom_mtl);
-    vertex(P, "vs_custom", "spv", vs_custom_spv, sizeof vs_custom_spv);
+    one(P, "vs_custom", "mtl", 'V', vs_custom_mtl, sizeof vs_custom_mtl);
+    one(P, "vs_custom", "spv", 'V', vs_custom_spv, sizeof vs_custom_spv);
+    one(P, "fs_image", "mtl", 'F', fs_image_mtl, sizeof fs_image_mtl);
+    one(P, "fs_image", "spv", 'F', fs_image_spv, sizeof fs_image_spv);
     return P.finish();
 }

@@ -3,6 +3,43 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.20.0 — 2026-10-26 · MINOR: images on the Canvas
+
+Golden impact: **none** on existing rows (a frame without image draws records, hashes, dumps and draws exactly as
+before; the UI program and `vs_custom` are byte for byte unchanged); `fg.shader.hash` gains four rows pinning the new
+fragment shader (`shader.fs_image.{mtl,spv}.*`) and `fg.shader.web` four for the image program's GLSL ES 3.00 text
+(`shader.{vs_custom,fs_image}.es300.*`). New tests: `fg.image.registry` and `fg.canvas.image` (every preset, wasm32
+too), `fg.image.draw` (headless Metal read-back: pixels, the clip, the order, parity with SoftRaster, the texture
+lifecycle; skipped without a Metal device); the browser page (`check-page.mjs`) draws pictures in every frame and
+replaces and removes one. FCompressor a5fe769 green against it (agent, agent-gui, web; `--strict`). Linux not run (its
+Vulkan path compiles `fs_image.spv` and is otherwise the Metal code).
+
+- **`canvas/Images.h`** (`funkgui::images`): a process-wide picture registry. `set(id, w, h, rgba, strideBytes = 0)`
+  copies straight RGBA8 (1..4096 a side) and stores it premultiplied with a full box-filtered level chain; replacing
+  an id makes a new revision. `remove`, `has`, `width`, `height`; for sinks and tests `picture(id)` (a shared,
+  immutable `Picture`: levels, pixels, revision), `generation()` and `levelCount()`. Safe from any thread (a mutex and
+  shared immutable pictures). FunkGui decodes nothing: a host hands it decoded pixels.
+- **`Canvas::image(id, dst, radius = 0, opacity = 1, uv = {0, 0, 1, 1})`** records the picture stretched over `dst`
+  (logical px), sampling the sub-rectangle `uv` (callers crop for "cover"), with corners rounded and antialiased
+  exactly as an rrect's, its alpha times `opacity`, in order with the primitives and the shader draws, under the clip
+  in force (a scissor; the quad is never cut), with the current tag and live flag. An id not in the registry records
+  nothing and counts in `PrimList::missingImages`; `PrimList::images` holds the draws (`ImageDraw`), so
+  `HeadlessHost::draw()` reports images drawn and missing. The dump gains `image` lines in drawing order and an
+  `images missing N` line; fingerprints hash image draws into geometry (not their opacity or pixels) and add
+  `<prefix>.images` only when there are some; `funkgui_framerender --fingerprint` prints `images`.
+- **Every sink draws them.** `canvas/Expand.h`: `DrawStep::Kind::image` (`drawSteps` merges shader and image draws in
+  recording order), `expandImage`, `imagePixels`, `imageLevel` (one level per draw: the largest power of two at or
+  below the texels per device px) and `imageSampling` (the sample point kept inside uv's texels, so a crop never
+  bleeds). `SoftRaster` draws the pictures (bilinear on the chosen level, the rounded mask, opacity, clip), so
+  headless PNGs show them. `BgfxSink` draws each with FunkGui's image program (`shaders/vs_custom.sc` +
+  `shaders/fs_image.sc`), one texture per id for the process, uploaded at its first draw per revision, destroyed at
+  the next submit after a removal or replacement and when bgfx shuts down (`BgfxSink::imageTextureCount()`).
+  `WebGlSink` draws them too (no fallback): the same program as generated GLSL ES 3.00 (`vs_custom_es300`,
+  `fs_image_es300` in `ui.es300.h`), textures per sink, rebuilt after a context loss; shader draws still split no run
+  there.
+- `shaders/vs_custom.sc`: a comment reworded (no `$` outside its directive lines, which the GLSL ES 3.00 script
+  refuses); its binaries are unchanged.
+
 ## v0.19.0 — 2026-10-26 · MINOR: custom shaders
 
 Golden impact: **none** on existing rows (a frame without shader draws records, hashes, dumps and draws exactly as

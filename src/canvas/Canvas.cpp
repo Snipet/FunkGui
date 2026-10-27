@@ -1,5 +1,6 @@
 #include <funkgui/canvas/Canvas.h>
 
+#include <funkgui/canvas/Images.h>
 #include <funkgui/text/TextFit.h>
 
 #include <algorithm>
@@ -112,10 +113,15 @@ namespace funkgui
         // v0.19.0: the shader draws recorded inside this clip sit between its primitives; as those are dropped each
         // draw's position follows (it keeps the primitives before it that survive). They are the tail of the vector
         // whose `at` lies past clip.first (at never decreases along it); a draw at clip.first itself stays put.
+        // v0.20.0: the image draws likewise.
         std::vector<ShaderDraw>& shaders = list_.shaders;
         std::size_t s = shaders.size();
         while (s > 0 && shaders[s - 1].at > clip.first)
             --s;
+        std::vector<ImageDraw>& images = list_.images;
+        std::size_t m = images.size();
+        while (m > 0 && images[m - 1].at > clip.first)
+            --m;
 
         std::vector<Prim>& prims = list_.prims;
         std::size_t keep = clip.first;
@@ -123,6 +129,8 @@ namespace funkgui
         {
             for (; s < shaders.size() && shaders[s].at <= i; ++s)
                 shaders[s].at = static_cast<uint32_t>(keep);
+            for (; m < images.size() && images[m].at <= i; ++m)
+                images[m].at = static_cast<uint32_t>(keep);
             Prim p = prims[i];
             const bool outside = !(p.x1 > cx0) || !(p.x0 < cx1) || !(p.y1 > cy0) || !(p.y0 < cy1);
             if (outside || clip.r.isEmpty())
@@ -151,7 +159,28 @@ namespace funkgui
         }
         for (; s < shaders.size(); ++s)
             shaders[s].at = static_cast<uint32_t>(keep); // recorded after the clip's last primitive
+        for (; m < images.size(); ++m)
+            images[m].at = static_cast<uint32_t>(keep);
         prims.resize(keep);                              // shrinking keeps the capacity
+    }
+
+    bool Canvas::clipFor(const Rect& r, Rect& clip, bool& clipped) const noexcept
+    {
+        clipped = false;
+        clip = {};
+        if (clipDepth_ <= 0)
+            return true;
+        // The innermost clip that took effect: each is already intersected with the ones around it, and a push beyond
+        // kMaxClips was ignored.
+        const int top = std::min(clipDepth_, kMaxClips) - 1;
+        const Rect& c = clips_[static_cast<std::size_t>(top)].r;
+        const float x0 = std::max(r.x, c.x), y0 = std::max(r.y, c.y);
+        const float x1 = std::min(r.right(), c.right()), y1 = std::min(r.bottom(), c.bottom());
+        if (c.isEmpty() || !(x1 > x0) || !(y1 > y0))
+            return false;                                // clipped away: nothing to draw
+        clip = c;
+        clipped = true;
+        return true;
     }
 
     // ---- v0.19.0: shader draws --------------------------------------------------------------------------------------
@@ -161,19 +190,8 @@ namespace funkgui
         if (!std::isfinite(r.x) || !std::isfinite(r.y) || !std::isfinite(r.w) || !std::isfinite(r.h) || r.isEmpty())
             return;
         ShaderDraw d;
-        if (clipDepth_ > 0)
-        {
-            // The innermost clip that took effect: each is already intersected with the ones around it, and a push
-            // beyond kMaxClips was ignored.
-            const int top = std::min(clipDepth_, kMaxClips) - 1;
-            const Rect& c = clips_[static_cast<std::size_t>(top)].r;
-            const float x0 = std::max(r.x, c.x), y0 = std::max(r.y, c.y);
-            const float x1 = std::min(r.right(), c.right()), y1 = std::min(r.bottom(), c.bottom());
-            if (c.isEmpty() || !(x1 > x0) || !(y1 > y0))
-                return;                                  // clipped away: nothing to draw, nothing recorded
-            d.clip = c;
-            d.clipped = true;
-        }
+        if (!clipFor(r, d.clip, d.clipped))
+            return;                                      // clipped away: nothing to draw, nothing recorded
         d.id = id;
         d.at = static_cast<uint32_t>(list_.prims.size());
         d.rect = r;
@@ -183,6 +201,43 @@ namespace funkgui
         for (int i = 0; i < n; ++i)
             d.params[i] = params[i];
         list_.shaders.push_back(d);
+    }
+
+    // ---- v0.20.0: images -------------------------------------------------------------------------------------------
+
+    void Canvas::image(uint32_t id, const Rect& dst, float radius, float opacity, const Rect& uv)
+    {
+        if (!std::isfinite(dst.x) || !std::isfinite(dst.y) || !std::isfinite(dst.w) || !std::isfinite(dst.h)
+            || dst.isEmpty())
+            return;
+        // uv inside 0..1; a coordinate that is not finite makes it the whole picture.
+        Rect u{ 0.0f, 0.0f, 1.0f, 1.0f };
+        if (std::isfinite(uv.x) && std::isfinite(uv.y) && std::isfinite(uv.w) && std::isfinite(uv.h))
+        {
+            const float u0 = std::clamp(uv.x, 0.0f, 1.0f), v0 = std::clamp(uv.y, 0.0f, 1.0f);
+            const float u1 = std::clamp(uv.x + uv.w, 0.0f, 1.0f), v1 = std::clamp(uv.y + uv.h, 0.0f, 1.0f);
+            u = { u0, v0, u1 - u0, v1 - v0 };
+        }
+        if (u.isEmpty())
+            return;
+        if (!images::has(id))
+        {
+            ++list_.missingImages;                       // the registry has no such picture: nothing to draw
+            return;
+        }
+        ImageDraw d;
+        if (!clipFor(dst, d.clip, d.clipped))
+            return;                                      // clipped away: nothing to draw, nothing recorded
+        d.id = id;
+        d.at = static_cast<uint32_t>(list_.prims.size());
+        d.shaderAt = static_cast<uint32_t>(list_.shaders.size());
+        d.dst = dst;
+        d.uv = u;
+        d.radius = std::isfinite(radius) && radius > 0.0f ? radius : 0.0f;
+        d.opacity = std::isfinite(opacity) ? std::clamp(opacity, 0.0f, 1.0f) : 0.0f;
+        d.live = live_;
+        d.tag = tag_;
+        list_.images.push_back(d);
     }
 
     int Canvas::clipDepth() const noexcept { return clipDepth_; }

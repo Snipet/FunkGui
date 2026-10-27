@@ -43,6 +43,12 @@ namespace funkgui
         // count here and stretch maxX / maxY to their rect's right and bottom edges. A frame without shader draws
         // hashes exactly as before v0.19.0. legacyHr ignores them (HR had none).
         int   shaders = 0;
+        // v0.20.0: image draws (PrimList::images) hashed into `geometry` after the shader draws, in order, as those
+        // are: each mixes its id, `at`, `shaderAt`, whether it was clipped, its dst, uv, radius and clip ({} when not),
+        // quantised; its opacity is not hashed (a value, like a colour), nor are the picture's pixels or whether it is
+        // registered when the frame is drawn. Live ones, tags and extents as for shader draws. A frame without image
+        // draws hashes exactly as before v0.20.0; legacyHr ignores them.
+        int   images = 0;
     };
 
     Fingerprint fingerprint(const PrimList&, const FingerprintOptions& = {});
@@ -51,5 +57,6 @@ namespace funkgui
     // counts and extents as exact num rows, and <prefix>.tag.<NAME> per tag. (02 §3.9 wrote this against a
     // test::Metric list; Harness v2, frozen at FZ0, records rows on the Probe itself, so the sink is the Probe.)
     // v0.19.0: <prefix>.shaders (exact) only when it is not 0, so a frame without shader draws has the rows it had.
+    // v0.20.0: <prefix>.images likewise.
     void addMetrics(test::Probe&, std::string_view prefix, const Fingerprint&);
 }
