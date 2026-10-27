@@ -99,7 +99,10 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
   the surface lifecycle with a no-GPU fallback screen, converts JUCE input, mirrors the accessibility items for the
   screen reader, offers UI zoom steps, resizes the window for a resizable Panel, serves the menu, the file chooser
   and the clipboard of `HostServices` through JUCE, and can capture frames. `FramePump` gives every editor in the
-  process one clock (a display link on macOS, a timer on Linux) and one `bgfx::frame()` per tick. On macOS the
+  process one clock (a display link on macOS, a timer on Linux) and one `bgfx::frame()` per tick; the link stays on
+  an editor whose window is shown, moved by a watchdog when it goes quiet (v0.21.0: a host that hides one plug-in
+  window to show the next froze every editor), and `BgfxContext` holds each editor's view until bgfx has run the last
+  command that names it (an editor closed before its first frame crashed the host). On macOS the
   Objective-C classes are registered at run time under randomised names, so two products using FunkGui in one host
   never collide. `ShaderLibrary.h` (`funkgui::shaders`, v0.19.0) registers custom fragment shaders by id: a host
   compiles one at run time with bgfx's shaderc (`target()`, `varyingDef()`, `fragmentPrelude()` and `bgfxShaderSh()`

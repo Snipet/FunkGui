@@ -30,6 +30,11 @@ namespace funkgui
     // ignore it.
     void  setDisplayLinkRate(void* link, float minHz, float maxHz, float preferredHz);
 
+    // v0.21.0: whether <nsView> is where a display link on it fires: in a window that is shown (not ordered out, not
+    // minimised), and neither it nor an ancestor hidden. A link on a view that is not stops: the FramePump keeps its
+    // link on one that is (FramePump.h). Linux: true for any view (no link to stop).
+    bool  viewOnScreen(void* nsView);
+
     // The Objective-C runtime name of the display-link target's class in this binary: FUNKGUI_OBJC_PREFIX
     // "DisplayLinkTarget_" and a random hex suffix, registered once per binary on first use (G7; 02 §1.8, K2 #16).
     // Diagnostics and fg.objc.names; nothing looks the class up by this name.

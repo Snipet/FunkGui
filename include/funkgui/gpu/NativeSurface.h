@@ -22,6 +22,14 @@ namespace funkgui
     // Device pixels per logical unit of the window holding <view>: a peer's native handle or a render view.
     double getBackingScale(void* view);
 
+    // v0.21.0: a hold on <view> that outlives destroyRenderView(), for BgfxContext: bgfx runs the commands that name a
+    // view (a framebuffer's creation, its destruction) at its next frame, so a view an editor destroys before that
+    // frame must stay allocated until then. macOS: the NSView retained and released (destroyRenderView still takes
+    // it out of its window at once). Linux: both do nothing, and an X window goes when destroyRenderView destroys it
+    // (stated fallback: X windows have no reference count).
+    void   retainRenderView(void* view);
+    void   releaseRenderView(void* view);
+
     // The device pixels per logical unit EditorHost sizes <view>'s drawable at: getBackingScale(), or its UI_SCALE
     // capture override (v0.11.0). On Linux the X window is placed and sized at this scale (the peer's until it is set),
     // so the window, the Vulkan swapchain and the drawable always have one size, and the last frame is re-applied at

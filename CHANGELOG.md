@@ -3,6 +3,32 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.21.0 — 2026-10-27 · MINOR: several editors in one host
+
+Golden impact: **none** (no drawing changed: the clock and the views' lifetimes only). New test: `fg.editorhost.multi`
+(labels `live`: real windows, the pump's own display link and watchdog), which at v0.20.0 fails its `hidden.*` rows
+(the second editor drew 0 frames once the first's window was hidden). FCompressor a5fe769 green against it (agent,
+agent-gui, web; `--strict`). Linux not run (its pump is the fallback timer, which this changes not; its new functions
+are no-ops with a stated fallback).
+
+Found in Ableton Live with two instances of a FunkGui plug-in: the second's window showed only its background, and
+deleting it crashed Live in `bgfx::mtl::SwapChainMtl::init` (an `objc_msgSend` to a freed NSView).
+
+- **The clock follows a shown editor.** `FramePump`'s display link was on the first editor's view, and a display link
+  stops while its window is ordered out or minimised: a host that shows one plug-in window at a time hides the first
+  to show the second, and every editor in the process froze. The link now goes on a client whose view is on screen
+  (`viewOnScreen`, new in `gpu/DisplayLink.h`: its window shown and not minimised, the view not hidden; not the
+  window's occlusion state, which reads "not visible" for shown windows and whose links fire anyway), and a watchdog
+  (a `juce::Timer` at 4 Hz while any editor is open) moves it to a shown editor's view when it has not fired for a
+  quarter of a second. `FramePump::linkRebinds()` counts the moves (diagnostics).
+- **A view outlives bgfx's commands.** bgfx makes and destroys a window's framebuffer at its next frame, not at the
+  call, so an editor closed before that frame (opened while no frame ran, which the frozen clock made common, or
+  resized and closed within one) left bgfx making a swapchain on the NSView the editor had just released.
+  `BgfxContext` now holds every registered view (`retainRenderView`, new in `gpu/NativeSurface.h`) from `acquire()`
+  until two frames after `release()` (`afterFrame()`, called by `FramePump::tick` after `bgfx::frame()`), or until bgfx
+  shuts down; `retiringViews()` counts those still held. On Linux `retainRenderView` and `releaseRenderView` do nothing
+  (X windows have no reference count) and a render view's window still goes when its editor does.
+
 ## v0.20.0 — 2026-10-26 · MINOR: images on the Canvas
 
 Golden impact: **none** on existing rows (a frame without image draws records, hashes, dumps and draws exactly as

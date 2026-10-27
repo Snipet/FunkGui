@@ -19,6 +19,15 @@ namespace funkgui
     // bgfx::frame() once at the end. When no link can be created yet (no
     // window, or the GPU path is unavailable) it falls back to a plain timer,
     // so the editor still runs — just without refresh-rate sync.
+    //
+    // v0.21.0: the link is on one client's view, and a link stops while its
+    // view is off screen (its window ordered out or minimised: a host that
+    // shows one plug-in window at a time hides the first editor's to show the
+    // second's). Every editor then froze, the second never drew a frame, and
+    // its framebuffer's creation waited in bgfx's queue for a view the host
+    // later freed. The link now goes on a client whose view is on screen
+    // (viewOnScreen), and a watchdog (four times a second) moves it to one
+    // when it has not fired for a quarter of a second.
     class FrameClient
     {
     public:
@@ -80,12 +89,28 @@ namespace funkgui
         float measuredFps()  const { return fps_; }
         bool  wantedFullRate() const { return ratePref_ == 1; }
 
+        // How often the watchdog moved the link off a view that had gone off
+        // screen (v0.21.0). Diagnostics and fg.editorhost.multi.
+        int   linkRebinds() const { return rebinds_; }
+
     private:
         FramePump() = default;
 
         void timerCallback() override;   // fallback clock
         void updateClock();
         void requestRate(bool fullRate);
+        void watch();                    // the watchdog's: a link that stopped firing is moved (v0.21.0)
+        bool bindLink(bool onScreenOnly);
+
+        struct Watchdog final : juce::Timer
+        {
+            explicit Watchdog(FramePump& p) : pump(p) {}
+            void timerCallback() override { pump.watch(); }
+            FramePump& pump;
+        };
+        Watchdog watchdog_{ *this };
+        double lastTickWall_ = 0.0;      // when tick() last ran, wall clock (seconds)
+        int    rebinds_ = 0;
 
         std::vector<FrameClient*> clients_;
         void*  link_ = nullptr;
