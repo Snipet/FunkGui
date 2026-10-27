@@ -12,3 +12,7 @@ shader.vs_custom.mtl.hash	215a982cf036e04d	exact
 shader.vs_custom.mtl.bytes	852	exact
 shader.vs_custom.spv.hash	3a4105aa0e96a97b	exact
 shader.vs_custom.spv.bytes	1351	exact
+shader.fs_image.mtl.hash	a45e36392ec050b8	exact
+shader.fs_image.mtl.bytes	1560	exact
+shader.fs_image.spv.hash	fd02966be798669b	exact
+shader.fs_image.spv.bytes	2872	exact
