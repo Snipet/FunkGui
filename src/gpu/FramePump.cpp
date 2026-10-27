@@ -53,6 +53,25 @@ namespace funkgui
         updateClock();
     }
 
+    // A link on the first client whose view is on screen (or, when none is, on any view in a window: it starts firing
+    // once that window shows, and the watchdog moves it if another shows first).
+    bool FramePump::bindLink(bool onScreenOnly)
+    {
+        for (auto* c : clients_)
+        {
+            void* v = c->frameClockView();
+            if (v == nullptr || (onScreenOnly && !viewOnScreen(v)))
+                continue;
+            link_ = createDisplayLink(v, displayLinkStep, this);
+            if (link_ != nullptr)
+            {
+                linkOwner_ = c;
+                return true;
+            }
+        }
+        return false;
+    }
+
     void FramePump::updateClock()
     {
         if (clients_.empty())
@@ -63,20 +82,18 @@ namespace funkgui
             ratePref_ = -1;
             haveStamp_ = false;
             stopTimer();
+            watchdog_.stopTimer();
             return;
         }
 
         const bool hadLink = (link_ != nullptr);
         if (link_ == nullptr && !forceTimer_)
+            if (!bindLink(true))
+                bindLink(false);
+        if (!watchdog_.isTimerRunning())
         {
-            for (auto* c : clients_)
-            {
-                if (void* v = c->frameClockView())
-                {
-                    link_ = createDisplayLink(v, displayLinkStep, this);
-                    if (link_ != nullptr) { linkOwner_ = c; break; }
-                }
-            }
+            lastTickWall_ = juce::Time::getMillisecondCounterHiRes() * 0.001;
+            watchdog_.startTimerHz(4);
         }
         // The fallback timer and the display link both report uptime seconds,
         // but the link reports a *target presentation* time slightly ahead of
@@ -144,6 +161,32 @@ namespace funkgui
         tick(juce::Time::getMillisecondCounterHiRes() * 0.001);
     }
 
+    void FramePump::watch()
+    {
+        if (link_ == nullptr || clients_.empty() || inTick_)
+            return;                          // the timer drives the frames, or nothing is open
+        const double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
+        if (now - lastTickWall_ < 0.25)
+            return;                          // firing
+        // Quiet for a quarter of a second: its view is off screen (or the whole host is). Move it to a client whose
+        // view is on screen, if one is; with none, nothing needs drawing and the link stays where it is.
+        const FrameClient* owner = linkOwner_;
+        bool another = false;
+        for (auto* c : clients_)
+            if (c != owner && c->frameClockView() != nullptr && viewOnScreen(c->frameClockView()))
+                another = true;
+        if (!another)
+            return;
+        destroyDisplayLink(link_);
+        link_ = nullptr;
+        linkOwner_ = nullptr;
+        ratePref_ = -1;
+        haveStamp_ = false;
+        ++rebinds_;
+        updateClock();
+        lastTickWall_ = now;                 // give the new link its quarter second
+    }
+
     void FramePump::tick(double timestampSec)
     {
         if (inTick_) return;                 // re-entrancy guard
@@ -166,6 +209,7 @@ namespace funkgui
             fpsWindowStart_ = timestampSec;
         }
 
+        lastTickWall_ = juce::Time::getMillisecondCounterHiRes() * 0.001;
         inTick_ = true;
         bool submitted = false, fullRate = false;
 
@@ -187,7 +231,10 @@ namespace funkgui
         // nothing; bgfx defers its destroy queue until the next frame, which
         // is harmless.
         if (submitted && BgfxContext::get().valid())
+        {
             bgfx::frame();
+            BgfxContext::get().afterFrame(); // views closed two frames ago are let go (BgfxContext.h, v0.21.0)
+        }
 
         if (link_ == nullptr) updateClock();   // a view may have appeared
         requestRate(fullRate);

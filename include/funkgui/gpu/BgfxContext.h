@@ -5,6 +5,12 @@
 // framebuffers via bgfx::createFrameBuffer(nwh). Single-threaded mode (renderFrame before init) so everything happens
 // on the message thread.
 //
+// v0.21.0: a registered window's view is held (retainRenderView) from acquire() until bgfx has run the last command that
+// names it. bgfx carries out a framebuffer's creation and destruction at its next frame, not at the call, so an editor
+// closed before that frame (opened while no frame ran, or resized and closed within one) used to leave bgfx creating a
+// swapchain on a freed NSView: a crash in SwapChainMtl::init. release() retires the view instead of letting it go, and
+// afterFrame() lets it go two frames later, or at once when bgfx shuts down.
+//
 // G7: the font texture is FontService's CPU atlas uploaded once (the same bake every Canvas and HeadlessHost reads, so
 // a live frame and a headless frame share glyph metrics and UVs), and the transient vertex buffer is sized from
 // configure() (default FUNKGUI_TRANSIENT_VB_BYTES = 32 MiB, 02 §4.5) instead of bgfx's compiled 6 MiB.
@@ -49,6 +55,11 @@ namespace funkgui
         // editor then falls back to a plain JUCE-painted background).
         bool acquire(void* nwh, int physW, int physH);
         void release(void* nwh);
+
+        // After each bgfx::frame() (FramePump::tick): the views released two frames ago are let go (v0.21.0). The
+        // views still held for bgfx's commands: diagnostics and fg.editorhost.multi.
+        void afterFrame();
+        int  retiringViews() const noexcept { return retiredCount_; }
 
         // Per-window framebuffer. Invalid handle for the primary window
         // (which owns the default backbuffer).
@@ -140,5 +151,18 @@ namespace funkgui
         bgfx::ShaderHandle fsUi_ = BGFX_INVALID_HANDLE;
 
         bool fontBaked_ = false;                     // FontService's atlas was baked when the texture was made
+
+        // Views released while bgfx may still have commands that name them (v0.21.0): each let go after `frames`
+        // more bgfx::frame() calls, or at shutdown.
+        struct Retired
+        {
+            void* nwh = nullptr;
+            int frames = 0;
+        };
+        static constexpr int kMaxRetired = 4 * kMaxWindows;
+        Retired retired_[kMaxRetired];
+        int retiredCount_ = 0;
+        void retire(void* nwh);                      // let go two frames from now (at once when the list is full)
+        void releaseRetired();                       // let every retired view go: bgfx ran (or dropped) their commands
     };
 }

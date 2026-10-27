@@ -46,6 +46,18 @@ namespace funkgui
         [v release];
     }
 
+    void retainRenderView(void* view)
+    {
+        if (view != nullptr)
+            [(NSView*) view retain];
+    }
+
+    void releaseRenderView(void* view)
+    {
+        if (view != nullptr)
+            [(NSView*) view release];
+    }
+
     double getBackingScale(void* view)
     {
         if (view == nullptr) return 1.0;

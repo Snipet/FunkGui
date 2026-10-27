@@ -233,6 +233,7 @@ namespace funkgui
             w = {};
             w.nwh = nwh; w.primary = true; w.w = physW; w.h = physH;
             w.view = 0;
+            retainRenderView(nwh);                   // held until bgfx is done with it (the header, v0.21.0)
             return true;
         }
 
@@ -258,7 +259,43 @@ namespace funkgui
         w.h    = physH;
         w.view = view;
         w.fb   = fb;
+        // The framebuffer is made at the next frame: until then, and until its destruction has run too, bgfx holds a
+        // pointer to this view that the editor may free first (the header, v0.21.0).
+        retainRenderView(nwh);
         return true;
+    }
+
+    void BgfxContext::retire(void* nwh)
+    {
+        if (nwh == nullptr) return;
+        if (retiredCount_ >= kMaxRetired)
+        {
+            // Never in practice (64 editors closed between two frames); a full list lets the oldest go.
+            releaseRenderView(retired_[0].nwh);
+            for (int i = 1; i < retiredCount_; ++i) retired_[i - 1] = retired_[i];
+            --retiredCount_;
+        }
+        retired_[retiredCount_++] = { nwh, 2 };
+    }
+
+    void BgfxContext::releaseRetired()
+    {
+        for (int i = 0; i < retiredCount_; ++i)
+            releaseRenderView(retired_[i].nwh);
+        retiredCount_ = 0;
+    }
+
+    void BgfxContext::afterFrame()
+    {
+        int kept = 0;
+        for (int i = 0; i < retiredCount_; ++i)
+        {
+            if (--retired_[i].frames <= 0)
+                releaseRenderView(retired_[i].nwh);
+            else
+                retired_[kept++] = retired_[i];
+        }
+        retiredCount_ = kept;
     }
 
     void BgfxContext::release(void* nwh)
@@ -275,12 +312,14 @@ namespace funkgui
         for (int i = idx; i < windowCount_ - 1; ++i)
             windows_[i] = windows_[i + 1];
         --windowCount_;
+        retire(nwh);                                 // bgfx may name it until its next frames (the header, v0.21.0)
 
         if (windowCount_ == 0)
         {
             destroyResources();
-            bgfx::shutdown();
+            bgfx::shutdown();                        // runs or drops every command left: no view is named after it
             initialised_ = false;
+            releaseRetired();
             return;
         }
 
@@ -296,11 +335,15 @@ namespace funkgui
             bgfx::shutdown();
             initialised_ = false;
 
+            releaseRetired();                        // bgfx is down: nothing names a released view now
+
             Window survivors[kMaxWindows];
             const int n = windowCount_;
             for (int i = 0; i < n; ++i) survivors[i] = windows_[i];
             windowCount_ = 0;
             for (int i = 0; i <= kMaxWindows; ++i) viewUsed_[i] = false;
+            // Their registrations end here and their holds with them; registering again holds them again.
+            for (int i = 0; i < n; ++i) releaseRenderView(survivors[i].nwh);
 
             bool rebuilt = initBackend(survivors[0].nwh, survivors[0].w, survivors[0].h);
             if (rebuilt && !createResources())
@@ -325,6 +368,7 @@ namespace funkgui
                 p.nwh = survivors[0].nwh; p.primary = true;
                 p.w = survivors[0].w; p.h = survivors[0].h;
                 p.view = 0;
+                retainRenderView(p.nwh);
                 for (int i = 1; i < n; ++i)
                     acquire(survivors[i].nwh, survivors[i].w, survivors[i].h);
             }

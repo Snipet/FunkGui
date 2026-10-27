@@ -87,6 +87,17 @@ namespace funkgui
         h->link.preferredFrameRateRange = CAFrameRateRangeMake(minHz, maxHz, preferredHz);
     }
 
+    bool viewOnScreen(void* nsView)
+    {
+        NSView* v = (NSView*) nsView;
+        if (v == nil || [v isHiddenOrHasHiddenAncestor])
+            return false;
+        // Shown and not minimised. Not its occlusion state: a covered window's link goes on firing, and the state
+        // says "not visible" for windows that are (fg.editorhost.multi, macOS 27, three displays).
+        NSWindow* w = [v window];
+        return w != nil && [w isVisible] && ![w isMiniaturized];
+    }
+
     const char* displayLinkTargetClassName()
     {
         return class_getName(objc::displayLinkTargetClass().cls);

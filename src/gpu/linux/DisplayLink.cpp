@@ -16,6 +16,11 @@ namespace funkgui
 
     void setDisplayLinkRate(void*, float, float, float) {}
 
+    bool viewOnScreen(void* view)
+    {
+        return view != nullptr;                      // no link to stop (DisplayLink.h)
+    }
+
     const char* displayLinkTargetClassName()
     {
         return "";

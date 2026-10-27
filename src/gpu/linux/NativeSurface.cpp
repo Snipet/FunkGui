@@ -196,6 +196,10 @@ namespace funkgui
         place(d, *rv);
     }
 
+    // No reference count on an X window (NativeSurface.h, v0.21.0): the window goes when destroyRenderView destroys it.
+    void retainRenderView(void*) {}
+    void releaseRenderView(void*) {}
+
     void destroyRenderView(void* view)
     {
         const ::Window w = windowOf(view);
