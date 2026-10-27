@@ -3,7 +3,7 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
-## Unreleased (0.20.0) · MINOR: images on the Canvas
+## v0.20.0 — 2026-10-26 · MINOR: images on the Canvas
 
 Golden impact: **none** on existing rows (a frame without image draws records, hashes, dumps and draws exactly as
 before; the UI program and `vs_custom` are byte for byte unchanged); `fg.shader.hash` gains four rows pinning the new
@@ -11,7 +11,8 @@ fragment shader (`shader.fs_image.{mtl,spv}.*`) and `fg.shader.web` four for the
 (`shader.{vs_custom,fs_image}.es300.*`). New tests: `fg.image.registry` and `fg.canvas.image` (every preset, wasm32
 too), `fg.image.draw` (headless Metal read-back: pixels, the clip, the order, parity with SoftRaster, the texture
 lifecycle; skipped without a Metal device); the browser page (`check-page.mjs`) draws pictures in every frame and
-replaces and removes one. Linux not run (its Vulkan path compiles `fs_image.spv` and is otherwise the Metal code).
+replaces and removes one. FCompressor a5fe769 green against it (agent, agent-gui, web; `--strict`). Linux not run (its
+Vulkan path compiles `fs_image.spv` and is otherwise the Metal code).
 
 - **`canvas/Images.h`** (`funkgui::images`): a process-wide picture registry. `set(id, w, h, rgba, strideBytes = 0)`
   copies straight RGBA8 (1..4096 a side) and stores it premultiplied with a full box-filtered level chain; replacing
