@@ -3,7 +3,7 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
-## v0.23.0 — 2026-10-28 · MINOR: GPU pictures (untagged: release prep)
+## v0.23.0 — 2026-10-28 · MINOR: GPU pictures
 
 Golden impact: **none** (nothing records, draws, dumps or hashes differently; a new API in `FunkGui::gpu` and
 `BgfxContext`'s handling of the null window, and no golden rows). New tests: `fg.gpu.picture` (GPU, in `verify`: 78
