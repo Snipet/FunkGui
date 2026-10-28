@@ -1522,18 +1522,15 @@ namespace funkgui
     bool TextEditor::typeReturn()
     {
         const TextPos a = selectionStart(), b = selectionEnd();   // the break lands where the selection starts
+        const std::string& sa = lines_[static_cast<size_t>(a.line)];
+        size_t lead = 0;                                 // the line's own indent: its leading blanks before the caret
+        while (lead < static_cast<size_t>(a.col) && lead < sa.size() && isBlank(sa[lead]))
+            ++lead;
         std::string indent;
         if (options_.autoIndent)
-        {
-            const std::string& s = lines_[static_cast<size_t>(a.line)];
-            size_t k = 0;
-            while (k < static_cast<size_t>(a.col) && k < s.size() && isBlank(s[k]))
-                ++k;
-            indent.assign(s, 0, k);
-        }
+            indent.assign(sa, 0, lead);
         if (options_.braceIndent)
         {
-            const std::string& sa = lines_[static_cast<size_t>(a.line)];
             int i = a.col;
             while (i > 0 && isBlank(sa[static_cast<size_t>(i - 1)]))
                 --i;
@@ -1545,13 +1542,14 @@ namespace funkgui
                 while (j < static_cast<int>(sb.size()) && isBlank(sb[static_cast<size_t>(j)]))
                     ++j;
                 const bool closerNext = j < static_cast<int>(sb.size()) && sb[static_cast<size_t>(j)] == closerOf(open);
+                const std::string own(sa, 0, lead);      // from the line's own indent, with or without autoIndent
                 const std::string unit = indentUnit();
-                std::string ins = "\n" + indent + unit;
+                std::string ins = "\n" + own + unit;
                 if (closerNext)
-                    ins += "\n" + indent;
+                    ins += "\n" + own;
                 const TextPos from{ a.line, i }, to = closerNext ? TextPos{ b.line, j } : b;
                 change(from, to, ins, Kind::other);
-                moveCaret({ a.line + 1, static_cast<int>(indent.size() + unit.size()) }, false);
+                moveCaret({ a.line + 1, static_cast<int>(own.size() + unit.size()) }, false);
                 return true;
             }
         }
@@ -1578,10 +1576,12 @@ namespace funkgui
             const char closer = closerOf(c);
             if (closer != 0 && hasSelection())
             {
-                // Over a selection an opener or a quote wraps it; the selection stays on the text inside.
+                // Over a selection an opener or a quote wraps it; the selection stays on the text inside. Two
+                // insertions (one undo step), not a replacement of the selection, so the decorations, line marks and
+                // auto-closers inside it stay on its text.
                 const TextPos a = selectionStart(), b = selectionEnd();
                 const std::string inner = rangeText(a, b);
-                change(a, b, std::string(1, c) + inner + closer, Kind::other);
+                applyEdits({ { a, a, std::string(1, c) }, { b, b, std::string(1, closer) } });
                 const TextPos innerFrom{ a.line, a.col + 1 };
                 anchor_ = innerFrom;
                 moveCaret(endOf(innerFrom, inner), true);
@@ -1658,46 +1658,31 @@ namespace funkgui
         const TextPos a = selectionStart(), b = selectionEnd();
         const int l0 = a.line;
         const int l1 = (b.col == 0 && b.line > l0) ? b.line - 1 : b.line;   // a selection ending at a line's start
-        const std::string unit = options_.softTabs ? std::string(static_cast<size_t>(options_.tabWidth), ' ')
-                                                   : std::string("\t");
-        std::string out;
-        std::vector<int> delta(static_cast<size_t>(l1 - l0 + 1), 0);
+        const std::string unit = indentUnit();
+        // A piece per line (one undo step), not a replacement of the block, so the caret, the anchor, the decorations,
+        // the line marks and the auto-closers move with each line's own text: an insertion at a line's start shifts
+        // what follows it; inside removed leading blanks a position goes to the line's start. applyEdits() is false
+        // with no change when no line changes.
+        std::vector<TextEdit> edits;
         for (int ln = l0; ln <= l1; ++ln)
         {
-            std::string s = lines_[static_cast<size_t>(ln)];
-            const int before = static_cast<int>(s.size());
+            const std::string& s = lines_[static_cast<size_t>(ln)];
             if (!outdent)
             {
                 if (!s.empty() || l0 == l1)
-                    s.insert(0, unit);
+                    edits.push_back({ { ln, 0 }, { ln, 0 }, unit });
+                continue;
             }
-            else if (!s.empty() && s[0] == '\t')
-                s.erase(0, 1);
+            int k = 0;
+            if (!s.empty() && s[0] == '\t')
+                k = 1;
             else
-            {
-                size_t k = 0;
-                while (k < s.size() && k < static_cast<size_t>(options_.tabWidth) && s[k] == ' ')
+                while (k < static_cast<int>(s.size()) && k < options_.tabWidth && s[static_cast<size_t>(k)] == ' ')
                     ++k;
-                s.erase(0, k);
-            }
-            delta[static_cast<size_t>(ln - l0)] = static_cast<int>(s.size()) - before;
-            if (ln > l0)
-                out += '\n';
-            out += s;
+            if (k > 0)
+                edits.push_back({ { ln, 0 }, { ln, k }, {} });
         }
-        const TextPos from{ l0, 0 }, to{ l1, static_cast<int>(lines_[static_cast<size_t>(l1)].size()) };
-        if (out == rangeText(from, to))
-            return false;
-        const TextPos caretWas = caret_, anchorWas = anchor_;
-        change(from, to, out, Kind::other);
-        const auto shifted = [&](TextPos p) {
-            if (p.line >= l0 && p.line <= l1)
-                p.col = std::max(0, p.col + delta[static_cast<size_t>(p.line - l0)]);
-            return clampPos(p);
-        };
-        anchor_ = shifted(anchorWas);
-        moveCaret(shifted(caretWas), true);
-        return true;
+        return applyEdits(std::move(edits));
     }
 
     // ---- focus and the frame ----------------------------------------------------------------------------------------

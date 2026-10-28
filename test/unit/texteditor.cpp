@@ -13,13 +13,14 @@
 // opens or closes a block comment; the palette (inks, weights, underlines); what is drawn (tags, the clip, no missing
 // glyph, theme invariance, the caret only while focused, the placeholder, the blink); the a11y item; read-only; the
 // font presets. v0.22.0, the code-editor hooks: decorations (set by kind, clamped and sorted, moved with the text and
-// dropped with it, cleared by setText; where the underlines, backgrounds and boxes are drawn) and line marks (moved
-// with their lines, the mark column or the tinted number); bracketPair (before and after the caret, nesting, across
-// lines, unmatched, only its own highlight style) and its boxes; autoClosePairs (insert, step over, wrap, pair delete,
-// the quote and word rules, undo) and braceIndent (Return between and after an opener, a closer typed on a blank
-// line); replaceRange, applyEdits and replaceText (one undo step each, the caret mapped or kept, overlap refused,
-// decorations moved); pointOf, posAt, visibleLineRange, wordRangeAt; indent guides, trailing blanks and the minimap
-// (its geometry, a press and a drag). No JUCE: the test also runs without it and as wasm32.
+// dropped with it, kept on their text through indent, outdent and a wrap, cleared by setText; where the underlines,
+// backgrounds and boxes are drawn) and line marks (moved with their lines, through indent and its undo too, the mark
+// column or the tinted number); bracketPair (before and after the caret, nesting, across lines, unmatched, only its
+// own highlight style) and its boxes; autoClosePairs (insert, step over, wrap, pair delete, the quote and word rules,
+// undo) and braceIndent (Return between and after an opener, from the line's own indent without autoIndent, a closer
+// typed on a blank line); replaceRange, applyEdits and replaceText (one undo step each, the caret mapped or kept,
+// overlap refused, decorations moved); pointOf, posAt, visibleLineRange, wordRangeAt; indent guides, trailing blanks
+// and the minimap (its geometry, a press and a drag). No JUCE: the test also runs without it and as wasm32.
 
 #include <funkgui/a11y/A11yItem.h>
 #include <funkgui/canvas/Canvas.h>
@@ -1220,6 +1221,33 @@ namespace
         P.eq("deco.scrolled_into_view", countTag(g.host.draw(), tags::editMark) > 0, 1);
     }
 
+    // Indent and outdent change each line on its own: decorations stay on their text and marks on their lines, through
+    // undo and redo too.
+    void decorationsThroughIndent(T::Probe& P)
+    {
+        Fixture f;
+        TextEditor& e = f.ed();
+        e.setFocused(true);
+        e.setText("    foo(bar)");
+        e.setDecorations({ { { 0, 8 }, { 0, 11 }, DK::error } });
+        e.setCaret({ 0, 4 });
+        f.host.keys("shift+tab");
+        P.eq("deco.outdent_keeps", is(e.text(), "foo(bar)") && is(decs(e), "0@0:4-0:7"), 1);
+        P.eq("deco.outdent_undo", e.undo() && is(e.text(), "    foo(bar)") && is(decs(e), "0@0:8-0:11"), 1);
+        P.eq("deco.outdent_redo", e.redo() && is(e.text(), "foo(bar)") && is(decs(e), "0@0:4-0:7"), 1);
+
+        e.setText("a\nb\nc\nd\ne");
+        e.setLineMarks({ { 2, LineMark::Kind::error }, { 3, LineMark::Kind::warning } });
+        e.setDecorations({ { { 3, 0 }, { 3, 1 }, DK::warning } });
+        e.select({ 2, 0 }, { 4, 1 });
+        f.host.keys("tab");
+        P.eq("mark.indent_keeps_lines", is(e.text(), "a\nb\n\tc\n\td\n\te") && is(marks(e), "2:2 3:1"), 1);
+        P.eq("deco.indent_keeps", is(decs(e), "1@3:1-3:2"), 1);
+        P.eq("mark.indent_undo_keeps_lines",
+             e.undo() && is(e.text(), "a\nb\nc\nd\ne") && is(marks(e), "2:2 3:1") && is(decs(e), "1@3:0-3:1"), 1);
+        P.eq("mark.indent_redo_keeps_lines", e.redo() && is(marks(e), "2:2 3:1") && is(decs(e), "1@3:1-3:2"), 1);
+    }
+
     void brackets(T::Probe& P)
     {
         TextEditor e;
@@ -1297,6 +1325,13 @@ namespace
         e.select({ 0, 0 }, { 0, 3 });
         typeKeys(f, "[");
         P.eq("close.wraps_selection", is(e.text(), "[abc]") && is(e.selectedText(), "abc"), 1);
+        e.setText("foo");
+        e.setDecorations({ { { 0, 0 }, { 0, 3 }, DK::error } });
+        e.select({ 0, 0 }, { 0, 3 });
+        typeKeys(f, "(");
+        P.eq("close.wrap_keeps_decoration",
+             is(e.text(), "(foo)") && is(e.selectedText(), "foo") && is(decs(e), "0@0:1-0:4"), 1);
+        P.eq("close.wrap_one_step", e.undo() && is(e.text(), "foo") && is(decs(e), "0@0:0-0:3") && !e.canUndo(), 1);
         e.setText("");
         typeKeys(f, "{");
         f.host.keys("backspace");
@@ -1368,6 +1403,17 @@ namespace
         e.setCaret(e.endPos());
         typeKeys(f, "}");
         P.eq("brace.closer_after_text", is(e.text(), "\tx}"), 1);
+        setOption(e, &TextEditorOptions::autoIndent, false);   // braceIndent still starts from the line's own indent
+        e.setText("\tif (x) {}");
+        e.setCaret({ 0, 9 });
+        f.host.keys("return");
+        P.eq("brace.own_indent_without_autoindent",
+             is(e.text(), "\tif (x) {\n\t\t\n\t}") && is(pos(e.caret()), "1:2"), 1);
+        e.setText("\tx");
+        e.setCaret(e.endPos());
+        f.host.keys("return");
+        P.eq("brace.plain_return_without_autoindent", is(e.text(), "\tx\n"), 1);
+        setOption(e, &TextEditorOptions::autoIndent);
         setOption(e, &TextEditorOptions::autoClosePairs);
         e.setText("");
         typeKeys(f, "{");
@@ -1668,6 +1714,7 @@ int main(int argc, char** argv)
     drawing(P);
     misc(P);
     decorations(P);
+    decorationsThroughIndent(P);
     brackets(P);
     closingPairs(P);
     braces(P);

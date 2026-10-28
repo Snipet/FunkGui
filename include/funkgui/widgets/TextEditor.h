@@ -107,9 +107,11 @@
 // text inside); a closer typed just before one the editor inserted steps over it (while the caret stays on that line,
 // not past it); Backspace between an empty pair (any of the five) removes both. braceIndent: Return after an opener
 // ( [ { (blanks between it and the caret dropped) indents the new line one level (a tab, or tabWidth spaces with
-// softTabs) past the line's own, and with that opener's closer next (blanks between dropped) puts the closer on a
-// line of its own at the line's indent, the caret on the indented line between; a closer typed on a line that is
-// blank before the caret takes the indent of its opener's line when that is shallower, else outdents one level.
+// softTabs) past the line's own (its leading blanks, with or without autoIndent), and with that opener's closer next
+// (blanks between dropped) puts the closer on a line of its own at the line's indent, the caret on the indented line
+// between; a closer typed on a line that is blank before the caret takes the indent of its opener's line (nesting
+// counted, over at most 20000 characters) when that is shallower and is typed where it is when it is not, and
+// outdents one level when no opener is found.
 // minimap (tag EDIT_MAP): a strip minimapWidth px wide (16 at least, half the box at most) at the box's right, the
 // text and the vertical scrollbar to its left behind an ink16 rule: each visual row 2 px high, each column 1 px
 // wide (tabs expanded), a bar per run of non-blank characters in its highlight style's ink; it scrolls in proportion
@@ -371,7 +373,7 @@ namespace funkgui
 
         // ---- layout, for a product that draws around the editor -----------------------------------------------------
         float   rowHeight() const noexcept { return rowH_; }
-        float   gutterWidth() const;                     // 0 without line numbers
+        float   gutterWidth() const;                     // the mark column and the line numbers; 0 with neither
         Rect    textArea() const;                        // where the rows are drawn, before scrolling
         int     rowCount() const noexcept;               // visual rows (== lineCount() without word wrap)
         int     rowOf(TextPos) const;                    // the visual row a position is on
