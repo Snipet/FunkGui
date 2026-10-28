@@ -87,7 +87,13 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
   and n/a states), `Dial`, `SegmentedSelector`, `LatchToggle`, `AttachedWord`, `ThemeCells`, `HintLine`, `FocusRing`,
   `DwellSelector` and `TextEditor`, a multi-line text editor (caret, selection, word and line moves, undo, the
   clipboard through `HostServices`, find, line numbers, word wrap, scrolling, syntax highlighting through a
-  `Highlighter`, font presets `code`, `prose`, `compact` and `large` or any `TextStyle`). Controls render models the
+  `Highlighter`, font presets `code`, `prose`, `compact` and `large` or any `TextStyle`). From v0.22.0 it carries
+  what a code editor needs, each look off by default: decorations the product sets by kind (error, warning and info
+  squiggles, occurrence and find-match backgrounds, bracket boxes) and line marks in the gutter, both moved with the
+  text as it is edited; indent guides, trailing blanks, a bracket pair matched at the caret, auto-closed pairs,
+  brace indent and a minimap; geometry for the product's overlays (`pointOf`, `posAt`, `visibleLineRange`,
+  `wordRangeAt`); and one-step undoable edits for language services (`replaceRange`, `applyEdits` for a formatter,
+  `replaceText`). The completion list, hover cards and find bar stay the product's. Controls render models the
   product implements and write only through `GestureController`.
 - **a11y**: the accessibility items a Panel lists, and their one-line text form for tests.
 - **prefs**, **live**, **juce**: UI preferences (theme, zoom, integer keys) behind a storage backend: with JUCE a

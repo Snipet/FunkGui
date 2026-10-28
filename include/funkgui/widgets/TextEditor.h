@@ -71,6 +71,67 @@
 //
 // Accessibility: one editableText item (a11yrole::editableText), its value the whole text, its description the
 // caret's line and column (1-based) and the selection's length.
+//
+// ---- v0.22.0: hooks for a code editor -------------------------------------------------------------------------------
+// What a product needs to make a language's editor of this widget (diagnostics, occurrences, a find bar, completion,
+// hover cards, a formatter). The editor draws what the product marks and gives it the geometry and the edits; the
+// product's overlays (a completion list, a hover card, signature help, a find bar) are the product's, drawn above the
+// editor, and the product sees every key first (so it keeps Up, Down, Return and Escape while its list is open).
+// Every option below is off by default: an editor that does not ask draws exactly as before.
+//
+// Decorations (tag EDIT_MARK). setDecorations() replaces the ranges of the kinds in its mask (a bit per
+// DecorationKind, every kind by default), so diagnostics, occurrences and find matches are set apart. error, warning
+// and info draw a wavy underline (2 px high, a 4 px period on the row's own grid, so it never crawls as the text
+// scrolls) in options().inks; highlight (a word's occurrences) an ink16 background; findMatch an accentDim
+// background at half alpha; findCurrent an accentDim background boxed in accent; bracket a 1 px ink52 box.
+// Backgrounds go over the selection and under the text, underlines and boxes over the text; an empty range draws one
+// space width from its position (a diagnostic at a line's end). Ranges stay in place across edits until the product
+// sets them again: they move with the text around them as a caret does, text typed inside one widens it, text typed
+// at either end does not, and a range whose text is all removed is dropped (an empty range moves as one point).
+// setText() clears them. setLineMarks() replaces the line marks (a line and a severity; the most severe on a line is
+// drawn): with markColumn, a column at the gutter's left (round(style.px) wide) shows a disc (error), a square
+// (warning) or a ring (info) in options().inks on the line's first row; without it the mark tints the line number;
+// without either nothing shows. A mark moves with its line's start. The theme has no danger or warning ink (nine
+// inks, two accents), so DecorationInks defaults error and warning to fixed colours and info to the theme's signal.
+//
+// Code-editor options. indentGuides (tag EDIT_GUIDE): a 1 px ink16 rule at the start of each indent level (tabWidth
+// space widths, tabs expanded) of a line's leading blanks, on its first row; a blank line takes the level of the
+// lines around it (theirs when they agree, else one more than the shallower; at most 100 lines each way).
+// showTrailingBlanks (EDIT_GUIDE): the blanks after a line's last other character in ink32, a 1.5 px dot per space and
+// a rule across a tab. matchBrackets: while focused, the bracket pair at the caret (bracketPair(): the character
+// before the caret, else the one after it, of ()[]{}) boxed in ink52; nesting is counted only among brackets of the
+// bracket's own highlight style (one in a string or a comment does not count against one in code), over at most
+// 20000 characters. autoClosePairs (typed keys only, not insert()): ( [ { insert their closer after the caret when
+// the next character is a blank, the line's end or one of ;:.,=}])>, and " ' too when the character before is not a
+// word character or that quote; an opener or a quote typed over a selection wraps it (the selection stays on the
+// text inside); a closer typed just before one the editor inserted steps over it (while the caret stays on that line,
+// not past it); Backspace between an empty pair (any of the five) removes both. braceIndent: Return after an opener
+// ( [ { (blanks between it and the caret dropped) indents the new line one level (a tab, or tabWidth spaces with
+// softTabs) past the line's own (its leading blanks, with or without autoIndent), and with that opener's closer next
+// (blanks between dropped) puts the closer on a line of its own at the line's indent, the caret on the indented line
+// between; a closer typed on a line that is blank before the caret takes the indent of its opener's line (nesting
+// counted, over at most 20000 characters) when that is shallower and is typed where it is when it is not, and
+// outdents one level when no opener is found.
+// minimap (tag EDIT_MAP): a strip minimapWidth px wide (16 at least, half the box at most) at the box's right, the
+// text and the vertical scrollbar to its left behind an ink16 rule: each visual row 2 px high, each column 1 px
+// wide (tabs expanded), a bar per run of non-blank characters in its highlight style's ink; it scrolls in proportion
+// with the text when its rows do not fit; a slider (ink16, ink32 while dragged) shades the rows in view; a press on
+// the slider drags it, a press beside it centres the slider there and drags on.
+//
+// Geometry for the product's overlays: pointOf() (a position's character cell's top-left, scrolled, in the Panel's
+// px; a position at a wrap break starts the row after it), posAt() (the nearest boundary to a point over the rows;
+// nullopt over the frame, the gutter, the minimap, the padding above and below the rows, or past the last row),
+// visibleLineRange() (the lines with any row in view), wordRangeAt() (the run of identifier characters [A-Za-z0-9_]
+// touching a position; empty when there is none), rowHeight().
+//
+// Edits for language services: each is one undo step that restores the caret and the selection, sanitises its text,
+// and is false with no change when read-only or when nothing would change. replaceRange(): the caret after the
+// insertion (a completion replaces the word before the caret). applyEdits(): a formatter's or a rename's list, its
+// positions in the text as it stands, in any order (sorted by the editor; insertions at one position keep their
+// order), refused whole when two overlap; the caret and the anchor move with the text: inside a replaced span to its
+// replacement's end, at or after a span's end with the text after it. replaceText(): the whole text, recorded as the
+// one replacement between the common prefix and suffix, the caret and the anchor kept at their line and column
+// (clamped).
 
 #include <funkgui/a11y/A11yItem.h>
 #include <funkgui/core/Geometry.h>
@@ -80,6 +141,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -105,6 +167,65 @@ namespace funkgui
         friend constexpr bool operator<=(TextPos a, TextPos b) noexcept { return !(b < a); }
         friend constexpr bool operator>(TextPos a, TextPos b) noexcept { return b < a; }
         friend constexpr bool operator>=(TextPos a, TextPos b) noexcept { return !(a < b); }
+    };
+
+    // A range of the text, [from, to). The editor clamps and orders every range it takes.
+    struct TextRange
+    {
+        TextPos from{};
+        TextPos to{};
+
+        constexpr bool empty() const noexcept { return from == to; }
+    };
+
+    // The lines from `first` to `last`, both included.
+    struct LineRange
+    {
+        int first = 0;
+        int last = 0;
+    };
+
+    // One edit of a language service (a formatter, a rename, a quick fix): the text [from, to) becomes `text`.
+    struct TextEdit
+    {
+        TextPos     from{};
+        TextPos     to{};
+        std::string text{};
+    };
+
+    // What a decoration draws (see the header comment).
+    enum class DecorationKind : uint8_t { error, warning, info, highlight, findMatch, findCurrent, bracket };
+
+    constexpr uint32_t decorationBit(DecorationKind k) noexcept { return 1u << static_cast<unsigned>(k); }
+    inline constexpr uint32_t kDiagnosticDecorations = decorationBit(DecorationKind::error)
+                                                     | decorationBit(DecorationKind::warning)
+                                                     | decorationBit(DecorationKind::info);
+    inline constexpr uint32_t kFindDecorations = decorationBit(DecorationKind::findMatch)
+                                               | decorationBit(DecorationKind::findCurrent);
+    inline constexpr uint32_t kAllDecorations = 0x7Fu;
+
+    struct Decoration
+    {
+        TextPos        from{};
+        TextPos        to{};
+        DecorationKind kind = DecorationKind::error;
+    };
+
+    // A mark on a line, drawn in the gutter (see the header comment).
+    struct LineMark
+    {
+        enum class Kind : uint8_t { info, warning, error };   // in order of severity
+
+        int  line = 0;
+        Kind kind = Kind::error;
+    };
+
+    // The inks of the underlines and the line marks (only HighlightStyle's ink and colour are read).
+    struct DecorationInks
+    {
+        text::HighlightStyle error{ text::HighlightStyle::Ink::custom, { 0xE5, 0x48, 0x4D, 0xFF }, 0.0f, false };
+        text::HighlightStyle warning{ text::HighlightStyle::Ink::custom, { 0xE2, 0xA3, 0x36, 0xFF }, 0.0f, false };
+        text::HighlightStyle info{ text::HighlightStyle::Ink::signal, {}, 0.0f, false };
     };
 
     // The font presets: styles of the type scale (one face; see the header comment).
@@ -139,6 +260,17 @@ namespace funkgui
         int         maxUndo = 1000;                      // undo steps kept
         std::string placeholder{};                       // shown in ink32 while the text is empty
         std::string a11yTitle = "Text";                  // the accessibility item's title
+
+        // v0.22.0, the code-editor looks and keys (see the header comment); all off by default
+        bool        indentGuides = false;                // a rule at each indent level of the leading blanks
+        bool        showTrailingBlanks = false;          // blanks at a line's end drawn as dots and rules
+        bool        matchBrackets = false;               // the bracket pair at the caret boxed while focused
+        bool        autoClosePairs = false;              // ( [ { " ' typed insert their closer; step over; pair delete
+        bool        braceIndent = false;                 // Return after an opener indents; a closer typed outdents
+        bool        minimap = false;                     // an overview of the rows at the box's right
+        float       minimapWidth = 64.0f;                // px, at least 16, at most half the box
+        bool        markColumn = false;                  // a column at the gutter's left for the line marks
+        DecorationInks inks{};                           // the underlines' and the line marks' inks
     };
 
     class TextEditor
@@ -189,8 +321,21 @@ namespace funkgui
         // (forward) or before it, wrapping round when `wrapAround`; false and no change when there is none.
         bool find(std::string_view needle, bool forward = true, bool caseSensitive = true, bool wrapAround = true);
 
+        // ---- decorations (v0.22.0; see the header comment) ----------------------------------------------------------
+        // Replaces the decorations of the kinds in `kinds` (decorationBit()s) with those of the list that are of
+        // those kinds; the other kinds stay. setDecorations({}, kinds) clears them.
+        void setDecorations(std::vector<Decoration>, uint32_t kinds = kAllDecorations);
+        const std::vector<Decoration>& decorations() const noexcept { return decorations_; }   // clamped, by `from`
+        void setLineMarks(std::vector<LineMark>);        // replaces them all; a line outside the text is dropped
+        const std::vector<LineMark>& lineMarks() const noexcept { return lineMarks_; }          // by line
+        // The bracket pair at `at` by matchBrackets' rule (whatever the option): the two brackets' positions.
+        bool bracketPair(TextPos at, TextPos& open, TextPos& close) const;
+
         // ---- editing (every call undoable; false and no change when read-only, or when nothing changes) -----------
         bool insert(std::string_view utf8);              // at the caret, replacing the selection; caret after it
+        bool replaceRange(TextPos from, TextPos to, std::string_view utf8);   // one step; the caret after it
+        bool applyEdits(std::vector<TextEdit>);          // one step; refused whole when two edits overlap
+        bool replaceText(std::string_view utf8);         // the whole text as one step; the caret's line and column kept
         bool deleteSelection();
         bool undo();
         bool redo();
@@ -228,21 +373,36 @@ namespace funkgui
 
         // ---- layout, for a product that draws around the editor -----------------------------------------------------
         float   rowHeight() const noexcept { return rowH_; }
-        float   gutterWidth() const;                     // 0 without line numbers
+        float   gutterWidth() const;                     // the mark column and the line numbers; 0 with neither
         Rect    textArea() const;                        // where the rows are drawn, before scrolling
         int     rowCount() const noexcept;               // visual rows (== lineCount() without word wrap)
         int     rowOf(TextPos) const;                    // the visual row a position is on
         TextPos positionAt(Point) const;                 // the nearest character boundary to a point in the box
         Point   caretPoint() const;                      // the caret's top-left, in the Panel's px (scrolled)
 
+        // ---- geometry for overlays (v0.22.0; see the header comment) ------------------------------------------------
+        Point     pointOf(TextPos) const;                // a position's character cell's top-left (scrolled)
+        std::optional<TextPos> posAt(Point) const;       // the nearest boundary; nullopt outside the rows
+        LineRange visibleLineRange() const;              // the lines with any row in view
+        TextRange wordRangeAt(TextPos) const;            // the identifier characters touching a position
+        Rect      minimapArea() const noexcept;          // where the minimap's rows draw; empty without one
+
     private:
         enum class Kind : uint8_t { typing, backspace, del, other };
-        enum class Drag : uint8_t { none, chars, words, lines, vbar, hbar };
+        enum class Drag : uint8_t { none, chars, words, lines, vbar, hbar, minimap };
 
-        struct Edit
+        // One replacement: the text `removed` at `from` became `inserted`.
+        struct Piece
         {
             TextPos     from{};
             std::string removed, inserted;
+        };
+
+        // One undo step: its pieces in the order they were applied (undone in reverse); typing, Backspace and Delete
+        // steps have one piece, which the next key of the same kind may extend.
+        struct Edit
+        {
+            std::vector<Piece> pieces;
             TextPos     caretBefore{}, anchorBefore{}, caretAfter{}, anchorAfter{};
             Kind        kind = Kind::other;
         };
@@ -260,7 +420,10 @@ namespace funkgui
         int     rowStartOf(TextPos) const noexcept;      // the first column of the row a position is on
         int     rowEndOf(TextPos) const noexcept;        // the last column (the break, or the line's length)
         Rect    innerRect() const noexcept;
+        float   rightEdge() const noexcept;              // the rows' right edge: the inner box's, or the minimap's left
         Rect    rowsClip() const noexcept;
+        float   markColumnWidth() const noexcept;        // 0 without markColumn
+        void    minimapGeometry(float& offset, float& sliderY, float& sliderH) const noexcept;
         bool    vbarShown() const noexcept;
         bool    hbarShown() const noexcept;
         Rect    vbarRect(float& thumbY, float& thumbH) const noexcept;
@@ -273,9 +436,17 @@ namespace funkgui
         TextPos clampPos(TextPos) const noexcept;
         TextPos endOf(TextPos at, std::string_view inserted) const noexcept;
         std::string rangeText(TextPos a, TextPos b) const;
-        TextPos replaceRange(TextPos a, TextPos b, std::string_view text, Kind kind);
+        TextPos change(TextPos a, TextPos b, std::string_view text, Kind kind);    // spliceText, recorded
+        TextPos spliceText(TextPos a, TextPos b, std::string_view text);           // a <= b, clamped; not recorded
+        void    pushStep(Edit&&);
+        void    mapThrough(TextPos a, TextPos b, TextPos end);   // decorations, marks and auto-closers after a splice
         void    rehighlightFrom(int firstLine, int lastChanged);
         void    tokenise(int ln) const;                  // spans_ for a line
+        uint16_t styleIn(const std::vector<text::Span>&, int col) const noexcept;
+        bool    scanBracket(TextPos from, char open, char close, bool forward, int style, TextPos& out) const;
+        int     guideLevels(int ln) const;               // indent levels of a line (a blank one: its neighbours')
+        int     indentLevelsOf(int ln) const noexcept;   // -1 for a blank line
+        std::string indentUnit() const;
 
         // movement
         TextPos prevChar(TextPos) const noexcept;
@@ -292,6 +463,8 @@ namespace funkgui
         bool    commandKeyIsMeta() const noexcept;
         bool    editable() const noexcept { return !options_.readOnly; }
         bool    typeText(std::string_view, Kind);       // replaces the selection, caret after; false when nothing
+        bool    typeChar(char);                          // a typed character: autoClosePairs and braceIndent first
+        bool    outdentCloser(char);                     // braceIndent: a closer typed on a blank-indented line
         bool    indentLines(bool outdent);
         bool    typeTab();
         bool    typeReturn();
@@ -300,7 +473,10 @@ namespace funkgui
 
         // drawing
         void    drawLineNumber(Canvas&, const Theme&, int row, float rowTop) const;
-        void    drawRow(Canvas&, const Theme&, int row, float rowTop) const;
+        void    drawLineMark(Canvas&, const Theme&, int row, float rowTop) const;
+        void    drawRow(Canvas&, const Theme&, int row, float rowTop, bool pair) const;   // pair: box pairOpen_/Close_
+        void    drawMinimap(Canvas&, const Theme&) const;
+        const LineMark* markOn(int ln) const noexcept;  // the most severe mark on a line, or nullptr
 
         TextEditorOptions        options_;
         uint32_t                 a11yId_ = 0;
@@ -330,6 +506,11 @@ namespace funkgui
 
         std::string clipboard_;                          // the editor's own copy of what it last copied
 
+        std::vector<Decoration> decorations_;            // by from
+        std::vector<LineMark>   lineMarks_;              // by line
+        std::vector<TextPos>    autoClosers_;            // closers autoClosePairs inserted, still to step over
+        uint32_t                styleGen_ = 0;           // bumps with the highlighter (the bracket cache's key)
+
         Drag     drag_ = Drag::none;
         TextPos  dragStart_{}, dragEnd_{};               // the word or line the drag began on
         float    dragOffset_ = 0.0f;                     // scrollbar drag: the pointer's offset into the thumb
@@ -344,5 +525,11 @@ namespace funkgui
         mutable uint32_t                spansRev_ = 0;
         mutable std::vector<float>      xs_;             // scratch: the x of each column of a row
         mutable std::string             run_;            // scratch: one run of text
+        mutable std::vector<const Decoration*> shown_;   // scratch: the decorations on the lines in view
+        mutable std::vector<text::Span> scanSpans_;      // scratch: a line's spans while matching brackets
+        mutable bool    pairOk_ = false;                 // the bracket pair at the caret, cached by revision, caret
+        mutable bool    pairValid_ = false;              // and style generation
+        mutable TextPos pairAt_{}, pairOpen_{}, pairClose_{};
+        mutable uint32_t pairRev_ = 0, pairGen_ = 0;
     };
 }
