@@ -5,11 +5,12 @@ re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are anno
 
 ## v0.23.0 — 2026-10-28 · MINOR: GPU pictures (untagged: release prep)
 
-Golden impact: **none** (nothing records, draws, dumps or hashes differently; a new API in `FunkGui::gpu` only, and no
-golden rows). New tests: `fg.gpu.picture` (GPU, in `verify`: 61 spec rows on headless Metal; skipped without a Metal
-device) and `fg.gpu.picture.live` (label `live`: 25 rows with a real editor window). FCompressor f9d3598 green against
-it (agent and agent-gui, 529/529 each; web not run, its Emscripten pin is being moved). Linux not run (no GPU picture
-there: the stated fallback).
+Golden impact: **none** (nothing records, draws, dumps or hashes differently; a new API in `FunkGui::gpu` and
+`BgfxContext`'s handling of the null window, and no golden rows). New tests: `fg.gpu.picture` (GPU, in `verify`: 78
+spec rows on headless Metal, windows registered while it holds bgfx included; skipped without a Metal device) and
+`fg.gpu.picture.live` (label `live`: 34 rows with a real editor window, 46 where macOS reports the window visible).
+FCompressor f9d3598 green against it (agent and agent-gui, 529/529 each; web not run, its Emscripten pin is being
+moved). Linux not run (no GPU picture there: the stated fallback).
 
 For a product that shows a picture of its UI to a person or a model (TestingPlayground's `view_panel` tool, a headless
 GUI process): the frame as the screen draws it, custom shaders and pictures included, where `SoftRaster` draws each
@@ -27,12 +28,20 @@ shader draw as its striped placeholder.
   and waited for at most `GpuPictureOptions::timeoutMs` (2000 by default): `timedOut` when the message thread did not
   run it in time, at once from a thread holding the `MessageManagerLock`; a job that timed out is dropped when the
   message thread reaches it (`gpuPictureCounters().abandoned`). `noMessageThread` without a `MessageManager`.
-- **The context.** With editors open, their `BgfxContext`, on bgfx's last two views (`maxViews - 2` and `- 1`). With
-  no window in the process, the first call starts bgfx headless (`BgfxContext::acquire(nullptr, 0, 0)`;
-  `startedContext`) and holds it for later calls, and an editor that opens meanwhile joins it;
-  `releaseGpuPictureContext()` lets it go (bgfx is rebuilt on an open editor's window, or shuts down), and so does
-  JUCE's shutdown (the hold is a `juce::DeletedAtShutdown`). `gpuPictureContextHeld()`. The hold takes one of
-  `BgfxContext`'s window slots while it lasts.
+- **The context.** With editors open, their `BgfxContext`, on bgfx's last two views (`maxViews - 2` and `- 1`), both
+  drawing into the picture's own target (never an editor's drawable). With no window in the process, the first call
+  starts bgfx headless (`BgfxContext::acquire(nullptr, 0, 0)`; `startedContext`) and holds it for later calls; an
+  editor that opens meanwhile takes bgfx over (restarted on its window, the hold registered behind it), and bgfx goes
+  back to headless when the last editor closes while the hold lasts. `releaseGpuPictureContext()` lets the hold go
+  (bgfx shuts down unless an editor holds it), and so does JUCE's shutdown (the hold is a `juce::DeletedAtShutdown`).
+  `gpuPictureContextHeld()`. The hold takes one of `BgfxContext`'s window slots while it lasts.
+- **`BgfxContext`: the null window.** A window never draws behind a headless bgfx: Metal started without a window has
+  no default swapchain, and bgfx never presents a window's framebuffer in its place (an editor opened while bgfx ran
+  headless drew every frame and showed none). A window acquired while the primary is headless now starts bgfx again on
+  itself, the headless registrations following it; `acquire(nullptr, 0, 0)` while bgfx runs registers a headless user
+  with no framebuffer and no view; and when the primary is released the first remaining window becomes the primary,
+  bgfx going back to headless only when no window remains. Nothing changes for a process that never registers the null
+  window: every editor-only path is as before.
 - **Where there is none**, the product draws with `SoftRaster` (the header's example): `unsupported` on Linux (Vulkan
   read-back is not implemented; `gpuPicturesSupported()` is false), `initFailed` without a Metal device, and no header
   at all without `FunkGui::gpu` (test `FUNKGUI_HAS_BGFX`). Also `badSize` (under 1 px, over 16384 or the GPU's texture
