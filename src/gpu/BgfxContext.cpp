@@ -237,6 +237,34 @@ namespace funkgui
             return true;
         }
 
+        if (nwh == nullptr)
+        {
+            // v0.23.0: a headless registration while bgfx runs (a GPU picture's hold, say) draws into no window: no
+            // framebuffer and no view, only a registration that keeps bgfx up (the header).
+            Window& w = windows_[windowCount_++];
+            w = {};
+            return true;
+        }
+
+        if (windowCount_ > 0 && windows_[0].primary && windows_[0].nwh == nullptr)
+        {
+            // v0.23.0: a window never joins a headless bgfx (the header). Metal started without a window has no default
+            // swapchain, and the window's framebuffer would take its place in bgfx's list of windows, which flip()
+            // never presents: the editor would draw every frame and show none. bgfx starts again on the window, and
+            // every registration it had follows it (headless ones as above).
+            Window was[kMaxWindows];
+            const int n = windowCount_;
+            for (int i = 0; i < n; ++i) was[i] = windows_[i];
+            while (windowCount_ > 0)
+                release(windows_[windowCount_ - 1].nwh);   // the last one's release shuts bgfx down
+            const bool started = acquire(nwh, physW, physH);
+            // Started: they register behind the window. Not: they get theirs back (bgfx headless again, if it starts;
+            // a registration that cannot come back is noticed by its owner through owns()).
+            for (int i = 0; i < n; ++i)
+                static_cast<void>(acquire(was[i].nwh, was[i].w, was[i].h));
+            return started;
+        }
+
         const bgfx::ViewId view = allocViewId();
         const auto fb = bgfx::createFrameBuffer(nwh,
                                                 static_cast<uint16_t>(physW),
@@ -325,6 +353,21 @@ namespace funkgui
 
         if (wasPrimary)
         {
+            // v0.23.0: the new primary is the first remaining window, a headless registration only when no window
+            // remains (a window never draws behind a headless primary: the header). A headless primary that leaves
+            // only headless ones behind moves no swapchain: the next one is the primary, and bgfx runs on.
+            int first = 0;
+            while (first < windowCount_ && windows_[first].nwh == nullptr) ++first;
+            if (first == windowCount_)
+            {
+                first = 0;
+                if (nwh == nullptr)
+                {
+                    windows_[0].primary = true;
+                    return;
+                }
+            }
+
             // The default swapchain's window is gone but other editors are
             // still open. Rebuild bgfx on the next remaining window and
             // recreate everything (framebuffers, programs, the atlas).
@@ -337,9 +380,11 @@ namespace funkgui
 
             releaseRetired();                        // bgfx is down: nothing names a released view now
 
-            Window survivors[kMaxWindows];
+            Window survivors[kMaxWindows];           // the new primary first, the others in their order
             const int n = windowCount_;
-            for (int i = 0; i < n; ++i) survivors[i] = windows_[i];
+            survivors[0] = windows_[first];
+            for (int i = 0, k = 1; i < n; ++i)
+                if (i != first) survivors[k++] = windows_[i];
             windowCount_ = 0;
             for (int i = 0; i <= kMaxWindows; ++i) viewUsed_[i] = false;
             // Their registrations end here and their holds with them; registering again holds them again.
@@ -396,6 +441,7 @@ namespace funkgui
 
     void BgfxContext::resizeWindow(void* nwh, int physW, int physH)
     {
+        if (nwh == nullptr) return;                  // a headless registration has nothing to resize (v0.23.0)
         for (int i = 0; i < windowCount_; ++i)
         {
             Window& w = windows_[i];

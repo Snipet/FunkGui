@@ -11,6 +11,14 @@
 // swapchain on a freed NSView: a crash in SwapChainMtl::init. release() retires the view instead of letting it go, and
 // afterFrame() lets it go two frames later, or at once when bgfx shuts down.
 //
+// v0.23.0: the null window. acquire(nullptr, 0, 0) registers a headless user (a GPU picture's hold, gpu/GpuPicture.h):
+// with bgfx down it starts bgfx on Metal with no window; with bgfx up it adds a registration with no framebuffer and no
+// view. A window never draws behind a headless primary: Metal started without a window has no default swapchain, and
+// bgfx never presents a window's framebuffer in its place (the editor drew every frame and showed none). So a window
+// acquired while the primary is headless starts bgfx again on itself, the headless registrations following it; and when
+// the primary is released, the first remaining window becomes the primary, bgfx going back to headless only when no
+// window remains. A restart rebuilds the programs and textures, as the primary's rebuild always has.
+//
 // G7: the font texture is FontService's CPU atlas uploaded once (the same bake every Canvas and HeadlessHost reads, so
 // a live frame and a headless frame share glyph metrics and UVs), and the transient vertex buffer is sized from
 // configure() (default FUNKGUI_TRANSIENT_VB_BYTES = 32 MiB, 02 §4.5) instead of bgfx's compiled 6 MiB.
