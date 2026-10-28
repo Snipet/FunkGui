@@ -44,6 +44,11 @@ namespace funkgui
         inline constexpr Tag editText     = 22;   // EDIT_TEXT     its text (the placeholder too) and underlines
         inline constexpr Tag editSelect   = 23;   // EDIT_SELECT   its selection and the caret row's band
         inline constexpr Tag editCaret    = 24;   // EDIT_CARET    its caret
+        // v0.22.0, the code-editor hooks
+        inline constexpr Tag editMark     = 25;   // EDIT_MARK     its decorations (squiggles, backgrounds, boxes), the
+                                                  //               bracket pair's box and the line marks
+        inline constexpr Tag editGuide    = 26;   // EDIT_GUIDE    its indent guides and trailing blanks
+        inline constexpr Tag editMap      = 27;   // EDIT_MAP      its minimap: the rule, the bars and the slider
 
         inline constexpr Tag lastFunkGui  = 255;  // FunkGui's range is 1..lastFunkGui
         inline constexpr Tag firstProduct = 256;  // a product's tags start here
@@ -68,6 +73,7 @@ namespace funkgui
         // TextEditor
         { tags::editFrame, "EDIT_FRAME" },   { tags::editGutter, "EDIT_GUTTER" }, { tags::editText, "EDIT_TEXT" },
         { tags::editSelect, "EDIT_SELECT" }, { tags::editCaret, "EDIT_CARET" },
+        { tags::editMark, "EDIT_MARK" },     { tags::editGuide, "EDIT_GUIDE" },   { tags::editMap, "EDIT_MAP" },
     };
 
     // A product's tag names (tags >= tags::firstProduct), registered once before the first dump is written or parsed;
