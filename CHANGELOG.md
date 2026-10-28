@@ -3,12 +3,12 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
-## v0.22.0 — 2026-10-28 · MINOR: code-editor hooks on TextEditor (untagged: release prep)
+## v0.22.0 — 2026-10-28 · MINOR: code-editor hooks on TextEditor
 
 Golden impact: **none** on existing rows (every new look is off by default; an editor that does not ask draws, hashes
-and dumps exactly as before). `fg.gallery.texteditor` gains three states, `ide`, `find` and `braces` (candidates, not
-blessed). `fg.texteditor` gains the rows of every rule below. New tags `EDIT_MARK` (25), `EDIT_GUIDE` (26) and
-`EDIT_MAP` (27). Core only (JUCE-free; every preset, wasm32 too). Linux not run (no platform code).
+and dumps exactly as before). `fg.gallery.texteditor` gains three states, `ide`, `find` and `braces` (blessed; identical
+on arm64 and wasm32). `fg.texteditor` gains the rows of every rule below. New tags `EDIT_MARK` (25), `EDIT_GUIDE` (26)
+and `EDIT_MAP` (27). Core only (JUCE-free; every preset, wasm32 too). Linux not run (no platform code).
 
 For a product that makes a language's editor of `TextEditor` (TestingPlayground's FMinus editor): the editor draws
 what the product marks and hands it geometry and edits; completion lists, hover cards, signature help and a find bar
@@ -18,9 +18,9 @@ stay the product's, drawn over the editor (it sees every key first).
   (`decorationBit`, `kDiagnosticDecorations`, `kFindDecorations`, `kAllDecorations`), clamped and sorted. `error`,
   `warning`, `info`: a wavy underline (2 px high, 4 px period on the row's own grid) in `options().inks`; `highlight`
   (occurrences) ink16, `findMatch` accentDim at half alpha, `findCurrent` accentDim boxed in accent, under the text;
-  `bracket` a 1 px ink52 box. An empty range draws one space width. They stay across edits until set again, moving
-  with the text as a caret does (typed inside widens, typed at an end does not, a range whose text is removed is
-  dropped); `setText` clears them.
+  `bracket` a 1 px ink52 box. An empty range draws one space width. They stay across edits until set again, moving with
+  the text as a caret does (typed inside widens, typed at an end does not, a range whose text is removed is dropped; Tab
+  and Shift-Tab over lines and a wrapped selection keep them, piece by piece); `setText` clears them.
 - **Line marks** (`setLineMarks`, `LineMark{ line, Kind::info|warning|error }`): with `markColumn` a column at the
   gutter's left (disc, square, ring); without it the line number takes the mark's ink. They move with their line.
   `DecorationInks` (in the options) holds the three inks: the theme has no danger or warning ink, so error and
@@ -30,8 +30,9 @@ stay the product's, drawn over the editor (it sees every key first).
   it by nesting among brackets of its own highlight style, so a bracket in a string is not counted), `autoClosePairs`
   (( [ { " ' close themselves before blanks, line ends and ;:.,=}])>; quotes not after a word character; a typed
   opener or quote wraps a selection; a closer the editor inserted is stepped over; Backspace removes an empty pair),
-  `braceIndent` (Return after an opener indents a level, between a pair it opens the block with the closer below; a
-  closer typed on a blank line takes its opener's indent or outdents a level), `minimap` and `minimapWidth` (a strip
+  `braceIndent` (with or without `autoIndent`: Return after an opener indents a level past its line's own indent,
+  between a pair it opens the block with the closer below; a closer typed on a blank line takes its opener's line
+  indent when that is shallower, and outdents a level when no opener is found), `minimap` and `minimapWidth` (a strip
   at the right: 2 px rows, 1 px columns, bars in the highlight styles' inks, a slider over the rows in view that a
   press centres and a drag moves), `markColumn`.
 - **Geometry**: `pointOf(TextPos)`, `posAt(Point)` (nullopt outside the rows), `visibleLineRange()`,
