@@ -37,6 +37,7 @@ Canvas        records primitives on the CPU into a PrimList; makes no GPU calls
                               (plus one per custom-shader rectangle or picture and one for the run after it)
   +-- WebHost + WebGlSink     browser: a <canvas>, no JUCE; WebGL2, one draw call per frame (plus one per picture)
   +-- HeadlessHost            tests: fixed dt, synthetic input -> frame dump, fingerprint, PNG, accessibility list
+  +-- renderGpuPicture        pictures (v0.23.0): any recorded frame drawn offscreen by bgfx and read back as RGBA
 ```
 
 - A Panel reads no wall clock: time comes from `tick(dt)`. Every ease snaps onto its target, so with a fixed dt a
@@ -117,6 +118,13 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
   and 16 parameters as uniforms. Pictures (`Canvas::image`, v0.20.0) draw with FunkGui's own image program; their
   textures are shared by every editor in the process, uploaded at a picture's first draw and destroyed after
   `images::remove()` or a replacement, and when bgfx shuts down.
+  `GpuPicture.h` (v0.23.0) draws a recorded frame offscreen with `BgfxSink` and reads it back as an RGBA `Image`
+  (`renderGpuPicture`), so a picture of a Panel for a person or a model shows its custom shaders and pictures as the
+  screen does, where `SoftRaster` draws a shader as its placeholder: on the editors' bgfx while any is open, else on a
+  headless Metal context started at the first call and held until `releaseGpuPictureContext()` or JUCE's shutdown.
+  bgfx's thread is the message thread: there the call is inline (also inside a frame), from any other thread it is
+  posted and waited for with a timeout. Linux (no Vulkan read-back), a failed start and builds without the GPU layer
+  say so, and the product falls back to `SoftRaster`.
 - **web** (`FunkGui::web`; Emscripten only, no JUCE): `WebHost`, `EditorHost`'s counterpart on a `<canvas>`. It runs the
   frame clock on `requestAnimationFrame` (about 60 Hz while anything moves, 12 Hz idle, nothing while the document is
   hidden), sizes the canvas for the UI zoom and the device pixel ratio, converts the browser's pointer, wheel and key

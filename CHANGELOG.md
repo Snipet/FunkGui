@@ -3,6 +3,41 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.23.0 — 2026-10-28 · MINOR: GPU pictures (untagged: release prep)
+
+Golden impact: **none** (nothing records, draws, dumps or hashes differently; a new API in `FunkGui::gpu` only, and no
+golden rows). New tests: `fg.gpu.picture` (GPU, in `verify`: 61 spec rows on headless Metal; skipped without a Metal
+device) and `fg.gpu.picture.live` (label `live`: 25 rows with a real editor window). FCompressor f9d3598 green against
+it (agent and agent-gui, 529/529 each; web not run, its Emscripten pin is being moved). Linux not run (no GPU picture
+there: the stated fallback).
+
+For a product that shows a picture of its UI to a person or a model (TestingPlayground's `view_panel` tool, a headless
+GUI process): the frame as the screen draws it, custom shaders and pictures included, where `SoftRaster` draws each
+shader draw as its striped placeholder.
+
+- **`gpu/GpuPicture.h`**: `renderGpuPicture(list, options)` submits a `PrimList` (`Canvas::end()`,
+  `HeadlessHost::draw()`) with `BgfxSink::submit` itself into an offscreen BGRA8 target, blits it to a read-back
+  texture and returns a `GpuPicture`: `status`, `image` (an RGBA8 `Image`, opaque, at `SoftRaster`'s size
+  round(logical × dpi)), `startedContext`, `drawCalls`. Away from shader draws it matches `rasterise(list, font, 1)`
+  within `fg.image.draw`'s bounds (measured on an Apple M5, text included, at dpi 2 and 1.25: largest difference 1,
+  no pixel over 2).
+- **Threads.** bgfx's thread is JUCE's message thread. Called there, the picture is drawn inline and never waits, also
+  inside a `FramePump` frame (a Panel's tick or draw: the editors that already submitted are presented by the
+  picture's `bgfx::frame()`, the rest by the pump's). From any other thread it is posted (`MessageManager::callAsync`)
+  and waited for at most `GpuPictureOptions::timeoutMs` (2000 by default): `timedOut` when the message thread did not
+  run it in time, at once from a thread holding the `MessageManagerLock`; a job that timed out is dropped when the
+  message thread reaches it (`gpuPictureCounters().abandoned`). `noMessageThread` without a `MessageManager`.
+- **The context.** With editors open, their `BgfxContext`, on bgfx's last two views (`maxViews - 2` and `- 1`). With
+  no window in the process, the first call starts bgfx headless (`BgfxContext::acquire(nullptr, 0, 0)`;
+  `startedContext`) and holds it for later calls, and an editor that opens meanwhile joins it;
+  `releaseGpuPictureContext()` lets it go (bgfx is rebuilt on an open editor's window, or shuts down), and so does
+  JUCE's shutdown (the hold is a `juce::DeletedAtShutdown`). `gpuPictureContextHeld()`. The hold takes one of
+  `BgfxContext`'s window slots while it lasts.
+- **Where there is none**, the product draws with `SoftRaster` (the header's example): `unsupported` on Linux (Vulkan
+  read-back is not implemented; `gpuPicturesSupported()` is false), `initFailed` without a Metal device, and no header
+  at all without `FunkGui::gpu` (test `FUNKGUI_HAS_BGFX`). Also `badSize` (under 1 px, over 16384 or the GPU's texture
+  limit), `overflow` (bgfx's transient vertex buffer full that frame) and `failed`; `toString(status)` names them.
+
 ## v0.22.0 — 2026-10-28 · MINOR: code-editor hooks on TextEditor
 
 Golden impact: **none** on existing rows (every new look is off by default; an editor that does not ask draws, hashes
