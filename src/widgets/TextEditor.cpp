@@ -1109,7 +1109,7 @@ namespace funkgui
         {                                                // before it
             const TextPos c = caret_;
             autoClosers_.erase(std::remove_if(autoClosers_.begin(), autoClosers_.end(),
-                                              [c](TextPos p) noexcept { return p.line != c.line || p.col < c.col; }),
+                                              [c](TextPos q) noexcept { return q.line != c.line || q.col < c.col; }),
                                autoClosers_.end());
         }
         scrollToCaret();
