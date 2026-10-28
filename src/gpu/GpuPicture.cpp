@@ -23,6 +23,9 @@
 // thread: inline when called there, else posted to it and waited for with a timeout. Choices the header leaves open:
 // - The render target and the read-back texture are made and destroyed per picture (a picture is a tool's request, not
 //   a frame of an animation); their destruction runs at bgfx's next frame, as every bgfx destroy does.
+// - Both views draw into the picture's target, the blit view too: a view touched while it names the default backbuffer
+//   opens a render pass on the primary editor's swapchain, which takes that window's next drawable (loaded, not
+//   cleared) and presents it at the frame's end, a stale frame on screen until the editor's next one.
 // - The picture's views are set back (no framebuffer, no clear) only after its frames ran: a view pointed back at the
 //   default backbuffer before then would clear the primary editor's drawable with the picture's clear colour.
 // - BgfxContext::afterFrame() follows each of the picture's bgfx::frame() calls, as it follows the pump's: a view an
@@ -166,6 +169,7 @@ namespace funkgui
             // overflow still touched the view (its clear), so the frames run whatever submit() said.
             BgfxSink sink;
             const BgfxSink::Result submitted = sink.submit(list, drawView, fb, w, h);
+            bgfx::setViewFrameBuffer(blitView, fb);  // never the default backbuffer: the primary editor's drawable
             bgfx::touch(blitView);
             bgfx::blit(blitView, readback, 0, 0, colour);
             std::vector<uint8_t> bgra(static_cast<size_t>(w) * static_cast<size_t>(h) * 4u);
@@ -178,6 +182,7 @@ namespace funkgui
             }
 
             bgfx::setViewFrameBuffer(drawView, BGFX_INVALID_HANDLE);
+            bgfx::setViewFrameBuffer(blitView, BGFX_INVALID_HANDLE);
             bgfx::setViewClear(drawView, BGFX_CLEAR_NONE);
             destroyTargets();
 
