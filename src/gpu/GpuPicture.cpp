@@ -28,6 +28,9 @@
 //   cleared) and presents it at the frame's end, a stale frame on screen until the editor's next one.
 // - The picture's views are set back (no framebuffer, no clear) only after its frames ran: a view pointed back at the
 //   default backbuffer before then would clear the primary editor's drawable with the picture's clear colour.
+// - The headless hold stays registered while editors open and close (BgfxContext starts bgfx again on a window acquired
+//   while it runs headless, and goes back to headless when the last window closes): the picture follows whatever bgfx
+//   runs on.
 // - BgfxContext::afterFrame() follows each of the picture's bgfx::frame() calls, as it follows the pump's: a view an
 //   editor released is let go two frames after its release, whoever ran them.
 // - The headless hold is BgfxContext's registration of the null window (BgfxContext::acquire(nullptr, 0, 0)), the one

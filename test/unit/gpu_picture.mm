@@ -22,6 +22,12 @@
 //               message thread) first submits a frame of its own, as an editor earlier in the pump's list, then asks
 //               for the picture inside the same tick: the picture is drawn inline (the same bytes), and the client's
 //               own frame, presented by the picture's bgfx::frame(), reads back as drawn.
+// - window.*    a window registered while the picture holds bgfx headless, as an editor opening then: a CAMetalLayer of
+//               the test's that counts the drawables bgfx takes from it (bgfx takes a new one only after presenting the
+//               last). bgfx restarts on it (it owns the default swapchain) and the hold stays; it presents every frame
+//               it draws; a picture between its frames draws the same bytes and takes none of its drawables. A second
+//               window joins with a framebuffer of its own and both present; the first closes and the second becomes
+//               the primary, presenting, the hold kept; the last closes and bgfx is headless again, held.
 // - shared.*    bgfx started by someone else (BgfxContext acquired headless by the test, as an editor holds it): the
 //               picture draws on it, starts and holds nothing, the same bytes.
 // - release.*   releaseGpuPictureContext(): bgfx shuts down, the shader and the picture stay registered; the next call
@@ -30,6 +36,7 @@
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#import <QuartzCore/CAMetalLayer.h>
 
 #include <funkgui/canvas/Canvas.h>
 #include <funkgui/canvas/Images.h>
@@ -57,9 +64,25 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <initializer_list>
 #include <string>
 #include <thread>
 #include <vector>
+
+// window.*: a layer bgfx draws a window's frames into (bgfx takes a CAMetalLayer as the window itself), counting the
+// drawables it takes. bgfx holds the one it took until its flip() presents it, so a window that is never presented
+// takes one drawable and no more, however many frames it draws.
+@interface FgPictureCountingLayer : CAMetalLayer
+@property (atomic) int taken;
+@end
+
+@implementation FgPictureCountingLayer
+- (id<CAMetalDrawable>)nextDrawable
+{
+    self.taken = self.taken + 1;
+    return [super nextDrawable];
+}
+@end
 
 namespace T = funkgui::test;
 using funkgui::Col;
@@ -329,6 +352,41 @@ namespace
         double ms = 0.0;
         bool locked = false;
     };
+
+    // window.*: a window's frame (32 x 24 at dpi 2), its device size, and `n` frames drawn on each of `windows` as an
+    // editor draws them (BgfxSink::submit on the window's view and framebuffer, then bgfx::frame() and afterFrame()).
+    constexpr int kWinPw = 64, kWinPh = 48;
+
+    PrimList windowFrame()
+    {
+        FrameInfo f = frame(kDpi);
+        f.logicalW = kWinPw / 2;
+        f.logicalH = kWinPh / 2;
+        funkgui::Canvas canvas(funkgui::FontService::get().atlas());
+        canvas.begin(f);
+        canvas.rrect(2.0f, 2.0f, 28.0f, 20.0f, 3.0f, kPanel, 1.0f, kBorder);
+        return canvas.end();
+    }
+
+    void windowFrames(funkgui::BgfxContext& ctx, const PrimList& f, std::initializer_list<void*> windows, int n)
+    {
+        for (int i = 0; i < n; ++i)
+        {
+            for (void* w : windows)
+            {
+                funkgui::BgfxSink sink;
+                static_cast<void>(sink.submit(f, ctx.viewIdFor(w), ctx.framebufferFor(w), kWinPw, kWinPh));
+            }
+            bgfx::frame();
+            ctx.afterFrame();
+        }
+    }
+
+    // Registered and backing bgfx's default swapchain: no framebuffer of its own, view 0.
+    bool isPrimary(funkgui::BgfxContext& ctx, void* w)
+    {
+        return ctx.owns(w) && !bgfx::isValid(ctx.framebufferFor(w)) && ctx.viewIdFor(w) == 0;
+    }
 }
 
 int main(int argc, char** argv)
@@ -557,6 +615,59 @@ int main(int argc, char** argv)
             P.eq("tick.own_frame_target", client.targetMade, 1);
             P.eq("tick.own_frame_drawn", client.own.is(10, 10, kOver) && client.own.is(kPw - 10, kPh - 10, kOver), 1);
             client.own.drop();
+        }
+
+        // ---- window: windows registered while the picture holds bgfx headless (editors opening) --------------------
+        {
+            FgPictureCountingLayer* a = [[FgPictureCountingLayer alloc] init];
+            FgPictureCountingLayer* b = [[FgPictureCountingLayer alloc] init];
+            void* wa = (void*) a;
+            void* wb = (void*) b;
+            const PrimList f = windowFrame();
+            P.eq("window.held_before", funkgui::gpuPictureContextHeld() && ctx.owns(nullptr) && ctx.valid(), 1);
+            if (P.eq("window.acquired", ctx.acquire(wa, kWinPw, kWinPh), 1))
+            {
+                P.eq("window.primary", isPrimary(ctx, wa), 1);
+                P.eq("window.hold_kept", funkgui::gpuPictureContextHeld() && ctx.owns(nullptr) && ctx.valid(), 1);
+                const int a0 = a.taken;
+                windowFrames(ctx, f, { wa }, 4);
+                std::printf("INFO     window: %d drawables taken over 4 frames\n", a.taken - a0);
+                P.eq("window.presents_every_frame", a.taken - a0, 4);
+
+                const int a1 = a.taken;
+                const GpuPicture pic = funkgui::renderGpuPicture(list);
+                std::printf("INFO     picture between the window's frames: %s, %d of its drawables taken\n",
+                            funkgui::toString(pic.status), a.taken - a1);
+                P.eq("window.picture_ok", pic.ok() && !pic.startedContext, 1);
+                P.eq("window.picture_same_bytes", pic.image.rgba == first.image.rgba, 1);
+                P.eq("window.picture_takes_no_drawable", a.taken - a1, 0);
+
+                if (P.eq("window.second_acquired", ctx.acquire(wb, kWinPw, kWinPh), 1))
+                {
+                    P.eq("window.second_own_framebuffer",
+                         bgfx::isValid(ctx.framebufferFor(wb)) && ctx.viewIdFor(wb) != 0 && isPrimary(ctx, wa), 1);
+                    const int a2 = a.taken, b2 = b.taken;
+                    windowFrames(ctx, f, { wa, wb }, 3);
+                    P.eq("window.both_present", a.taken - a2 == 3 && b.taken - b2 == 3, 1);
+
+                    ctx.release(wa);                 // the primary closes: bgfx rebuilt on the second
+                    P.eq("window.second_promoted", isPrimary(ctx, wb) && !ctx.owns(wa), 1);
+                    P.eq("window.hold_kept_after_close", funkgui::gpuPictureContextHeld() && ctx.owns(nullptr), 1);
+                    const int b3 = b.taken;
+                    windowFrames(ctx, f, { wb }, 3);
+                    P.eq("window.promoted_presents", b.taken - b3, 3);
+                    ctx.release(wb);
+                }
+                else
+                    ctx.release(wa);
+                P.eq("window.headless_again", ctx.valid() && ctx.owns(nullptr) && funkgui::gpuPictureContextHeld()
+                                                  && !ctx.owns(wa) && !ctx.owns(wb), 1);
+                const GpuPicture after = funkgui::renderGpuPicture(list);
+                P.eq("window.after_ok", after.ok() && !after.startedContext, 1);
+                P.eq("window.after_same_bytes", after.image.rgba == first.image.rgba, 1);
+            }
+            [a release];
+            [b release];
         }
 
         // ---- release: the hold let go, and taken again --------------------------------------------------------------

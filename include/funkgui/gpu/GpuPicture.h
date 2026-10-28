@@ -38,13 +38,18 @@
 // ---- The context ----------------------------------------------------------------------------------------------------
 // - Editors open (BgfxContext::valid()): the picture draws on their bgfx, into its own target and on two views of its
 //   own (bgfx's last two, caps->limits.maxViews - 2 and - 1; an editor's are 0..BgfxContext::kMaxWindows), between
-//   their frames or inside one. Nothing of theirs changes.
+//   their frames or inside one. Nothing of theirs changes: both views draw into the picture's target, never an editor's
+//   drawable.
 // - No window in the process: the first renderGpuPicture() starts bgfx headless (BgfxContext::acquire(nullptr, 0, 0):
-//   Metal with no swapchain and no window; GpuPicture::startedContext) and holds it, so later pictures are fast, and
-//   an editor that opens meanwhile joins it. releaseGpuPictureContext() lets it go (bgfx shuts down unless an editor
-//   holds it; custom programs and picture textures are built again at their next draw, as after any restart),
-//   and so does JUCE's shutdown (the hold is a juce::DeletedAtShutdown, deleted by the last ScopedJuceInitialiser_GUI,
-//   HeadlessGuiScope's included). The hold takes one of BgfxContext's window slots while it lasts.
+//   Metal with no swapchain and no window; GpuPicture::startedContext) and holds it, so later pictures are fast. An
+//   editor that opens meanwhile takes bgfx over: BgfxContext starts it again on the editor's window (a window never
+//   draws behind a headless bgfx, which has no swapchain to present it with: gpu/BgfxContext.h), the hold stays
+//   registered behind it, and bgfx goes back to headless when the last editor closes while the hold lasts. Each such
+//   restart builds custom programs and picture textures again at their next draw, as after any restart.
+//   releaseGpuPictureContext() lets the hold go (bgfx shuts down unless an editor holds it; with an editor open nothing
+//   restarts), and so does JUCE's shutdown (the hold is a juce::DeletedAtShutdown, deleted by the last
+//   ScopedJuceInitialiser_GUI, HeadlessGuiScope's included). The hold takes one of BgfxContext's window slots while it
+//   lasts.
 //
 // ---- Where there is no GPU picture: SoftRaster (the stated fallback) -----------------------------------------------
 // - Linux: unsupported (gpuPicturesSupported() is false). FunkGui::gpu draws there on Vulkan, but no read-back is
