@@ -11,8 +11,13 @@
 // highlighted as it is typed); select (a drag over "powf(10.0f, db / 20.0f)" on line 6); selectall (Cmd-A); keys
 // (Down, End, Shift-Alt-Left from line 5: the last word selected by the keys); scroll (two notches of the wheel down
 // over CODE); undo (as typed, then Cmd-Z); prose (a click at the end of NOTES, then " Then mix." wrapping); empty
-// (NOTES cleared: the placeholder). The line above registers the test; the tools glob compiles this file into
-// FunkGuiGalleryProbe, and the gallery app and the web gallery take it by theirs.
+// (NOTES cleared: the placeholder). v0.22.0, the code-editor hooks on CODE: ide (indent guides, the mark column, the
+// minimap and matchBrackets on; an error under "powf", a warning under "db", an info under "g", the occurrences of
+// "x" and a line mark of each severity; a click after the "(" of line 7: the pair boxed); find (indent guides; the
+// two matches of "1.0f", the first the current one, as a find bar sets them, unfocused); braces (autoClosePairs,
+// braceIndent and indent guides; a click on the empty line 3, then "while (x) {", Return and "break;" typed: the
+// closers inserted and stepped over, the block opened). The line above registers the test; the tools glob compiles
+// this file into FunkGuiGalleryProbe, and the gallery app and the web gallery take it by theirs.
 
 #include "GalleryPanel.h"
 
@@ -89,6 +94,44 @@ namespace funkgui::gallery
             }
 
             void clearNotes() { notes_.setText(""); }
+
+            // v0.22.0: CODE as a language service decorates it.
+            void ide()
+            {
+                TextEditorOptions o = code_.options();
+                o.indentGuides = true;
+                o.markColumn = true;
+                o.minimap = true;
+                o.matchBrackets = true;
+                code_.setOptions(o);
+                using DK = DecorationKind;
+                code_.setDecorations({ { { 5, 20 }, { 5, 24 }, DK::error }, { { 3, 26 }, { 3, 28 }, DK::warning },
+                                       { { 8, 15 }, { 8, 16 }, DK::info }, { { 3, 17 }, { 3, 18 }, DK::highlight },
+                                       { { 6, 8 }, { 6, 9 }, DK::highlight },
+                                       { { 8, 11 }, { 8, 12 }, DK::highlight } });
+                code_.setLineMarks({ { 5, LineMark::Kind::error }, { 3, LineMark::Kind::warning },
+                                     { 8, LineMark::Kind::info } });
+            }
+
+            void findLook()
+            {
+                TextEditorOptions o = code_.options();
+                o.indentGuides = true;
+                code_.setOptions(o);
+                code_.setDecorations({ { { 6, 12 }, { 6, 16 }, DecorationKind::findMatch },
+                                       { { 7, 15 }, { 7, 19 }, DecorationKind::findMatch },
+                                       { { 6, 12 }, { 6, 16 }, DecorationKind::findCurrent } },
+                                     kFindDecorations);
+            }
+
+            void bracesLook()
+            {
+                TextEditorOptions o = code_.options();
+                o.indentGuides = true;
+                o.autoClosePairs = true;
+                o.braceIndent = true;
+                code_.setOptions(o);
+            }
 
             bool wantsFullRate() const override { return dirty_; }
             void tick(float dt) override
@@ -260,6 +303,18 @@ namespace funkgui::gallery
                            sec(p).clearNotes();
                            const Point q = sec(p).at(false, { 0, 0 });
                            h.click(q.x, q.y);
+                       } },
+                State{ "ide",
+                       [](HeadlessHost& h, Panel& p) {
+                           sec(p).ide();
+                           clickCode(h, p, { 6, 8 });
+                       } },
+                State{ "find", [](HeadlessHost&, Panel& p) { sec(p).findLook(); } },
+                State{ "braces",
+                       [](HeadlessHost& h, Panel& p) {
+                           sec(p).bracesLook();
+                           clickCode(h, p, { 2, 0 });
+                           h.keys("w,h,i,l,e,space,(,x,),space,{,return,b,r,e,a,k,;");
                        } },
             } } };
     }

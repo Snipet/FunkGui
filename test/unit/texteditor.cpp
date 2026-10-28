@@ -12,7 +12,14 @@
 // scrollbars, a thumb drag); KeywordHighlighter's spans and states, and the editor re-highlighting after an edit that
 // opens or closes a block comment; the palette (inks, weights, underlines); what is drawn (tags, the clip, no missing
 // glyph, theme invariance, the caret only while focused, the placeholder, the blink); the a11y item; read-only; the
-// font presets. No JUCE: the test also runs without it and as wasm32.
+// font presets. v0.22.0, the code-editor hooks: decorations (set by kind, clamped and sorted, moved with the text and
+// dropped with it, cleared by setText; where the underlines, backgrounds and boxes are drawn) and line marks (moved
+// with their lines, the mark column or the tinted number); bracketPair (before and after the caret, nesting, across
+// lines, unmatched, only its own highlight style) and its boxes; autoClosePairs (insert, step over, wrap, pair delete,
+// the quote and word rules, undo) and braceIndent (Return between and after an opener, a closer typed on a blank
+// line); replaceRange, applyEdits and replaceText (one undo step each, the caret mapped or kept, overlap refused,
+// decorations moved); pointOf, posAt, visibleLineRange, wordRangeAt; indent guides, trailing blanks and the minimap
+// (its geometry, a press and a drag). No JUCE: the test also runs without it and as wasm32.
 
 #include <funkgui/a11y/A11yItem.h>
 #include <funkgui/canvas/Canvas.h>
@@ -31,8 +38,10 @@
 
 #include <cmath>
 #include <cstdint>
+#include <algorithm>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -42,11 +51,14 @@ using funkgui::A11yAction;
 using funkgui::A11yItem;
 using funkgui::Canvas;
 using funkgui::Col;
+using funkgui::Decoration;
+using DK = funkgui::DecorationKind;
 using funkgui::EditorFont;
 using funkgui::HeadlessHost;
 using funkgui::HostServices;
 using funkgui::Key;
 using funkgui::KeyEvent;
+using funkgui::LineMark;
 using funkgui::Mods;
 using funkgui::Point;
 using funkgui::PointerEvent;
@@ -1029,6 +1041,527 @@ namespace
         P.eq("draw.blink_long_tick", countTag(g.host.draw(), tags::editCaret), 1);
     }
 
+    // ---- v0.22.0: the code-editor hooks -----------------------------------------------------------------------------
+
+    int kindOf(const Prim& p) noexcept { return static_cast<int>(p.d2[2] + 0.5f); }   // 0 rrect, 1 text, 2 segment
+
+    // An rrect's own box, the AA apron (1.5 px, no softness) taken off.
+    Rect boxOf(const Prim& p) noexcept { return { p.x0 + 1.5f, p.y0 + 1.5f, p.x1 - p.x0 - 3.0f, p.y1 - p.y0 - 3.0f }; }
+
+    std::vector<Prim> withTag(const PrimList& l, funkgui::Tag t)
+    {
+        std::vector<Prim> out;
+        for (const Prim& p : l.prims)
+            if (p.tag == t)
+                out.push_back(p);
+        return out;
+    }
+
+    std::string decs(const TextEditor& e)
+    {
+        std::string s;
+        for (const Decoration& d : e.decorations())
+        {
+            if (!s.empty())
+                s += ' ';
+            s += std::to_string(static_cast<int>(d.kind)) + "@" + pos(d.from) + "-" + pos(d.to);
+        }
+        return s;
+    }
+
+    std::string marks(const TextEditor& e)
+    {
+        std::string s;
+        for (const LineMark& m : e.lineMarks())
+        {
+            if (!s.empty())
+                s += ' ';
+            s += std::to_string(m.line) + ":" + std::to_string(static_cast<int>(m.kind));
+        }
+        return s;
+    }
+
+    // Types a string as keys arrive: a character each, a space as Key::space.
+    void typeKeys(Fixture& f, std::string_view s)
+    {
+        for (const char ch : s)
+            f.panel.key(ch == ' ' ? KeyEvent{ Key::space, {}, U' ' }
+                                  : KeyEvent{ Key::character, {}, static_cast<char32_t>(ch) });
+    }
+
+    void setOption(TextEditor& e, bool TextEditorOptions::*field, bool on = true)
+    {
+        TextEditorOptions o = e.options();
+        o.*field = on;
+        e.setOptions(o);
+    }
+
+    void decorations(T::Probe& P)
+    {
+        Fixture f;
+        TextEditor& e = f.ed();
+        e.setText("alpha beta gamma\ndelta\nzeta");
+        e.setDecorations({ { { 0, 6 }, { 0, 10 }, DK::error }, { { 1, 99 }, { 1, 0 }, DK::warning },
+                           { { 0, 0 }, { 0, 5 }, DK::highlight } });
+        P.eq("deco.set_sorted_clamped", is(decs(e), "3@0:0-0:5 0@0:6-0:10 1@1:0-1:5"), 1);
+        e.setDecorations({ { { 2, 0 }, { 2, 4 }, DK::info }, { { 0, 0 }, { 0, 1 }, DK::findMatch } },
+                         funkgui::kDiagnosticDecorations);
+        P.eq("deco.mask_replaces_its_kinds", is(decs(e), "3@0:0-0:5 2@2:0-2:4"), 1);
+        e.setDecorations({}, funkgui::decorationBit(DK::highlight));
+        P.eq("deco.mask_clears", is(decs(e), "2@2:0-2:4"), 1);
+
+        // They move with the text: typed inside widens, at either end does not; removed whole they go.
+        e.setDecorations({ { { 0, 6 }, { 0, 10 }, DK::error } });
+        e.setCaret({ 0, 8 });
+        e.insert("X");
+        P.eq("deco.typed_inside_widens", is(decs(e), "0@0:6-0:11"), 1);
+        e.setCaret({ 0, 6 });
+        e.insert("Y");
+        P.eq("deco.typed_at_start_moves", is(decs(e), "0@0:7-0:12"), 1);
+        e.setCaret({ 0, 12 });
+        e.insert("Z");
+        P.eq("deco.typed_at_end_stays", is(decs(e), "0@0:7-0:12"), 1);
+        e.setCaret({ 0, 0 });
+        e.insert("top\n");
+        P.eq("deco.line_above_moves", is(decs(e), "0@1:7-1:12"), 1);
+        e.undo();
+        e.undo();
+        e.undo();
+        e.undo();
+        P.eq("deco.undo_moves_back", is(decs(e), "0@0:6-0:10") && is(e.line(0), "alpha beta gamma"), 1);
+        e.select({ 0, 5 }, { 0, 11 });
+        e.deleteSelection();
+        P.eq("deco.removed_text_drops", e.decorations().empty(), 1);
+        e.setDecorations({ { { 1, 5 }, { 1, 5 }, DK::error } });
+        e.setCaret({ 1, 0 });
+        e.insert("ab");
+        P.eq("deco.empty_moves_as_point", is(decs(e), "0@1:7-1:7"), 1);
+        e.setText("x");
+        P.eq("deco.settext_clears", e.decorations().empty(), 1);
+
+        // Line marks: kept by line, a line outside the text dropped; they move with their line's start.
+        e.setText("a\nb\nc");
+        e.setLineMarks({ { 1, LineMark::Kind::warning }, { 9, LineMark::Kind::error }, { 1, LineMark::Kind::error },
+                         { 0, LineMark::Kind::info } });
+        P.eq("mark.set", is(marks(e), "0:0 1:1 1:2"), 1);
+        e.setCaret({ 0, 0 });
+        e.insert("z\n");
+        P.eq("mark.moves_with_line", is(marks(e), "1:0 2:1 2:2"), 1);
+        const Col errInk = e.options().inks.error.resolve(Theme::graphite());
+        const Col infoInk = e.options().inks.info.resolve(Theme::graphite());
+        const PrimList& l0 = f.host.draw();
+        P.eq("mark.tints_number_most_severe", countGlyphs(l0, tags::editGutter, errInk), 1);   // "3"
+        P.eq("mark.tints_number_info", countGlyphs(l0, tags::editGutter, infoInk), 1);         // "2"
+        P.eq("mark.default_info_is_signal", pack(infoInk) == pack(Theme::graphite().signal), 1);
+        const float gutterBefore = e.gutterWidth();
+        setOption(e, &TextEditorOptions::markColumn);
+        P.near("mark.column_widens_gutter", e.gutterWidth() - gutterBefore, 12.0, 0.0);
+        const PrimList& l1 = f.host.draw();
+        const std::vector<Prim> m1 = withTag(l1, tags::editMark);
+        P.eq("mark.column_draws_marks", static_cast<int>(m1.size()), 2);
+        P.eq("mark.column_left_of_numbers", m1.size() == 2 && m1[0].x1 <= kBox.x + 1.0f + 12.0f + 1.6f, 1);
+        P.eq("mark.column_numbers_plain", countGlyphs(l1, tags::editGutter, errInk), 0);
+        f.host.click(kBox.x + 6.0f, f.pointOf({ 2, 0 }).y);    // the mark column is the gutter: the line
+        P.eq("mark.column_press_selects_line", is(e.selectedText(), "b\n"), 1);
+        setOption(e, &TextEditorOptions::lineNumbers, false);
+        P.near("mark.column_without_numbers", e.gutterWidth(), 12.0, 0.0);
+
+        // What is drawn: an underline under its range near the row's foot, backgrounds over their ranges, the
+        // current match boxed, one space width for an empty range, nothing for a range out of view.
+        Fixture g;
+        TextEditor& h = g.ed();
+        h.setText("alpha beta gamma\ndelta");
+        h.setDecorations({ { { 0, 6 }, { 0, 10 }, DK::error } });
+        const std::vector<Prim> sq = withTag(g.host.draw(), tags::editMark);
+        const float xa = h.pointOf({ 0, 6 }).x, xb = h.pointOf({ 0, 10 }).x;
+        const float foot = h.pointOf({ 0, 0 }).y + h.rowHeight();
+        bool under = !sq.empty();
+        for (const Prim& p : sq)
+        {
+            const float cx = (p.x0 + p.x1) * 0.5f, cy = (p.y0 + p.y1) * 0.5f;
+            const float sx0 = cx + p.d1[0], sy0 = cy + p.d1[1], sx1 = cx + p.d1[2], sy1 = cy + p.d1[3];
+            under = under && kindOf(p) == 2 && sx0 >= xa - 0.01f && sx1 <= xb + 0.01f
+                 && std::fmin(sy0, sy1) >= foot - 3.01f && std::fmax(sy0, sy1) <= foot - 0.99f;
+        }
+        // One segment per 2 px half period the range touches, counted on the row's own grid.
+        const auto pieces = [&](float a, float b) {
+            const float x0 = h.textArea().x;
+            return static_cast<int>(std::ceil((b - x0) / 2.0f)) - static_cast<int>(std::floor((a - x0) / 2.0f));
+        };
+        P.eq("deco.squiggle_segments", static_cast<int>(sq.size()), pieces(xa, xb));
+        P.eq("deco.squiggle_under_range", under, 1);
+        h.setDecorations({ { { 1, 0 }, { 1, 5 }, DK::highlight }, { { 0, 0 }, { 0, 5 }, DK::findCurrent },
+                           { { 0, 11 }, { 0, 16 }, DK::findMatch }, { { 1, 5 }, { 1, 5 }, DK::warning } });
+        const std::vector<Prim> bg = withTag(g.host.draw(), tags::editMark);
+        int boxes = 0, bordered = 0, segs = 0;
+        bool occurrence = false;
+        for (const Prim& p : bg)
+        {
+            boxes += kindOf(p) == 0 ? 1 : 0;
+            bordered += kindOf(p) == 0 && p.d2[0] > 0.0f ? 1 : 0;
+            segs += kindOf(p) == 2 ? 1 : 0;
+            const Rect r = boxOf(p);
+            occurrence = occurrence
+                      || (kindOf(p) == 0 && std::fabs(r.x - h.pointOf({ 1, 0 }).x) < 0.01f
+                          && std::fabs(r.right() - h.pointOf({ 1, 5 }).x) < 0.01f);
+        }
+        P.eq("deco.backgrounds", boxes, 3);
+        P.eq("deco.current_match_boxed", bordered, 1);
+        P.eq("deco.occurrence_over_range", occurrence, 1);
+        const float space = h.pointOf({ 1, 1 }).x - h.pointOf({ 1, 0 }).x;
+        P.eq("deco.empty_range_space_width", segs, pieces(h.pointOf({ 1, 5 }).x, h.pointOf({ 1, 5 }).x + space));
+        std::string many;
+        for (int i = 0; i < 40; ++i)
+            many += "line " + std::to_string(i) + "\n";
+        h.setText(many);
+        h.setDecorations({ { { 30, 0 }, { 30, 4 }, DK::error } });
+        P.eq("deco.out_of_view_not_drawn", countTag(g.host.draw(), tags::editMark), 0);
+        h.setScroll(0.0f, 28.0f * h.rowHeight());
+        P.eq("deco.scrolled_into_view", countTag(g.host.draw(), tags::editMark) > 0, 1);
+    }
+
+    void brackets(T::Probe& P)
+    {
+        TextEditor e;
+        e.setText("a(b[c]d)e\n{\n  x\n}\n(()");
+        TextPos o, c;
+        const auto pairAt = [&](TextPos at) {
+            return e.bracketPair(at, o, c) ? pos(o) + "-" + pos(c) : std::string("none");
+        };
+        P.eq("bracket.before_caret", is(pairAt({ 0, 2 }), "0:1-0:7"), 1);
+        P.eq("bracket.after_caret", is(pairAt({ 0, 1 }), "0:1-0:7"), 1);
+        P.eq("bracket.nested", is(pairAt({ 0, 4 }), "0:3-0:5"), 1);
+        P.eq("bracket.closer_before", is(pairAt({ 0, 6 }), "0:3-0:5"), 1);
+        P.eq("bracket.closer_outer", is(pairAt({ 0, 8 }), "0:1-0:7"), 1);
+        P.eq("bracket.none", is(pairAt({ 0, 9 }), "none"), 1);
+        P.eq("bracket.across_lines", is(pairAt({ 1, 1 }), "1:0-3:0"), 1);
+        P.eq("bracket.unmatched", is(pairAt({ 4, 0 }), "none"), 1);
+        e.setText("f(\")\")");
+        P.eq("bracket.plain_counts_all", is(pairAt({ 0, 2 }), "0:1-0:3"), 1);
+        e.setHighlighter(std::make_unique<KeywordHighlighter>(KeywordRules::cLike()));
+        P.eq("bracket.styled_skips_string", is(pairAt({ 0, 2 }), "0:1-0:5"), 1);
+
+        // Drawn while focused with matchBrackets: two boxes, at the two brackets.
+        Fixture f;
+        TextEditor& h = f.ed();
+        h.setText("f(a[1])");
+        h.setCaret({ 0, 2 });
+        setOption(h, &TextEditorOptions::matchBrackets);
+        P.eq("bracket.unfocused_not_drawn", countTag(f.host.draw(), tags::editMark), 0);
+        h.setFocused(true);
+        const std::vector<Prim> b = withTag(f.host.draw(), tags::editMark);
+        P.eq("bracket.boxes", static_cast<int>(b.size()), 2);
+        P.eq("bracket.box_at_open", b.size() == 2 && std::fabs(boxOf(b[0]).x - h.pointOf({ 0, 1 }).x) < 0.01f, 1);
+        P.eq("bracket.box_at_close", b.size() == 2 && std::fabs(boxOf(b[1]).x - h.pointOf({ 0, 6 }).x) < 0.01f, 1);
+        h.setCaret({ 0, 0 });
+        P.eq("bracket.moves_with_caret", countTag(f.host.draw(), tags::editMark), 0);
+        setOption(h, &TextEditorOptions::matchBrackets, false);
+        h.setCaret({ 0, 2 });
+        P.eq("bracket.option_off", countTag(f.host.draw(), tags::editMark), 0);
+    }
+
+    void closingPairs(T::Probe& P)
+    {
+        Fixture f;
+        TextEditor& e = f.ed();
+        e.setFocused(true);
+        typeKeys(f, "f(");
+        P.eq("close.off_by_default", is(e.text(), "f("), 1);
+        setOption(e, &TextEditorOptions::autoClosePairs);
+        e.setText("");
+        typeKeys(f, "f(");
+        P.eq("close.paren", is(e.text(), "f()") && is(pos(e.caret()), "0:2"), 1);
+        typeKeys(f, "x");
+        P.eq("close.typed_inside", is(e.text(), "f(x)"), 1);
+        typeKeys(f, ")");
+        P.eq("close.steps_over", is(e.text(), "f(x)") && is(pos(e.caret()), "0:4"), 1);
+        typeKeys(f, ")");
+        P.eq("close.only_its_own", is(e.text(), "f(x))"), 1);
+        e.setText("abc");
+        typeKeys(f, "(");
+        P.eq("close.not_before_word", is(e.text(), "(abc"), 1);
+        e.setText("a;");
+        e.setCaret({ 0, 1 });
+        typeKeys(f, "[");
+        P.eq("close.before_punctuation", is(e.text(), "a[];"), 1);
+        e.setText("");
+        typeKeys(f, "\"");
+        P.eq("close.quote", is(e.text(), "\"\"") && is(pos(e.caret()), "0:1"), 1);
+        typeKeys(f, "\"");
+        P.eq("close.quote_steps_over", is(e.text(), "\"\"") && is(pos(e.caret()), "0:2"), 1);
+        e.setText("don");
+        e.setCaret(e.endPos());
+        typeKeys(f, "'");
+        P.eq("close.quote_not_after_word", is(e.text(), "don'"), 1);
+        e.setText("abc");
+        e.select({ 0, 0 }, { 0, 3 });
+        typeKeys(f, "[");
+        P.eq("close.wraps_selection", is(e.text(), "[abc]") && is(e.selectedText(), "abc"), 1);
+        e.setText("");
+        typeKeys(f, "{");
+        f.host.keys("backspace");
+        P.eq("close.backspace_pair", is(e.text(), ""), 1);
+        e.setText("()");
+        e.setCaret({ 0, 1 });
+        f.host.keys("backspace");
+        P.eq("close.backspace_any_pair", is(e.text(), ""), 1);
+        e.setText("()");
+        e.setCaret({ 0, 1 });
+        typeKeys(f, ")");
+        P.eq("close.not_inserted_not_stepped", is(e.text(), "())"), 1);
+        e.setText("\n");
+        typeKeys(f, "(");
+        f.host.keys("down,up");
+        e.setCaret({ 0, 1 });
+        typeKeys(f, ")");
+        P.eq("close.forgotten_off_line", is(e.text(), "())\n"), 1);
+        e.setText("");
+        typeKeys(f, "(x");
+        f.host.keys("cmd+z");
+        P.eq("close.undo_typed", is(e.text(), "()"), 1);
+        f.host.keys("cmd+z");
+        P.eq("close.undo_pair", is(e.text(), ""), 1);
+    }
+
+    void braces(T::Probe& P)
+    {
+        Fixture f;
+        TextEditor& e = f.ed();
+        e.setFocused(true);
+        setOption(e, &TextEditorOptions::braceIndent);
+        e.setText("f() {}");
+        e.setCaret({ 0, 5 });
+        f.host.keys("return");
+        P.eq("brace.between", is(e.text(), "f() {\n\t\n}") && is(pos(e.caret()), "1:1"), 1);
+        f.host.keys("cmd+z");
+        P.eq("brace.one_step", is(e.text(), "f() {}") && is(pos(e.caret()), "0:5"), 1);
+        TextEditorOptions o = e.options();
+        o.softTabs = true;
+        e.setOptions(o);
+        e.setText("    if (x) {}");
+        e.setCaret({ 0, 12 });
+        f.host.keys("return");
+        P.eq("brace.indented_soft", is(e.text(), "    if (x) {\n        \n    }") && is(pos(e.caret()), "1:8"), 1);
+        o.softTabs = false;
+        e.setOptions(o);
+        e.setText("{   ");
+        e.setCaret(e.endPos());
+        f.host.keys("return");
+        P.eq("brace.after_opener", is(e.text(), "{\n\t") && is(pos(e.caret()), "1:1"), 1);
+        e.setText("x");
+        e.setCaret(e.endPos());
+        f.host.keys("return");
+        P.eq("brace.plain_return", is(e.text(), "x\n"), 1);
+        e.setText("\tf() {\n\t\t");
+        e.setCaret({ 1, 2 });
+        typeKeys(f, "}");
+        P.eq("brace.closer_takes_opener_indent", is(e.line(1), "\t}") && is(pos(e.caret()), "1:2"), 1);
+        e.setText("\t\t");
+        e.setCaret(e.endPos());
+        typeKeys(f, "]");
+        P.eq("brace.closer_outdents", is(e.text(), "\t]"), 1);
+        e.setText("        ");
+        e.setCaret(e.endPos());
+        typeKeys(f, ")");
+        P.eq("brace.closer_outdents_spaces", is(e.text(), "    )"), 1);
+        e.setText("\tx");
+        e.setCaret(e.endPos());
+        typeKeys(f, "}");
+        P.eq("brace.closer_after_text", is(e.text(), "\tx}"), 1);
+        setOption(e, &TextEditorOptions::autoClosePairs);
+        e.setText("");
+        typeKeys(f, "{");
+        f.host.keys("return");
+        P.eq("brace.with_autoclose", is(e.text(), "{\n\t\n}") && is(pos(e.caret()), "1:1"), 1);
+        typeKeys(f, "x;");
+        f.host.keys("down");
+        P.eq("brace.closer_below", is(pos(e.caret()), "2:1"), 1);
+    }
+
+    void serviceEdits(T::Probe& P)
+    {
+        TextEditor e;
+        e.setText("pri x");
+        e.setCaret({ 0, 3 });
+        P.eq("svc.replace", e.replaceRange({ 0, 0 }, { 0, 3 }, "print") && is(e.text(), "print x"), 1);
+        P.eq("svc.replace_caret_after", is(pos(e.caret()), "0:5"), 1);
+        P.eq("svc.replace_undo", e.undo() && is(e.text(), "pri x") && is(pos(e.caret()), "0:3"), 1);
+        P.eq("svc.replace_redo", e.redo() && is(e.text(), "print x") && is(pos(e.caret()), "0:5"), 1);
+        P.eq("svc.replace_noop", e.replaceRange({ 0, 0 }, { 0, 5 }, "print"), 0);
+        e.select({ 0, 6 }, { 0, 7 });
+        e.replaceRange({ 0, 0 }, { 0, 0 }, "\xC3\xA9");
+        P.eq("svc.replace_sanitised", is(e.text(), "?print x"), 1);
+        P.eq("svc.replace_undo_selection",
+             e.undo() && is(pos(e.anchor()), "0:6") && is(pos(e.caret()), "0:7"), 1);
+
+        e.setText("a=1\nb=2\nc=3");
+        e.setCaret({ 2, 3 });
+        const bool applied = e.applyEdits({ { { 1, 1 }, { 1, 2 }, " = " }, { { 0, 1 }, { 0, 2 }, " = " },
+                                            { { 2, 1 }, { 2, 2 }, " = " } });
+        P.eq("svc.edits", applied && is(e.text(), "a = 1\nb = 2\nc = 3"), 1);
+        P.eq("svc.edits_caret_mapped", is(pos(e.caret()), "2:5"), 1);
+        P.eq("svc.edits_one_step", e.undo() && is(e.text(), "a=1\nb=2\nc=3") && is(pos(e.caret()), "2:3")
+                                       && !e.canUndo(), 1);
+        P.eq("svc.edits_redo", e.redo() && is(e.text(), "a = 1\nb = 2\nc = 3") && is(pos(e.caret()), "2:5"), 1);
+        P.eq("svc.edits_overlap_refused",
+             !e.applyEdits({ { { 0, 0 }, { 0, 2 }, "x" }, { { 0, 1 }, { 0, 3 }, "y" } })
+                 && is(e.text(), "a = 1\nb = 2\nc = 3"), 1);
+        P.eq("svc.edits_noop_refused", e.applyEdits({ { { 0, 0 }, { 0, 1 }, "a" } }), 0);
+        e.setText("x;y");
+        e.applyEdits({ { { 0, 0 }, { 0, 0 }, "A" }, { { 0, 2 }, { 0, 2 }, "\n" }, { { 0, 0 }, { 0, 0 }, "B" } });
+        P.eq("svc.edits_insert_order_lines", is(e.text(), "ABx;\ny") && e.lineCount() == 2, 1);
+        e.setText("foo bar baz");
+        e.setDecorations({ { { 0, 8 }, { 0, 11 }, DK::error } });
+        e.applyEdits({ { { 0, 4 }, { 0, 7 }, "barbar" }, { { 0, 0 }, { 0, 3 }, "f" } });
+        P.eq("svc.edits_move_decorations", is(e.text(), "f barbar baz") && is(decs(e), "0@0:9-0:12"), 1);
+
+        e.setText("one\ntwo\nthree");
+        e.setCaret({ 2, 4 });
+        P.eq("svc.text", e.replaceText("one\n2\nthree") && is(e.text(), "one\n2\nthree"), 1);
+        P.eq("svc.text_caret_kept", is(pos(e.caret()), "2:4"), 1);
+        P.eq("svc.text_undo", e.undo() && is(e.text(), "one\ntwo\nthree") && is(pos(e.caret()), "2:4"), 1);
+        P.eq("svc.text_same_refused", e.replaceText("one\ntwo\nthree"), 0);
+        e.setText("abcdef");
+        e.setCaret({ 0, 6 });
+        e.replaceText("ab");
+        P.eq("svc.text_caret_clamped", is(pos(e.caret()), "0:2"), 1);
+        e.setText("aaa bbb ccc");
+        e.setDecorations({ { { 0, 8 }, { 0, 11 }, DK::warning } });
+        e.replaceText("aaa XX ccc");
+        P.eq("svc.text_keeps_decorations", is(decs(e), "1@0:7-0:10"), 1);
+
+        TextEditorOptions o = e.options();
+        o.readOnly = true;
+        e.setOptions(o);
+        P.eq("svc.read_only", !e.replaceRange({ 0, 0 }, { 0, 1 }, "z") && !e.applyEdits({ { { 0, 0 }, { 0, 0 }, "z" } })
+                                  && !e.replaceText("z") && is(e.text(), "aaa XX ccc"), 1);
+    }
+
+    void overlayGeometry(T::Probe& P)
+    {
+        Fixture f;
+        TextEditor& e = f.ed();
+        e.setText("one two\nthree\n");
+        e.setCaret({ 1, 2 });
+        const Point cp = e.caretPoint(), p12 = e.pointOf({ 1, 2 });
+        P.eq("geo.point_of_caret", p12.x == cp.x && p12.y == cp.y, 1);
+        P.near("geo.point_of_x", e.pointOf({ 0, 3 }).x - e.textArea().x, 3.0 * 21.8182 * 0.25, 0.01);
+        P.near("geo.point_of_y", e.pointOf({ 1, 0 }).y - e.textArea().y, e.rowHeight(), 0.0);
+        const auto at = [&](TextPos p) {
+            const Point q = e.pointOf(p);
+            const std::optional<TextPos> r = e.posAt({ q.x + 1.0f, q.y + e.rowHeight() * 0.5f });
+            return r ? pos(*r) : std::string("none");
+        };
+        P.eq("geo.pos_at_round_trip", is(at({ 0, 4 }), "0:4") && is(at({ 1, 5 }), "1:5"), 1);
+        const float midY = e.pointOf({ 0, 0 }).y + e.rowHeight() * 0.5f;
+        const std::optional<TextPos> lineEnd = e.posAt({ e.textArea().right() - 2.0f, midY });
+        P.eq("geo.pos_at_line_end", lineEnd.has_value() && *lineEnd == TextPos{ 0, 7 }, 1);
+        P.eq("geo.pos_at_gutter", e.posAt({ kBox.x + 4.0f, midY }).has_value(), 0);
+        P.eq("geo.pos_at_padding", e.posAt({ e.textArea().x + 4.0f, e.textArea().y - 2.0f }).has_value(), 0);
+        P.eq("geo.pos_at_below_rows", e.posAt({ e.textArea().x + 4.0f, e.textArea().y + 3.5f * e.rowHeight() })
+                                          .has_value(), 0);
+        P.eq("geo.pos_at_outside", e.posAt({ 2.0f, 2.0f }).has_value(), 0);
+
+        std::string many;
+        for (int i = 0; i < 40; ++i)
+            many += "line " + std::to_string(i) + "\n";
+        e.setText(many);
+        P.eq("geo.visible_lines", e.visibleLineRange().first == 0 && e.visibleLineRange().last == 6, 1);
+        e.setScroll(0.0f, 2.0f * e.rowHeight());
+        P.eq("geo.visible_lines_scrolled", e.visibleLineRange().first == 2 && e.visibleLineRange().last == 8, 1);
+        P.near("geo.point_of_scrolled", e.pointOf({ 2, 0 }).y, e.textArea().y, 0.0);
+
+        e.setText("foo_bar1 baz.qux a + b");
+        const auto word = [&](int col) {
+            const funkgui::TextRange r = e.wordRangeAt({ 0, col });
+            return std::to_string(r.from.col) + "-" + std::to_string(r.to.col);
+        };
+        P.eq("geo.word_inside", is(word(3), "0-8"), 1);
+        P.eq("geo.word_touching_left", is(word(8), "0-8"), 1);
+        P.eq("geo.word_touching_right", is(word(9), "9-12"), 1);
+        P.eq("geo.word_before_dot", is(word(12), "9-12") && is(word(13), "13-16"), 1);
+        P.eq("geo.word_none", is(word(19), "19-19") && e.wordRangeAt({ 0, 19 }).empty(), 1);
+
+        TextEditorOptions o = e.options();
+        o.wordWrap = true;
+        e.setOptions(o);
+        e.setText("word word word word word word word word word word word word word word word word word");
+        int brk = 0;
+        while (brk < 80 && e.rowOf({ 0, brk }) == 0)
+            ++brk;
+        P.eq("geo.wrapped", e.rowCount() > 1 && brk < 80, 1);
+        P.eq("geo.point_of_break_starts_next_row",
+             e.pointOf({ 0, brk }).x == e.textArea().x && e.pointOf({ 0, brk }).y == e.textArea().y + e.rowHeight(), 1);
+    }
+
+    void codeLooks(T::Probe& P)
+    {
+        Fixture f;
+        TextEditor& e = f.ed();
+        e.setText("{\n\tif (x) {\n\t\ty();\n\n\t}\n}");
+        P.eq("guide.off_by_default", countTag(f.host.draw(), tags::editGuide), 0);
+        setOption(e, &TextEditorOptions::indentGuides);
+        const std::vector<Prim> g = withTag(f.host.draw(), tags::editGuide);
+        P.eq("guide.levels", static_cast<int>(g.size()), 0 + 1 + 2 + 2 + 1 + 0);   // the blank line: as its block
+        float maxX = 0.0f;
+        for (const Prim& p : g)
+            maxX = std::max(maxX, boxOf(p).x);
+        P.near("guide.at_tab_stops", maxX, e.textArea().x + 4.0 * 21.8182 * 0.25, 0.51);
+
+        setOption(e, &TextEditorOptions::indentGuides, false);
+        setOption(e, &TextEditorOptions::showTrailingBlanks);
+        e.setText("a  \tb\na  \t\n   ");
+        const std::vector<Prim> t = withTag(f.host.draw(), tags::editGuide);
+        int dots = 0;
+        for (const Prim& p : t)
+            dots += boxOf(p).h > 1.0f ? 1 : 0;                  // a 1.5 px dot, or a device px rule across a tab
+        P.eq("blanks.trailing_only", static_cast<int>(t.size()), 3 + 3);
+        P.eq("blanks.dots_and_rule", dots, 5);
+
+        // The minimap: the text area gives way; a bar per run of non-blank characters; the slider; a press beside
+        // the slider centres it there, a drag moves it.
+        setOption(e, &TextEditorOptions::showTrailingBlanks, false);
+        e.setText("ab cd\n\tx");
+        const float taW = e.textArea().w;
+        P.eq("map.off_by_default", countTag(f.host.draw(), tags::editMap) == 0 && e.minimapArea().isEmpty(), 1);
+        setOption(e, &TextEditorOptions::minimap);
+        const Rect m = e.minimapArea();
+        P.near("map.width", m.w, 64.0, 0.001);
+        P.near("map.text_gives_way", taW - e.textArea().w, 64.0, 0.001);
+        const std::vector<Prim> mp = withTag(f.host.draw(), tags::editMap);
+        P.eq("map.prims", static_cast<int>(mp.size()), 1 + 3 + 1);   // the rule, three bars, the slider
+        P.eq("map.tab_expanded", mp.size() == 5 && std::fabs(boxOf(mp[3]).x - (m.x + 4.0f + 4.0f)) < 0.01f
+                                     && std::fabs(boxOf(mp[3]).y - (m.y + 2.0f + 0.25f)) < 0.01f, 1);
+        P.eq("map.pos_at_none", e.posAt({ m.x + 10.0f, m.y + 2.0f }).has_value(), 0);
+        TextEditorOptions o = e.options();
+        o.minimapWidth = 1.0f;
+        e.setOptions(o);
+        P.near("map.width_at_least_16", e.minimapArea().w, 16.0, 0.001);
+        o.minimapWidth = 1000.0f;
+        e.setOptions(o);
+        P.near("map.width_at_most_half", e.minimapArea().w, (kBox.w - 2.0f) * 0.5f, 0.001);
+        o.minimapWidth = 64.0f;
+        e.setOptions(o);
+
+        std::string many;
+        for (int i = 0; i < 40; ++i)
+            many += "line " + std::to_string(i) + "\n";
+        e.setText(many);
+        const Rect mm = e.minimapArea();
+        const float shown = std::min(mm.h, static_cast<float>(e.rowCount()) * 2.0f);
+        const float sliderH = std::min(shown, e.textArea().h / e.rowHeight() * 2.0f);
+        const float maxScroll = e.contentHeight() - e.textArea().h;
+        const float py = mm.y + 50.0f;
+        f.host.press(mm.x + 20.0f, py);
+        P.near("map.press_centres_slider", e.scroll().y, (py - sliderH * 0.5f - mm.y) / (shown - sliderH) * maxScroll,
+               0.01);
+        P.eq("map.press_keeps_caret", is(pos(e.caret()), "0:0"), 1);
+        f.host.moveTo(mm.x + 20.0f, py + 10.0f, 2);
+        P.near("map.drag", e.scroll().y, (py + 10.0f - sliderH * 0.5f - mm.y) / (shown - sliderH) * maxScroll, 0.01);
+        f.host.release();
+        P.eq("map.clipped", allInside(f.host.draw(), kBox.expanded(2.0f)), 1);
+    }
+
     // ---- accessibility, read-only, fonts ----------------------------------------------------------------------------
 
     void misc(T::Probe& P)
@@ -1105,6 +1638,10 @@ namespace
                                  && tags::editSelect == 23 && tags::editCaret == 24, 1);
         P.eq("tags.names", is(funkgui::tagName(tags::editCaret), "EDIT_CARET")
                                && funkgui::tagFromName("EDIT_TEXT") == tags::editText, 1);
+        P.eq("tags.numbers_v22", tags::editMark == 25 && tags::editGuide == 26 && tags::editMap == 27, 1);
+        P.eq("tags.names_v22", is(funkgui::tagName(tags::editMark), "EDIT_MARK")
+                                   && is(funkgui::tagName(tags::editGuide), "EDIT_GUIDE")
+                                   && funkgui::tagFromName("EDIT_MAP") == tags::editMap, 1);
     }
 }
 
@@ -1130,5 +1667,12 @@ int main(int argc, char** argv)
     highlighting(P);
     drawing(P);
     misc(P);
+    decorations(P);
+    brackets(P);
+    closingPairs(P);
+    braces(P);
+    serviceEdits(P);
+    overlayGeometry(P);
+    codeLooks(P);
     return P.finish();
 }
