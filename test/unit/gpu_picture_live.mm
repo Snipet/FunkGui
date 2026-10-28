@@ -215,19 +215,19 @@ int main(int argc, char** argv)
     auto& ctx = funkgui::BgfxContext::get();
 
     std::string why;
-    P.eq("setup.shader_registered", funkgui::shaders::set(kShaderId, fs_custom_test_mtl, sizeof fs_custom_test_mtl, why),
-         1);
+    P.eq("setup.shader_registered",
+         funkgui::shaders::set(kShaderId, fs_custom_test_mtl, sizeof fs_custom_test_mtl, why), 1);
     registerChecker();
     const PrimList list = record();
 
-    // ---- reference: no window ------------------------------------------------------------------------------------------
+    // ---- reference: no window ---------------------------------------------------------------------------------------
     const GpuPicture reference = funkgui::renderGpuPicture(list);
     if (!P.eq("reference.ok", reference.ok() && reference.startedContext && funkgui::gpuPictureContextHeld(), 1))
         return P.finish();
 
     NoOpProcessor processor;
     {
-        // ---- join: an editor opened while the picture holds bgfx ---------------------------------------------------------
+        // ---- join: an editor opened while the picture holds bgfx ----------------------------------------------------
         Window a(processor, 160, 160);
         spin(0.5);
         P.eq("join.attached", a.editor->surfaceAttached() ? 1 : 0, 1);
@@ -239,14 +239,14 @@ int main(int argc, char** argv)
             P.eq("join.same_bytes", pic.image.rgba == reference.image.rgba, 1);
         }
 
-        // ---- handover: the hold released while the editor is open ----------------------------------------------------------
+        // ---- handover: the hold released while the editor is open ---------------------------------------------------
         P.eq("handover.released", funkgui::releaseGpuPictureContext(), 1);
         P.eq("handover.bgfx_up", ctx.valid() ? 1 : 0, 1);
         spin(0.3);
         P.eq("handover.attached", a.editor->surfaceAttached() ? 1 : 0, 1);
         P.ge("handover.draws", drawsOver(a, 0.5), 5);
 
-        // ---- between: on the message thread, between frames ------------------------------------------------------------
+        // ---- between: on the message thread, between frames ---------------------------------------------------------
         {
             const GpuPicture pic = funkgui::renderGpuPicture(list);
             P.eq("between.ok", pic.ok(), 1);
@@ -254,7 +254,7 @@ int main(int argc, char** argv)
             P.eq("between.same_bytes", pic.image.rgba == reference.image.rgba, 1);
         }
 
-        // ---- indraw: inside the Panel's draw -----------------------------------------------------------------------------
+        // ---- indraw: inside the Panel's draw ------------------------------------------------------------------------
         a.panel->wantPicture = true;
         for (int i = 0; i < 100 && !a.panel->pictureTaken; ++i)
             spin(0.02);
@@ -267,7 +267,7 @@ int main(int argc, char** argv)
         P.eq("indraw.no_overflow", static_cast<int64_t>(a.editor->diagnostics().overflows), 0);
         P.eq("indraw.still_attached", a.editor->surfaceAttached() ? 1 : 0, 1);
 
-        // ---- worker: from another thread while the run loop turns --------------------------------------------------------
+        // ---- worker: from another thread while the run loop turns ---------------------------------------------------
         {
             GpuPicture pic;
             std::atomic<bool> done{ false };

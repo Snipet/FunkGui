@@ -7,8 +7,8 @@
 //
 // ---- What is drawn --------------------------------------------------------------------------------------------------
 // The PrimList (what Canvas::end() returns: an editor's frame, HeadlessHost's frame) is submitted by BgfxSink::submit
-// itself, with BgfxContext's program, font texture, custom programs (gpu/ShaderLibrary.h) and picture textures, the same
-// state and the same draw calls in the same order as an editor's frame, into an offscreen BGRA8 render target (the
+// itself, with BgfxContext's program, font texture, custom programs (gpu/ShaderLibrary.h) and picture textures, the
+// same state and the same draw calls in the same order as an editor's frame, into an offscreen BGRA8 render target (the
 // format of an editor's drawable) cleared to info.clear, which is then copied to a read-back texture and read.
 // - Size and scale are the list's own: round(info.logicalW * dpi) x round(info.logicalH * dpi) device px, SoftRaster's
 //   size (a dpi <= 0.05 or not finite draws at 1, as Canvas::begin). Record the frame at the scale wanted
@@ -40,9 +40,9 @@
 //   own (bgfx's last two, caps->limits.maxViews - 2 and - 1; an editor's are 0..BgfxContext::kMaxWindows), between
 //   their frames or inside one. Nothing of theirs changes.
 // - No window in the process: the first renderGpuPicture() starts bgfx headless (BgfxContext::acquire(nullptr, 0, 0):
-//   Metal with no swapchain, no window, no Dock icon; GpuPicture::startedContext) and holds it, so later pictures are
-//   fast, and an editor that opens meanwhile joins it. releaseGpuPictureContext() lets it go (bgfx shuts down unless an
-//   editor holds it; custom programs and picture textures are built again at their next draw, as after any restart),
+//   Metal with no swapchain and no window; GpuPicture::startedContext) and holds it, so later pictures are fast, and
+//   an editor that opens meanwhile joins it. releaseGpuPictureContext() lets it go (bgfx shuts down unless an editor
+//   holds it; custom programs and picture textures are built again at their next draw, as after any restart),
 //   and so does JUCE's shutdown (the hold is a juce::DeletedAtShutdown, deleted by the last ScopedJuceInitialiser_GUI,
 //   HeadlessGuiScope's included). The hold takes one of BgfxContext's window slots while it lasts.
 //

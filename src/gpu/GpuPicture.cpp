@@ -210,7 +210,7 @@ namespace funkgui
             return out;
         }
 
-        // ---- The message thread ---------------------------------------------------------------------------------------
+        // ---- The message thread -------------------------------------------------------------------------------------
 
         enum class Ran : uint8_t { done, timedOut, noMessageThread };
 

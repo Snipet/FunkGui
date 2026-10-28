@@ -366,7 +366,7 @@ int main(int argc, char** argv)
         P.eq("nowindow.recorded", list.shaders.size() == 1 && list.images.size() == 1 && list.missingImages == 0, 1);
         const Image cpu = funkgui::rasterise(list, funkgui::FontService::get().atlas(), 1);
 
-        // ---- nowindow: the first picture starts bgfx headless and holds it ----------------------------------------------
+        // ---- nowindow: the first picture starts bgfx headless and holds it ------------------------------------------
         const auto counters0 = funkgui::gpuPictureCounters();
         const GpuPicture first = funkgui::renderGpuPicture(list);
         std::printf("INFO     first picture: %s, %d x %d, %u draw calls, started %d\n", funkgui::toString(first.status),
@@ -389,7 +389,8 @@ int main(int argc, char** argv)
         // edge (one device px either side), a blend of the two, not checked.
         {
             const float px1 = 1.0f / kDpi;
-            const FRect overIn{ kOverRect.x + px1, kOverRect.y + px1, kOverRect.w - 2.0f * px1, kOverRect.h - 2.0f * px1 };
+            const FRect overIn{ kOverRect.x + px1, kOverRect.y + px1, kOverRect.w - 2.0f * px1,
+                                kOverRect.h - 2.0f * px1 };
             const FRect overOut{ kOverRect.x - px1, kOverRect.y - px1, kOverRect.w + 2.0f * px1,
                                  kOverRect.h + 2.0f * px1 };
             int shaderPx = 0, wrong = 0, placeholder = 0, covered = 0, coveredWrong = 0, cpuPlaceholder = 0;
@@ -445,7 +446,7 @@ int main(int argc, char** argv)
             P.eq("nowindow.parity_over_2_under_1_percent", p.over2 * 100 <= p.counted, 1);
         }
 
-        // ---- again: the hold is reused ---------------------------------------------------------------------------------
+        // ---- again: the hold is reused ------------------------------------------------------------------------------
         {
             const GpuPicture again = funkgui::renderGpuPicture(list);
             P.eq("again.ok", again.ok(), 1);
@@ -453,7 +454,7 @@ int main(int argc, char** argv)
             P.eq("again.same_bytes", again.image.rgba == first.image.rgba, 1);
         }
 
-        // ---- scale: dpi 1.25 --------------------------------------------------------------------------------------------
+        // ---- scale: dpi 1.25 ----------------------------------------------------------------------------------------
         {
             const PrimList scaled = record(1.25f);
             const Image cpuScaled = funkgui::rasterise(scaled, funkgui::FontService::get().atlas(), 1);
@@ -465,7 +466,7 @@ int main(int argc, char** argv)
             P.eq("scale.parity", p.ok(), 1);
         }
 
-        // ---- size: nothing to draw, or too large -------------------------------------------------------------------------
+        // ---- size: nothing to draw, or too large --------------------------------------------------------------------
         {
             PrimList empty;
             empty.info = frame(kDpi);
@@ -476,7 +477,7 @@ int main(int argc, char** argv)
             P.eq("size.huge_is_bad", funkgui::renderGpuPicture(empty).status == GpuPicture::Status::badSize, 1);
         }
 
-        // ---- thread: posted from another thread ---------------------------------------------------------------------------
+        // ---- thread: posted from another thread ---------------------------------------------------------------------
         {
             ThreadResult r;
             std::atomic<bool> done{ false };
@@ -505,7 +506,8 @@ int main(int argc, char** argv)
                 r.ms = msSince(t0);
             });
             t.join();
-            std::printf("INFO     blocked message thread: %s after %.0f ms\n", funkgui::toString(r.picture.status), r.ms);
+            std::printf("INFO     blocked message thread: %s after %.0f ms\n", funkgui::toString(r.picture.status),
+                        r.ms);
             P.eq("thread.blocked_times_out", r.picture.status == GpuPicture::Status::timedOut, 1);
             P.eq("thread.blocked_waited_the_timeout", r.ms >= 290.0 && r.ms < 5000.0, 1);
             spin(0.3);                                 // the message thread reaches the job: dropped
@@ -539,7 +541,7 @@ int main(int argc, char** argv)
                  r.picture.status == GpuPicture::Status::timedOut && r.ms < 100.0, 1);
         }
 
-        // ---- tick: from the render thread, inside the pump's frame -----------------------------------------------------
+        // ---- tick: from the render thread, inside the pump's frame --------------------------------------------------
         {
             TickClient client;
             client.list = &list;
@@ -557,7 +559,7 @@ int main(int argc, char** argv)
             client.own.drop();
         }
 
-        // ---- release: the hold let go, and taken again -------------------------------------------------------------------
+        // ---- release: the hold let go, and taken again --------------------------------------------------------------
         P.eq("release.released", funkgui::releaseGpuPictureContext(), 1);
         P.eq("release.not_held", funkgui::gpuPictureContextHeld(), 0);
         P.eq("release.bgfx_down", ctx.valid() ? 1 : 0, 0);
@@ -580,7 +582,7 @@ int main(int argc, char** argv)
             P.eq("release.from_another_thread", released && !funkgui::gpuPictureContextHeld() && !ctx.valid(), 1);
         }
 
-        // ---- shared: bgfx held by someone else ---------------------------------------------------------------------------
+        // ---- shared: bgfx held by someone else ----------------------------------------------------------------------
         if (P.eq("shared.acquired", ctx.acquire(nullptr, 0, 0), 1))
         {
             const GpuPicture pic = funkgui::renderGpuPicture(list);
@@ -591,7 +593,7 @@ int main(int argc, char** argv)
             P.eq("shared.down_with_its_owner", ctx.valid() ? 1 : 0, 0);
         }
 
-        // ---- shutdown: a hold left for JUCE's shutdown -----------------------------------------------------------------
+        // ---- shutdown: a hold left for JUCE's shutdown --------------------------------------------------------------
         P.eq("shutdown.held_again", funkgui::renderGpuPicture(list).ok() && funkgui::gpuPictureContextHeld(), 1);
     }                                                // ~ScopedJuceInitialiser_GUI: DeletedAtShutdown::deleteAll()
     P.eq("shutdown.released", funkgui::gpuPictureContextHeld(), 0);
