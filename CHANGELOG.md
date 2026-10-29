@@ -7,8 +7,11 @@ re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are anno
 
 Golden impact: **none** (nothing records, draws, dumps or hashes differently: `BgfxContext` counts its window slots
 differently, and nothing else changed). `fg.gpu.picture` gains `slots.*` (30 spec rows on headless Metal, 108 in all),
-of which v0.23.0 fails 7 of the 24 it reaches. GPU sources only (`src/gpu/`, `include/funkgui/gpu/`): nothing the
-`nojuce` and `web` presets compile changed.
+of which v0.23.0 fails 7 of the 24 it reaches; `fg.gpu.picture.live` unchanged (34 rows, its presenting rows skipped
+as macOS 27 reports the window occluded). GPU sources only (`src/gpu/`, `include/funkgui/gpu/`): nothing the `nojuce`
+and `web` presets compile changed. FCompressor f9d3598 green against it (agent and agent-gui, 529/529 each; web not
+run, it compiles none of this). Linux not run (`BgfxContext.cpp` is Vulkan's there too and changed only in plain C++;
+no GPU picture on Linux).
 
 - **Fix: the hold took one of the editors' slots.** A headless registration of `BgfxContext` (the null window,
   `acquire(nullptr, 0, 0)`: a GPU picture's hold, alone or registered behind an editor) counted against
