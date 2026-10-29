@@ -22,8 +22,8 @@ no GPU picture on Linux).
   v0.23.0: a window acquired while bgfx runs headless restarts it on itself, the headless registrations following it;
   bgfx goes back to headless only when no window remains; views, release order and the retired list are unchanged.
 - **No API change.** `BgfxContext.h` changes only private members (the registrations' array, now `kMaxWindows +
-  kMaxHeadless` long, and a private count) and the inline body of `hasFreeSlot()`; a consumer builds FunkGui from
-  source at the tag, so the class's new size asks nothing of it. `GpuPicture.h`'s note on the slot says so.
+  kMaxHeadless` long, and `windowsRegistered()`) and the inline body of `hasFreeSlot()`; a consumer builds FunkGui
+  from source at the tag, so the class's new size asks nothing of it. `GpuPicture.h`'s note on the slot says so.
 - **Tests:** `slots.*` registers the test's own `CAMetalLayer`s as editors' windows while the picture holds bgfx. At
   `maxWindows` 1 the window gets the slot (the primary, presenting, the hold behind it), a second is refused, and a
   headless registration behind it is granted. At 16 every window is granted while the hold lasts and the 17th is
