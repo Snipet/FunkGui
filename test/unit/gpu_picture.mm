@@ -28,6 +28,15 @@
 //               it draws; a picture between its frames draws the same bytes and takes none of its drawables. A second
 //               window joins with a framebuffer of its own and both present; the first closes and the second becomes
 //               the primary, presenting, the hold kept; the last closes and bgfx is headless again, held.
+// - slots.*     (v0.23.1) the hold takes none of BgfxContext's window slots (the same layers as windows). maxWindows 1:
+//               a free slot while the hold lasts, and a window registered as an editor's gets it (the primary, the hold
+//               behind it, presenting); a second window is refused; a headless registration behind it is granted and
+//               takes no slot; it closes and bgfx is headless again, held. maxWindows 16 (kMaxWindows, the default):
+//               16 windows while the hold lasts, all granted, the 17th refused, each presenting; a picture on them; the
+//               hold released with them open (bgfx stays on them, every slot still taken) and a headless registration
+//               taken while every slot is (granted); they close, the primary first, and the headless one with them: no
+//               registration left. The hold taken again, 16 windows again, all granted, the 17th refused; they close
+//               and bgfx is headless again, held, no window left.
 // - shared.*    bgfx started by someone else (BgfxContext acquired headless by the test, as an editor holds it): the
 //               picture draws on it, starts and holds nothing, the same bytes.
 // - release.*   releaseGpuPictureContext(): bgfx shuts down, the shader and the picture stay registered; the next call
@@ -64,7 +73,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <initializer_list>
 #include <string>
 #include <thread>
 #include <vector>
@@ -368,7 +376,7 @@ namespace
         return canvas.end();
     }
 
-    void windowFrames(funkgui::BgfxContext& ctx, const PrimList& f, std::initializer_list<void*> windows, int n)
+    void windowFrames(funkgui::BgfxContext& ctx, const PrimList& f, const std::vector<void*>& windows, int n)
     {
         for (int i = 0; i < n; ++i)
         {
@@ -668,6 +676,121 @@ int main(int argc, char** argv)
             }
             [a release];
             [b release];
+        }
+
+        // ---- slots: the hold takes no window slot (v0.23.1) ---------------------------------------------------------
+        {
+            using funkgui::BgfxContext;
+            constexpr int kAll = BgfxContext::kMaxWindows;
+            const BgfxContext::Config defaults = ctx.config();
+            const PrimList f = windowFrame();
+            std::vector<FgPictureCountingLayer*> layers;     // kAll windows and a 17th
+            std::vector<void*> all;
+            for (int i = 0; i <= kAll; ++i)
+            {
+                layers.push_back([[FgPictureCountingLayer alloc] init]);
+                if (i < kAll)
+                    all.push_back((void*) layers.back());
+            }
+            void* const extra = (void*) layers.back();
+            const auto ownsNone = [&]
+            {
+                for (FgPictureCountingLayer* l : layers)
+                    if (ctx.owns((void*) l))
+                        return false;
+                return true;
+            };
+            const auto holdKept = [&] { return funkgui::gpuPictureContextHeld() && ctx.owns(nullptr); };
+
+            // maxWindows 1: the editor gets the one slot while the hold lasts.
+            BgfxContext::Config one = defaults;
+            one.maxWindows = 1;
+            P.eq("slots.one_configured", ctx.configure(one) && ctx.config().maxWindows == 1, 1);
+            P.eq("slots.one_held_before", holdKept() && ctx.valid() && ownsNone(), 1);
+            P.eq("slots.one_free_with_hold", ctx.hasFreeSlot(), 1);
+            if (P.eq("slots.one_window_granted", ctx.acquire(all[0], kWinPw, kWinPh), 1))
+            {
+                P.eq("slots.one_window_primary", isPrimary(ctx, all[0]), 1);
+                P.eq("slots.one_hold_kept", holdKept(), 1);
+                const int t0 = layers[0].taken;
+                windowFrames(ctx, f, { all[0] }, 2);
+                P.eq("slots.one_window_presents", layers[0].taken - t0, 2);
+                const bool second = ctx.acquire(all[1], kWinPw, kWinPh);
+                P.eq("slots.one_second_refused", !second && !ctx.hasFreeSlot() && !ctx.owns(all[1]), 1);
+                if (second)
+                    ctx.release(all[1]);
+                // A headless registration behind the editor (the test's, as shared.* makes one): granted, no slot.
+                const bool behind = ctx.acquire(nullptr, 0, 0);
+                P.eq("slots.one_headless_behind_granted", behind && isPrimary(ctx, all[0]) && !ctx.hasFreeSlot(), 1);
+                if (behind)
+                    ctx.release(nullptr);            // one of the two null registrations: alike
+                P.eq("slots.one_hold_still_behind", holdKept() && isPrimary(ctx, all[0]), 1);
+                ctx.release(all[0]);
+            }
+            P.eq("slots.one_headless_again", ctx.valid() && holdKept() && ctx.hasFreeSlot() && ownsNone(), 1);
+
+            // maxWindows 16: every slot is a window's while the hold lasts.
+            P.eq("slots.all_configured", ctx.configure(defaults) && ctx.config().maxWindows == kAll, 1);
+            const auto registerAll = [&](const std::string& key)
+            {
+                int granted = 0;
+                for (void* w : all)
+                    granted += ctx.acquire(w, kWinPw, kWinPh) ? 1 : 0;
+                std::printf("INFO     %s: %d of %d windows granted while the hold lasts\n", key.c_str(), granted, kAll);
+                P.eq(key + "_granted", granted, kAll);
+                P.eq(key + "_primary", isPrimary(ctx, all[0]), 1);
+                P.eq(key + "_hold_kept", holdKept(), 1);
+                const bool next = ctx.acquire(extra, kWinPw, kWinPh);
+                P.eq(key + "_next_refused", !next && !ctx.hasFreeSlot() && !ctx.owns(extra), 1);
+                if (next)
+                    ctx.release(extra);
+            };
+            registerAll("slots.all");
+            {
+                std::vector<int> before;
+                for (FgPictureCountingLayer* l : layers)
+                    before.push_back(l.taken);
+                windowFrames(ctx, f, all, 2);
+                int presenting = 0;
+                for (size_t i = 0; i < all.size(); ++i)
+                    presenting += layers[i].taken - before[i] == 2 ? 1 : 0;
+                P.eq("slots.all_present", presenting, kAll);
+                const GpuPicture pic = funkgui::renderGpuPicture(list);
+                P.eq("slots.all_picture", pic.ok() && !pic.startedContext && pic.image.rgba == first.image.rgba, 1);
+            }
+            // The hold released with every window open (bgfx stays on them), and a headless registration taken while
+            // every slot is.
+            P.eq("slots.all_hold_released", funkgui::releaseGpuPictureContext() && !funkgui::gpuPictureContextHeld()
+                                                && !ctx.owns(nullptr) && ctx.valid() && isPrimary(ctx, all[0]), 1);
+            P.eq("slots.all_still_full", !ctx.hasFreeSlot(), 1);
+            const bool headless = ctx.acquire(nullptr, 0, 0);
+            P.eq("slots.all_headless_granted_when_full", headless && ctx.owns(nullptr) && !ctx.hasFreeSlot(), 1);
+            // They close, the primary first (bgfx rebuilt on the next, the headless registration behind it), then the
+            // rest from the last: bgfx is headless on that registration, and then down with it.
+            ctx.release(all[0]);
+            P.eq("slots.all_primary_closed",
+                 isPrimary(ctx, all[1]) && !ctx.owns(all[0]) && ctx.owns(nullptr) && ctx.hasFreeSlot(), 1);
+            for (size_t i = all.size() - 1; i >= 1; --i)
+                ctx.release(all[i]);
+            P.eq("slots.all_closed_headless", ctx.valid() && ctx.owns(nullptr) && ownsNone() && ctx.hasFreeSlot(), 1);
+            if (headless)
+                ctx.release(nullptr);
+            P.eq("slots.counts_zero", !ctx.valid() && !ctx.owns(nullptr) && ownsNone() && ctx.hasFreeSlot()
+                                          && ctx.retiringViews() == 0 && !funkgui::gpuPictureContextHeld(), 1);
+
+            // The hold taken again, and every window again; they close from the last, the primary last.
+            {
+                const GpuPicture back = funkgui::renderGpuPicture(list);
+                P.eq("slots.hold_retaken", back.ok() && back.startedContext && holdKept(), 1);
+            }
+            registerAll("slots.again");
+            windowFrames(ctx, f, all, 1);
+            for (size_t i = all.size(); i-- > 0;)
+                ctx.release(all[i]);
+            P.eq("slots.again_headless", ctx.valid() && holdKept() && ownsNone() && ctx.hasFreeSlot()
+                                             && ctx.retiringViews() == 0, 1);
+            for (FgPictureCountingLayer* l : layers)
+                [l release];
         }
 
         // ---- release: the hold let go, and taken again --------------------------------------------------------------

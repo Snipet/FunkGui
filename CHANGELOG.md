@@ -3,6 +3,33 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.23.1 — 2026-10-29 · PATCH: the GPU picture's hold takes no editor slot
+
+Golden impact: **none** (nothing records, draws, dumps or hashes differently: `BgfxContext` counts its window slots
+differently, and nothing else changed). `fg.gpu.picture` gains `slots.*` (30 spec rows on headless Metal, 108 in all),
+of which v0.23.0 fails 7 of the 24 it reaches; `fg.gpu.picture.live` unchanged (34 rows, its presenting rows skipped
+as macOS 27 reports the window occluded). GPU sources only (`src/gpu/`, `include/funkgui/gpu/`): nothing the `nojuce`
+and `web` presets compile changed. FCompressor f9d3598 green against it (agent and agent-gui, 529/529 each; web not
+run, it compiles none of this). Linux not run (`BgfxContext.cpp` is Vulkan's there too and changed only in plain C++;
+no GPU picture on Linux).
+
+- **Fix: the hold took one of the editors' slots.** A headless registration of `BgfxContext` (the null window,
+  `acquire(nullptr, 0, 0)`: a GPU picture's hold, alone or registered behind an editor) counted against
+  `Config::maxWindows`, so while the hold lasted a product that set `maxWindows = N` got N − 1 editors, and at N = 1
+  none: `EditorHost` waits while `hasFreeSlot()` is false, for a slot that never freed. `maxWindows` and
+  `hasFreeSlot()` now count windows only, and headless registrations have room of their own beside them (as many as
+  there can be windows, so nothing v0.23.0 registered is refused). Every other rule of the null window is as in
+  v0.23.0: a window acquired while bgfx runs headless restarts it on itself, the headless registrations following it;
+  bgfx goes back to headless only when no window remains; views, release order and the retired list are unchanged.
+- **No API change.** `BgfxContext.h` changes only private members (the registrations' array, now `kMaxWindows +
+  kMaxHeadless` long, and `windowsRegistered()`) and the inline body of `hasFreeSlot()`; a consumer builds FunkGui
+  from source at the tag, so the class's new size asks nothing of it. `GpuPicture.h`'s note on the slot says so.
+- **Tests:** `slots.*` registers the test's own `CAMetalLayer`s as editors' windows while the picture holds bgfx. At
+  `maxWindows` 1 the window gets the slot (the primary, presenting, the hold behind it), a second is refused, and a
+  headless registration behind it is granted. At 16 every window is granted while the hold lasts and the 17th is
+  refused, each presenting, a picture drawing on them; the hold is released and a headless registration taken with
+  every slot full; they close, the primary first; the hold and the 16 are taken again; nothing is left registered.
+
 ## v0.23.0 — 2026-10-28 · MINOR: GPU pictures
 
 Golden impact: **none** (nothing records, draws, dumps or hashes differently; a new API in `FunkGui::gpu` and

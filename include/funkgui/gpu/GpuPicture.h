@@ -48,8 +48,8 @@
 //   restart builds custom programs and picture textures again at their next draw, as after any restart.
 //   releaseGpuPictureContext() lets the hold go (bgfx shuts down unless an editor holds it; with an editor open nothing
 //   restarts), and so does JUCE's shutdown (the hold is a juce::DeletedAtShutdown, deleted by the last
-//   ScopedJuceInitialiser_GUI, HeadlessGuiScope's included). The hold takes one of BgfxContext's window slots while it
-//   lasts.
+//   ScopedJuceInitialiser_GUI, HeadlessGuiScope's included). The hold takes none of BgfxContext's window slots
+//   (BgfxContext::Config::maxWindows counts windows only; v0.23.1: in v0.23.0 it took one while it lasted).
 //
 // ---- Where there is no GPU picture: SoftRaster (the stated fallback) -----------------------------------------------
 // - Linux: unsupported (gpuPicturesSupported() is false). FunkGui::gpu draws there on Vulkan, but no read-back is

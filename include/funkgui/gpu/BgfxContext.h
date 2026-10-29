@@ -19,6 +19,11 @@
 // the primary is released, the first remaining window becomes the primary, bgfx going back to headless only when no
 // window remains. A restart rebuilds the programs and textures, as the primary's rebuild always has.
 //
+// v0.23.1: a headless registration takes no window slot. maxWindows (Config) counts windows only, and hasFreeSlot()
+// with it; the null window's registrations have room of their own beside them (kMaxHeadless). In v0.23.0 each took a
+// slot, alone or behind an editor, so a picture's hold left a product that set maxWindows = N with N - 1 editors (none
+// at N = 1: the editor waited for a slot that never freed).
+//
 // G7: the font texture is FontService's CPU atlas uploaded once (the same bake every Canvas and HeadlessHost reads, so
 // a live frame and a headless frame share glyph metrics and UVs), and the transient vertex buffer is sized from
 // configure() (default FUNKGUI_TRANSIENT_VB_BYTES = 32 MiB, 02 §4.5) instead of bgfx's compiled 6 MiB.
@@ -40,7 +45,8 @@ namespace funkgui
         static constexpr int kMaxWindows = 16;       // editors per process (A §2.4); the 17th waits for a slot
 
         // Budgets (A §6.4.7). transientVbBytes is bgfx::Init::limits.maxTransientVbSize: shared by every editor in
-        // the process for one bgfx::frame(), 384 B per primitive (02 §4.5). maxWindows is clamped to 1..kMaxWindows.
+        // the process for one bgfx::frame(), 384 B per primitive (02 §4.5). maxWindows is clamped to 1..kMaxWindows;
+        // it counts windows, never the null window's registrations (v0.23.1).
         struct Config
         {
             uint32_t transientVbBytes = static_cast<uint32_t>(FUNKGUI_TRANSIENT_VB_BYTES);
@@ -80,7 +86,8 @@ namespace funkgui
 
         // Whether acquire() can take another window at all. Distinct from a
         // failure: an editor that finds every slot taken waits for one.
-        bool hasFreeSlot() const { return windowCount_ < maxWindows(); }
+        // Headless registrations (the null window) take no slot (v0.23.1).
+        bool hasFreeSlot() const { return windowsRegistered() < maxWindows(); }
 
         // Whether this window is currently registered. False after a primary
         // rebuild that failed: see release().
@@ -117,6 +124,7 @@ namespace funkgui
         bool createResources();
         void destroyResources();
         int  maxWindows() const noexcept;
+        int  windowsRegistered() const noexcept;     // registrations of a window (nwh != nullptr), v0.23.1
 
         struct Window
         {
@@ -127,8 +135,13 @@ namespace funkgui
             bool primary = false;
         };
 
-        Window windows_[kMaxWindows];
-        int windowCount_ = 0;
+        // v0.23.1: the null window's registrations have room of their own beside the windows' slots (the header): as
+        // many as there can be windows, so nothing that v0.23.0 registered is refused.
+        static constexpr int kMaxHeadless = kMaxWindows;
+        static constexpr int kMaxRegistrations = kMaxWindows + kMaxHeadless;
+
+        Window windows_[kMaxRegistrations];          // windows and headless registrations, in registration order
+        int windowCount_ = 0;                        // registrations of both kinds
         Config config_{};
         uint32_t activeTransientVbBytes_ = 0;        // what the running bgfx was initialised with
 
