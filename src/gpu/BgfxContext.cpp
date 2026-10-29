@@ -63,6 +63,14 @@ namespace funkgui
         return std::clamp(config_.maxWindows, 1, kMaxWindows);
     }
 
+    int BgfxContext::windowsRegistered() const noexcept
+    {
+        int n = 0;
+        for (int i = 0; i < windowCount_; ++i)
+            n += windows_[i].nwh != nullptr ? 1 : 0;
+        return n;
+    }
+
     const FontAtlasSdf& BgfxContext::font() const
     {
         return FontService::get().atlas();
@@ -217,7 +225,10 @@ namespace funkgui
 
     bool BgfxContext::acquire(void* nwh, int physW, int physH)
     {
-        if (windowCount_ >= maxWindows()) return false;
+        // v0.23.1: a window takes one of maxWindows' slots, a headless registration none (the header): its room is
+        // kMaxHeadless, beside them.
+        const int windows = windowsRegistered();
+        if (nwh != nullptr ? windows >= maxWindows() : windowCount_ - windows >= kMaxHeadless) return false;
 
         if (!initialised_)
         {
@@ -252,7 +263,7 @@ namespace funkgui
             // swapchain, and the window's framebuffer would take its place in bgfx's list of windows, which flip()
             // never presents: the editor would draw every frame and show none. bgfx starts again on the window, and
             // every registration it had follows it (headless ones as above).
-            Window was[kMaxWindows];
+            Window was[kMaxRegistrations];
             const int n = windowCount_;
             for (int i = 0; i < n; ++i) was[i] = windows_[i];
             while (windowCount_ > 0)
@@ -380,7 +391,7 @@ namespace funkgui
 
             releaseRetired();                        // bgfx is down: nothing names a released view now
 
-            Window survivors[kMaxWindows];           // the new primary first, the others in their order
+            Window survivors[kMaxRegistrations];     // the new primary first, the others in their order
             const int n = windowCount_;
             survivors[0] = windows_[first];
             for (int i = 0, k = 1; i < n; ++i)
