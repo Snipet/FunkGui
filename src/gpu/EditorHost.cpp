@@ -585,9 +585,11 @@ namespace funkgui
         }
 
         // 9. Submit. Deliberately no bgfx::frame() here: it presents every view at once, so the pump calls it once
-        //    after all open editors have submitted.
-        if (sink_.submit(list, ctx.viewIdFor(renderView_), ctx.framebufferFor(renderView_), physW_, physH_)
-            == BgfxSink::Result::droppedOverflow)
+        //    after all open editors have submitted. Not while the window waits for its framebuffer (v0.24.0, Windows:
+        //    BgfxContext::drawable()): its view would draw into the primary's backbuffer.
+        if (ctx.drawable(renderView_)
+            && sink_.submit(list, ctx.viewIdFor(renderView_), ctx.framebufferFor(renderView_), physW_, physH_)
+                   == BgfxSink::Result::droppedOverflow)
             onOverflow();
         ++diag_.frames;
         result.submitted = true;

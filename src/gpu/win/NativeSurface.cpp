@@ -231,6 +231,10 @@ namespace funkgui
         void place(const RenderView& rv)
         {
             const DeviceRect r = toDevice(rv.x, rv.y, rv.w, rv.h, scaleOf(rv));
+            // In the peer's DPI context, as the view was made: Windows reads SetWindowPos's coordinates in the calling
+            // thread's, and would scale them for a window of another awareness (a host's thread and JUCE's peer may
+            // differ).
+            const ScopedDpiContextOf dpi(rv.parent);
             SetWindowPos(rv.window, nullptr, r.x, r.y, r.w, r.h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
         }
 

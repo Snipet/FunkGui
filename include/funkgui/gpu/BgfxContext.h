@@ -80,6 +80,12 @@ namespace funkgui
         // (which owns the default backbuffer).
         bgfx::FrameBufferHandle framebufferFor(void* nwh);
         void resizeWindow(void* nwh, int physW, int physH);
+        // Whether <nwh>'s editor may submit its view this frame: the primary's (the default backbuffer) always, another
+        // window's while it has its framebuffer. v0.24.0: on Windows a window resized after its first frame gets its
+        // new framebuffer two frames after the old one goes (Direct3D 11 allows one flip-model swap chain per window,
+        // and bgfx makes a frame's framebuffers before it destroys that frame's), and its editor submits nothing
+        // meanwhile rather than draw into the primary's backbuffer. Elsewhere a window is always drawable.
+        bool drawable(void* nwh) const;
 
         bgfx::ViewId viewIdFor(void* nwh);
 
@@ -134,6 +140,7 @@ namespace funkgui
             bgfx::ViewId view = 0;
             int w = 0, h = 0;
             bool primary = false;
+            int rebuild = 0;                         // Windows: frames until its framebuffer is made again; 0: none due
         };
 
         // v0.23.1: the null window's registrations have room of their own beside the windows' slots (the header): as
