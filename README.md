@@ -2,14 +2,15 @@
 
 ![macOS 14+ on Apple Silicon](https://img.shields.io/badge/macOS-14%2B%20·%20Apple%20Silicon-555)
 ![Linux x86-64](https://img.shields.io/badge/Linux-x86--64%20·%20X11%20and%20Wayland-555)
+![Windows x64](https://img.shields.io/badge/Windows-x64%20·%20Direct3D%2011-555)
 ![Browser: wasm32 · WebGL2](https://img.shields.io/badge/browser-wasm32%20·%20WebGL2-555)
 ![JUCE 8.0.4](https://img.shields.io/badge/JUCE-8.0.4-555)
 [![Licence: GPL-3.0](https://img.shields.io/badge/licence-GPL--3.0-555)](LICENSE)
 
-A GPU user-interface library for JUCE audio plugins on macOS and Linux. A plugin's interface is a `Panel` that draws
-into a `Canvas`. The canvas records primitives on the CPU (rounded rectangles, lines, filled areas,
-signed-distance-field text), and bgfx draws the recorded frame in one draw call, on Metal on macOS and on Vulkan on
-Linux. The same Panel also runs headless, in a console process with a fixed clock and synthetic input, so a test can
+A GPU user-interface library for JUCE audio plugins on macOS, Linux and Windows. A plugin's interface is a `Panel`
+that draws into a `Canvas`. The canvas records primitives on the CPU (rounded rectangles, lines, filled areas,
+signed-distance-field text), and bgfx draws the recorded frame in one draw call, on Metal on macOS, on Vulkan on Linux
+and on Direct3D 11 on Windows. The same Panel also runs headless, in a console process with a fixed clock and synthetic input, so a test can
 check its layout, text and accessibility against golden files and render any frame to a PNG without a GPU. FunkGui also
 has a small widget set, a preset store and the test harness itself.
 
@@ -102,16 +103,17 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
   for the life of the process unless the host installs another backend; `LiveFeed`, which tells a live telemetry
   stream from a stale one; `MenuLook`, the theme applied to JUCE popup menus.
 - **gpu**: `EditorHost`, a `juce::AudioProcessorEditor` that runs one Panel on bgfx: Metal on a click-through NSView
-  on macOS, Vulkan on an X11 child window of JUCE's peer on Linux (which is XWayland on a Wayland desktop). It handles
-  the surface lifecycle with a no-GPU fallback screen, converts JUCE input, mirrors the accessibility items for the
-  screen reader, offers UI zoom steps, resizes the window for a resizable Panel, serves the menu, the file chooser
-  and the clipboard of `HostServices` through JUCE, and can capture frames. `FramePump` gives every editor in the
-  process one clock (a display link on macOS, a timer on Linux) and one `bgfx::frame()` per tick; the link stays on
-  an editor whose window is shown, moved by a watchdog when it goes quiet (v0.21.0: a host that hides one plug-in
-  window to show the next froze every editor), and `BgfxContext` holds each editor's view until bgfx has run the last
-  command that names it (an editor closed before its first frame crashed the host). On macOS the
-  Objective-C classes are registered at run time under randomised names, so two products using FunkGui in one host
-  never collide. `ShaderLibrary.h` (`funkgui::shaders`, v0.19.0) registers custom fragment shaders by id: a host
+  on macOS, Vulkan on an X11 child window of JUCE's peer on Linux (which is XWayland on a Wayland desktop), Direct3D
+  11 on a click-through child window of JUCE's peer on Windows (v0.24.0). It handles the surface lifecycle with a
+  no-GPU fallback screen, converts JUCE input, mirrors the accessibility items for the screen reader, offers UI zoom
+  steps, resizes the window for a resizable Panel, serves the menu, the file chooser and the clipboard of
+  `HostServices` through JUCE, and can capture frames. `FramePump` gives every editor in the process one clock (a
+  display link on macOS, a timer on Linux and Windows) and one `bgfx::frame()` per tick; the link stays on an editor
+  whose window is shown, moved by a watchdog when it goes quiet (v0.21.0: a host that hides one plug-in window to show
+  the next froze every editor), and `BgfxContext` holds each editor's view until bgfx has run the last command that
+  names it (an editor closed before its first frame crashed the host). On macOS the Objective-C classes, and on
+  Windows the render view's window class, are registered at run time under randomised names, so two products using
+  FunkGui in one host never collide. `ShaderLibrary.h` (`funkgui::shaders`, v0.19.0) registers custom fragment shaders by id: a host
   compiles one at run time with bgfx's shaderc (`target()`, `varyingDef()`, `fragmentPrelude()` and `bgfxShaderSh()`
   give it what to compile with), `set()` checks it (on macOS Metal compiles it too) and links it with FunkGui's own
   vertex shader, and `BgfxSink` draws it wherever a Canvas recorded `shader()`, with its rectangle, the frame's clock
@@ -121,7 +123,8 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
   `GpuPicture.h` (v0.23.0) draws a recorded frame offscreen with `BgfxSink` and reads it back as an RGBA `Image`
   (`renderGpuPicture`), so a picture of a Panel for a person or a model shows its custom shaders and pictures as the
   screen does, where `SoftRaster` draws a shader as its placeholder: on the editors' bgfx while any is open, else on a
-  headless Metal context started at the first call and held until `releaseGpuPictureContext()` or JUCE's shutdown.
+  headless Metal (or Direct3D 11) context started at the first call and held until `releaseGpuPictureContext()` or
+  JUCE's shutdown.
   bgfx's thread is the message thread: there the call is inline (also inside a frame), from any other thread it is
   posted and waited for with a timeout. Linux (no Vulkan read-back), a failed start and builds without the GPU layer
   say so, and the product falls back to `SoftRaster`.
@@ -146,9 +149,13 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
 
 ## Requirements
 
-- **Platforms:** macOS 14 or later on Apple Silicon, and (from v0.11.0) x86-64 Linux. The GPU layer needs Metal on
-  macOS and Vulkan on Linux; configure stops if `FUNKGUI_WITH_BGFX` is on anywhere else. The preset layer has Windows
-  code paths (Windows' own SQLite) carried over from HardwareReverb; they are untested. The harness and golden tools
+- **Platforms:** macOS 14 or later on Apple Silicon, (from v0.11.0) x86-64 Linux, and (from v0.24.0) x64 Windows 10
+  1803 or later with clang-cl. The GPU layer needs Metal on macOS, Vulkan on Linux and Direct3D 11 on Windows;
+  configure stops if `FUNKGUI_WITH_BGFX` is on anywhere else. On Windows the core, the harness and the GPU layer build
+  (FunkGui's own CI runs on macOS: the Windows layer is checked by its consumers' builds, not by FunkGui's goldens),
+  and its Direct3D 11 shaders are compiled by shaderc on the Windows host itself (HLSL through the system's
+  `d3dcompiler_47.dll`). The preset layer has Windows code paths (Windows' own SQLite) carried over from
+  HardwareReverb; they are untested. The harness and golden tools
   also handle x86_64 and wasm32 (per-architecture golden overlays; `golden.py adopt` writes no wasm32 overlay).
 - **Browser** (from v0.12.0): the JUCE-free core and `FunkGui::web`, compiled to wasm32 by Emscripten, need WebGL2.
   FunkGui's own browser pages have run in headless Chrome on macOS only (the sink's page on ANGLE's Metal and on

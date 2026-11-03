@@ -10,6 +10,8 @@
 //   Linux  strtof_l / strtol_l with a C locale_t made once; the printf family between uselocale() calls, which set this
 //          thread's locale only
 //   Emscripten (v0.12.0)  the plain functions: its libc has no other numeric locale (and no strtol_l)
+//   Windows (v0.24.0)     the C runtime's _strtof_l, _strtol_l, _vsnprintf_s_l and _vfprintf_l over a C locale made
+//                         once (_create_locale)
 // Thread-safe; no allocation after the first call.
 
 #include <cstddef>

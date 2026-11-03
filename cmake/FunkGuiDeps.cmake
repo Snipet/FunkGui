@@ -200,9 +200,9 @@ endif()
 
 # ---- bgfx and shaderc: only when FUNKGUI_WITH_BGFX (02 §1.4) ---------------------------------------------------------
 if(FUNKGUI_WITH_BGFX AND NOT FUNKGUI_HARNESS_ONLY)
-  if(NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    message(FATAL_ERROR "FunkGui: FUNKGUI_WITH_BGFX needs macOS (Metal, Objective-C++ views) or Linux (Vulkan or "
-                        "OpenGL on an X11 child window); this is ${CMAKE_SYSTEM_NAME}")
+  if(NOT APPLE AND NOT WIN32 AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    message(FATAL_ERROR "FunkGui: FUNKGUI_WITH_BGFX needs macOS (Metal, Objective-C++ views), Linux (Vulkan on an X11 "
+                        "child window) or Windows (Direct3D 11 on a child window); this is ${CMAKE_SYSTEM_NAME}")
   endif()
   if(NOT TARGET bgfx)
     # HR CMakeLists.txt:307-313 settings as NORMAL variables (CMP0077; bgfx.cmake requires CMake 3.20, so its
@@ -231,7 +231,8 @@ if(FUNKGUI_WITH_BGFX AND NOT FUNKGUI_HARNESS_ONLY)
       set_target_properties(${_t} PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
     endforeach()
     # Linux (v0.11.0): the pinned bgfx warns under Clang 22 in its own sources (renderer_gl.cpp's
-    # -Wtautological-constant-compare, bimg's miniz #pragma message). Third-party code FunkGui does not edit.
+    # -Wtautological-constant-compare, bimg's miniz #pragma message). Third-party code FunkGui does not edit. Windows
+    # (v0.24.0) too: -w is cl's /w for clang-cl and MSVC.
     if(NOT APPLE)
       foreach(_t bgfx bx bimg bimg_decode bimg_encode)
         if(TARGET ${_t})

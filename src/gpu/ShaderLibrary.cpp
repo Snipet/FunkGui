@@ -28,13 +28,17 @@
 //   one of FunkGui's three with another type or size would be resized under the others by bgfx (its createUniform
 //   keeps the larger), so all of these are refused by name;
 // - the code: Metal compiles the text at the next frame and aborts the process when it cannot (BGFX_FATAL), so macOS
-//   compiles it here first (src/gpu/ShaderCheckMetal.mm); Linux checks the SPIR-V words' magic and size only.
+//   compiles it here first (src/gpu/ShaderCheckMetal.mm); Linux checks the SPIR-V words' magic and size only, and
+//   Windows (v0.24.0) the Direct3D 11 bytecode's DXBC container magic only (bgfx's Direct3D 11 creates the shader from
+//   it at the next frame, and a refused one is a failed draw, not a fatal error).
 // The registry outlives bgfx: BgfxContext::destroyResources() calls releaseGpu() before every shutdown, and program()
 // builds a kept binary again on its first draw after bgfx starts. Never destroyed (HR idiom, as the tag registry): a
 // plug-in is unloaded while statics are torn down in an order nothing here controls, after bgfx is gone.
 
 #if defined(__APPLE__)
   #include <funkgui/shaders/vs_custom.mtl.h>
+#elif defined(_WIN32)
+  #include <funkgui/shaders/vs_custom.dx11.h>
 #else
   #include <funkgui/shaders/vs_custom.spv.h>
 #endif
@@ -47,6 +51,10 @@ namespace funkgui::shaders
         constexpr const uint8_t* kVs = vs_custom_mtl;
         constexpr std::size_t    kVsBytes = sizeof vs_custom_mtl;
         constexpr bgfx::RendererType::Enum kRenderer = bgfx::RendererType::Metal;
+#elif defined(_WIN32)
+        constexpr const uint8_t* kVs = vs_custom_dx11;
+        constexpr std::size_t    kVsBytes = sizeof vs_custom_dx11;
+        constexpr bgfx::RendererType::Enum kRenderer = bgfx::RendererType::Direct3D11;
 #else
         constexpr const uint8_t* kVs = vs_custom_spv;
         constexpr std::size_t    kVsBytes = sizeof vs_custom_spv;
@@ -310,6 +318,13 @@ namespace funkgui::shaders
                 return false;
             }
             return detail::metalCompiles(msl, why);
+#elif defined(_WIN32)
+            // D3DCompile's output is a DXBC container: its four-byte magic first (the bytecode follows its checksum).
+            const bool dxbc = b.codeSize >= 32 && b.code[0] == 'D' && b.code[1] == 'X' && b.code[2] == 'B'
+                              && b.code[3] == 'C';
+            if (!dxbc)
+                why = "the shader holds no Direct3D 11 bytecode: compile with --platform windows -p s_5_0";
+            return dxbc;
 #else
             const bool spirv = b.codeSize >= 20 && b.codeSize % 4 == 0 && b.code[0] == 0x03 && b.code[1] == 0x02
                                && b.code[2] == 0x23 && b.code[3] == 0x07;     // 0x07230203, little-endian
@@ -326,6 +341,8 @@ namespace funkgui::shaders
             return {};
 #if defined(__APPLE__)
         return { "osx", "metal" };
+#elif defined(_WIN32)
+        return { "windows", "s_5_0" };
 #else
         return { "linux", "spirv" };
 #endif

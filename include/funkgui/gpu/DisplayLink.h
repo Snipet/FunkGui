@@ -9,9 +9,10 @@
 // and every animation judders; on any display it means presenting at a moment
 // the compositor did not ask for.
 //
-// Linux (v0.11.0) has no display link: createDisplayLink() returns nullptr for
-// every view (src/gpu/linux/DisplayLink.cpp), and the FramePump stays on its
-// fallback timer. displayLinkTargetClassName() is "" there.
+// Linux (v0.11.0) and Windows (v0.24.0) have no display link: createDisplayLink()
+// returns nullptr for every view (src/gpu/linux/DisplayLink.cpp,
+// src/gpu/win/DisplayLink.cpp), and the FramePump stays on its fallback timer.
+// displayLinkTargetClassName() is "" there.
 
 namespace funkgui
 {

@@ -283,8 +283,8 @@ namespace funkgui
 
     bool gpuPicturesSupported() noexcept
     {
-#if defined(__APPLE__)
-        return true;
+#if defined(__APPLE__) || defined(_WIN32)
+        return true;                                 // Metal; Direct3D 11 (v0.24.0)
 #else
         return false;                                // the stated fallback (gpu/GpuPicture.h): SoftRaster
 #endif

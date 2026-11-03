@@ -19,6 +19,9 @@
 #if defined(__APPLE__)
   #include <funkgui/shaders/fs_image.mtl.h>
   #include <funkgui/shaders/vs_custom.mtl.h>
+#elif defined(_WIN32)
+  #include <funkgui/shaders/fs_image.dx11.h>
+  #include <funkgui/shaders/vs_custom.dx11.h>
 #else
   #include <funkgui/shaders/fs_image.spv.h>
   #include <funkgui/shaders/vs_custom.spv.h>
@@ -34,6 +37,12 @@ namespace funkgui::images::gpu
         constexpr std::size_t    kVsBytes = sizeof vs_custom_mtl;
         constexpr const uint8_t* kFs = fs_image_mtl;
         constexpr std::size_t    kFsBytes = sizeof fs_image_mtl;
+#elif defined(_WIN32)
+        constexpr bgfx::RendererType::Enum kRenderer = bgfx::RendererType::Direct3D11;
+        constexpr const uint8_t* kVs = vs_custom_dx11;
+        constexpr std::size_t    kVsBytes = sizeof vs_custom_dx11;
+        constexpr const uint8_t* kFs = fs_image_dx11;
+        constexpr std::size_t    kFsBytes = sizeof fs_image_dx11;
 #else
         constexpr bgfx::RendererType::Enum kRenderer = bgfx::RendererType::Vulkan;
         constexpr const uint8_t* kVs = vs_custom_spv;

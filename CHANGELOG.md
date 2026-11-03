@@ -3,6 +3,35 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.24.0 — 2026-11-03 · MINOR: Windows (the GPU layer on Direct3D 11 into a child window)
+
+Golden impact: **none** (nothing records, draws, dumps or hashes differently on macOS or Linux: the new code is
+Windows-only, behind `_WIN32` and `src/gpu/win/`, and the Direct3D 11 shader headers exist in Windows builds alone, so
+`fg.shader.hash` keeps its rows). FunkGui's own tests are not run on Windows (its CI is macOS's): the Windows layer is
+checked by its first consumer's Windows build and probes (TestingPlayground, x64, clang-cl), which also draw every GPU
+picture against SoftRaster.
+
+- **The render view** (`src/gpu/win/NativeSurface.cpp`): a child window of JUCE's peer HWND, of a window class each
+  binary registers under the randomised name macOS gives its Objective-C class (and unregisters with its last view),
+  made in the peer's DPI awareness context and placed in its client pixels at the drawable's scale. It answers
+  `WM_NCHITTEST` with `HTTRANSPARENT`, as JUCE's own click-through windows do, so every pointer event and the focus
+  stay with JUCE's peer; it erases and paints nothing. Counted like macOS's NSView: `destroyRenderView` hides it and
+  takes it out of the peer at once, and it is destroyed with its last reference, after bgfx has let go of it.
+- **bgfx on Direct3D 11 only** (`init.fallback = false`, as Vulkan on Linux): every Windows 10 and 11 has it, where a
+  Vulkan driver is not a given; a failed start is EditorHost's fallback screen. Headless too (no swap chain), so GPU
+  pictures (`renderGpuPicture`) are supported on Windows. No display link: the FramePump runs on its timer. The closed
+  hand and the not-allowed cursor are Linux's standard stand-ins.
+- **Shaders:** `dx11` (`--platform windows -p s_5_0`) joins the profiles on a Windows host only (shaderc compiles HLSL
+  with the system's `d3dcompiler_47.dll`); `ShaderLibrary::target()` is `{"windows", "s_5_0"}` there, and `set()`
+  checks a custom shader's code for the DXBC container's magic. The profile pattern takes digits and underscores.
+- **The core and the harness on Windows:** `CLocale.cpp` over the C runtime's `_strtof_l`, `_strtol_l`,
+  `_vsnprintf_s_l` and `_vfprintf_l` (C99's snprintf rules kept), and `Harness.h` over `_putenv_s` and `_getpid` in
+  place of `<unistd.h>`.
+- **Build:** `FUNKGUI_WITH_BGFX` is accepted on Windows; `src/<module>/win/**` compiles on Windows only, as `linux/**`
+  on Linux; bgfx's own warnings are silenced there as on Linux.
+- **API:** additive only, in comments: `NativeSurface.h`, `DisplayLink.h`, `ShaderLibrary.h`, `GpuPicture.h`,
+  `BgfxContext.h` and `CLocale.h` say what Windows does.
+
 ## v0.23.1 — 2026-10-29 · PATCH: the GPU picture's hold takes no editor slot
 
 Golden impact: **none** (nothing records, draws, dumps or hashes differently: `BgfxContext` counts its window slots

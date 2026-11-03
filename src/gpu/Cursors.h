@@ -8,9 +8,10 @@
 // One definition of the two functions per platform, so EditorHost.cpp keeps no platform #if:
 // - macOS (Cursors.mm): the system's own [NSCursor closedHandCursor] and [NSCursor operationNotAllowedCursor], as
 //   juce::MouseCursors made from their images at 2x and their hot spots.
-// - Linux (linux/Cursors.cpp): JUCE reaches no native closed-hand or not-allowed cursor there, so they are standard
-//   cursors: DraggingHandCursor for grabbing (the pointer keeps the open hand of grab on press) and NormalCursor for
-//   notAllowed. A product must therefore show a refusal in what it draws too; the cursor is never the only cue.
+// - Linux (linux/Cursors.cpp) and Windows (win/Cursors.cpp, v0.24.0): JUCE reaches no native closed-hand or
+//   not-allowed cursor there, so they are standard cursors: DraggingHandCursor for grabbing (the pointer keeps the open
+//   hand of grab on press) and NormalCursor for notAllowed. A product must therefore show a refusal in what it draws
+//   too; the cursor is never the only cue.
 //
 // Each call MAKES a cursor. EditorHost asks through EditorCursors below, which makes each one once and is shared by
 // every editor of the process: the first editor to need a cursor makes it, and the last editor to go destroys both,

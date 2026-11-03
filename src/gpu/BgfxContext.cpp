@@ -11,11 +11,15 @@
 #include <cstdint>
 #include <cstring>
 
-// Shader binaries produced by shaderc at build time (FunkGuiShaders compiles every profile on every host), for this
-// platform's renderer: Metal on macOS, SPIR-V for Vulkan on Linux (v0.11.0).
+// Shader binaries produced by shaderc at build time (FunkGuiShaders compiles every profile on every host, and Direct3D
+// 11's on Windows hosts), for this platform's renderer: Metal on macOS, SPIR-V for Vulkan on Linux (v0.11.0), DXBC for
+// Direct3D 11 on Windows (v0.24.0).
 #if defined(__APPLE__)
   #include <funkgui/shaders/vs_ui.mtl.h>
   #include <funkgui/shaders/fs_ui.mtl.h>
+#elif defined(_WIN32)
+  #include <funkgui/shaders/vs_ui.dx11.h>
+  #include <funkgui/shaders/fs_ui.dx11.h>
 #else
   #include <funkgui/shaders/vs_ui.spv.h>
   #include <funkgui/shaders/fs_ui.spv.h>
@@ -36,6 +40,11 @@ namespace funkgui
 #if defined(__APPLE__)
         constexpr bgfx::RendererType::Enum kRenderer = bgfx::RendererType::Metal;
         constexpr ShaderPair kShaders{ vs_ui_mtl, sizeof vs_ui_mtl, fs_ui_mtl, sizeof fs_ui_mtl };
+#elif defined(_WIN32)
+        // Direct3D 11 (v0.24.0): every Windows 10 and 11 has it, where a Vulkan driver is not a given (a VM, an older
+        // GPU, a remote session). Its shaders are compiled on a Windows host only (shaderc needs d3dcompiler there).
+        constexpr bgfx::RendererType::Enum kRenderer = bgfx::RendererType::Direct3D11;
+        constexpr ShaderPair kShaders{ vs_ui_dx11, sizeof vs_ui_dx11, fs_ui_dx11, sizeof fs_ui_dx11 };
 #else
         // Vulkan only. bgfx's OpenGL path on Linux (EGL) aborts the process on any initialisation failure
         // (BGFX_FATAL: no EGL, no config, no surface, no context), which in a host takes the whole session down; its
@@ -91,7 +100,12 @@ namespace funkgui
         bgfx::Init init;
         init.type = kRenderer;
         init.platformData.nwh   = nwh;
-#if !defined(__APPLE__)
+#if defined(_WIN32)
+        // Windows (v0.24.0): nwh is the render view's HWND, or nullptr for a headless bgfx (no swap chain at all). As
+        // on Linux, Direct3D 11 or nothing: without the fallback a failed Direct3D 11 is a failed init(), for
+        // EditorHost's fallback screen and retries, never another renderer, for which no shader is compiled.
+        init.fallback = false;
+#elif !defined(__APPLE__)
         // Linux: nwh is the render view's X11 window, created on JUCE's display connection, which bgfx's Xlib (or
         // XCB) Vulkan surface needs as well. No display, no surface.
         init.platformData.ndt  = nativeDisplay();

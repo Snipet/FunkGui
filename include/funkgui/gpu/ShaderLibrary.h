@@ -48,7 +48,9 @@
 // stores the binary for the next start. Nothing is destroyed at process exit (bgfx is gone by then).
 //
 // On Linux (Vulkan): the same registry and the same checks, except that the code is checked only as SPIR-V words (the
-// magic number and the size), not by the driver: bgfx creates the module at the next frame (the stated fallback).
+// magic number and the size), not by the driver: bgfx creates the module at the next frame (the stated fallback). On
+// Windows (Direct3D 11, v0.24.0) likewise, as Direct3D 11 bytecode (the DXBC container's magic): shaderc compiles HLSL
+// there with the system's d3dcompiler_47.dll, which every Windows 10 and 11 has.
 // Without bgfx (FUNKGUI_WITH_BGFX=OFF, the web) there is no registry: shader draws are a placeholder in SoftRaster and
 // nothing in WebGlSink (canvas/PrimList.h).
 
@@ -58,8 +60,9 @@
 namespace funkgui::shaders
 {
     // What to pass shaderc's --platform and -p for the renderer bgfx runs on: {"osx", "metal"} on macOS (Metal),
-    // {"linux", "spirv"} on Linux (Vulkan). Empty strings while bgfx is not initialised (no editor has attached yet,
-    // or the last one closed): FunkGui's renderer is fixed per platform, but this answers for the one running.
+    // {"linux", "spirv"} on Linux (Vulkan), {"windows", "s_5_0"} on Windows (Direct3D 11, v0.24.0). Empty strings while
+    // bgfx is not initialised (no editor has attached yet, or the last one closed): FunkGui's renderer is fixed per
+    // platform, but this answers for the one running.
     struct Target
     {
         std::string platform, profile;
