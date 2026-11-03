@@ -111,7 +111,12 @@
 #include <utility>
 #include <vector>
 
-#include <unistd.h>
+#if defined(_WIN32)
+  #include <process.h>                               // _getpid (v0.24.0: the harness builds on Windows)
+  #include <stdlib.h>                                // _putenv_s
+#else
+  #include <unistd.h>
+#endif
 
 #if defined(__x86_64__) || defined(_M_X64)
   #include <xmmintrin.h>
@@ -220,8 +225,14 @@ namespace funkgui::test
     // HR's test helpers (POSIX setenv/unsetenv; not safe against a concurrent getenv on another thread). A probe sets
     // <ENV_PREFIX><NAME> before the library reads it; funkgui::env() caches on first use, so a value the library has
     // already read needs funkgui::envReload() (core/Env.h) afterwards. Return false when the call fails.
+#if defined(_WIN32)
+    // Windows: the C runtime's _putenv_s, whose empty value removes the variable.
+    inline bool setEnv(const char* name, const char* value) { return ::_putenv_s(name, value) == 0; }
+    inline bool unsetEnv(const char* name) { return ::_putenv_s(name, "") == 0; }
+#else
     inline bool setEnv(const char* name, const char* value) { return ::setenv(name, value, 1) == 0; }
     inline bool unsetEnv(const char* name) { return ::unsetenv(name) == 0; }
+#endif
 
     // argv[1..] without the harness flags of 03 §3.2.2 and their values, in order: the subcommand (<layer>.<name>)
     // and a tool's own inputs. Parsed exactly as Probe parses them, so a flag's value is never taken for an input.
@@ -673,7 +684,11 @@ namespace funkgui::test
                 return false;
             }
             std::filesystem::path tmp = p;
+#if defined(_WIN32)
+            tmp += ".tmp." + std::to_string(static_cast<long long>(::_getpid()));
+#else
             tmp += ".tmp." + std::to_string(static_cast<long long>(::getpid()));
+#endif
             {
                 std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
                 if (f)

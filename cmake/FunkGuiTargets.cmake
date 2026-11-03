@@ -14,7 +14,8 @@
 #     MenuLook, …); src/nojuce/ holds what a JUCE-free build defines instead. The other nine directories are
 #     JUCE-free, which the `nojuce` and `web` presets prove by compiling them with no JUCE on the include path.
 #   src/gpu/**                                                           -> FunkGuiGpu   (.cpp and .mm; *.mm on
-#                                                                           Apple only, src/gpu/linux/** on Linux only)
+#                                                                           Apple only, src/gpu/linux/** on Linux
+#                                                                           only, src/gpu/win/** on Windows only)
 #   src/presets/**                                                       -> FunkPresets  (empty placeholder until then)
 #   src/web/**                                                           -> FunkGuiWeb   (v0.12.0; Emscripten only)
 #   tools/*.cpp                                                          -> tool FunkGui<Stem> (FrameRender.cpp ->
@@ -332,12 +333,16 @@ foreach(_m IN LISTS _fg_core_modules _fg_other_modules)
   if(_mm AND NOT _m STREQUAL "gpu")
     message(FATAL_ERROR "FunkGui: Objective-C++ belongs under src/gpu/ (02 §1.1): ${_mm}")
   endif()
-  # Platform sources (v0.11.0): *.mm is Apple's, src/<module>/linux/** is Linux's; each compiles only there.
+  # Platform sources (v0.11.0): *.mm is Apple's, src/<module>/linux/** is Linux's, src/<module>/win/** Windows'
+  # (v0.24.0); each compiles only there.
   if(NOT APPLE)
     set(_mm "")
   endif()
   if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     list(FILTER _cpp EXCLUDE REGEX "/src/${_m}/linux/")
+  endif()
+  if(NOT WIN32)
+    list(FILTER _cpp EXCLUDE REGEX "/src/${_m}/win/")
   endif()
   set(_fg_sources_${_m} ${_cpp} ${_mm})
   set_property(GLOBAL PROPERTY FUNKGUI_SOURCES_${_m} "${_fg_sources_${_m}}")
@@ -461,8 +466,13 @@ if(FUNKGUI_WITH_BGFX)
   # HR's hrvb_compile_shader (HR CMakeLists.txt:328-344), generalised, embedded with --bin2c as <name>.<ext>.h holding
   # <name>_<ext>. Every profile on every host (v0.11.0): shaderc's output depends on the pinned bgfx only, not on the
   # host (the Metal pair compiled on Linux is byte for byte the pair compiled on macOS), so fg.shader.hash has one set
-  # of golden rows everywhere. BgfxContext.cpp includes its platform's pair: Metal on macOS, SPIR-V (Vulkan) on Linux.
+  # of golden rows everywhere. BgfxContext.cpp includes its platform's pair: Metal on macOS, SPIR-V (Vulkan) on Linux,
+  # Direct3D 11 bytecode on Windows (v0.24.0), which shaderc compiles on a Windows host alone (HLSL through the
+  # system's d3dcompiler_47.dll): the dx11 headers exist in Windows builds only, and no test includes them.
   set(_fg_profiles mtl=osx:metal spv=linux:spirv)
+  if(WIN32)
+    list(APPEND _fg_profiles dx11=windows:s_5_0)
+  endif()
   set(_fg_shader_headers "")
   # <name>=<type>=<source>=<varyings>: <source> compiled with shaders/<varyings>.sc into <name>.<ext>.h. v0.19.0 added
   # vs_custom, the vertex half of every custom program (include/funkgui/gpu/ShaderLibrary.h), whose varyings are
@@ -496,7 +506,7 @@ if(FUNKGUI_WITH_BGFX)
     list(GET _shader 2 _source)
     list(GET _shader 3 _varyings)
     foreach(_p IN LISTS _fg_profiles)
-      string(REGEX MATCH "^([a-z]+)=([a-z]+):([a-z0-9]+)$" _ok "${_p}")
+      string(REGEX MATCH "^([a-z0-9]+)=([a-z]+):([a-z0-9_]+)$" _ok "${_p}")
       set(_ext ${CMAKE_MATCH_1})
       set(_platform ${CMAKE_MATCH_2})
       set(_profile ${CMAKE_MATCH_3})
