@@ -340,6 +340,16 @@ namespace funkgui
 
     void BgfxContext::afterFrame()
     {
+#if defined(_WIN32)
+        // A resized window's framebuffer, two frames after its old one went (resizeWindow): Direct3D has let the old
+        // swap chain go, so the new one is the window's only one when bgfx makes it at the next frame.
+        for (int i = 0; i < windowCount_; ++i)
+        {
+            Window& w = windows_[i];
+            if (w.rebuild > 0 && --w.rebuild == 0 && w.nwh != nullptr)
+                w.fb = bgfx::createFrameBuffer(w.nwh, static_cast<uint16_t>(w.w), static_cast<uint16_t>(w.h));
+        }
+#endif
         int kept = 0;
         for (int i = 0; i < retiredCount_; ++i)
         {
@@ -482,11 +492,29 @@ namespace funkgui
             else
             {
                 if (bgfx::isValid(w.fb)) bgfx::destroy(w.fb);
+#if defined(_WIN32)
+                // Direct3D 11 (v0.24.0): one flip-model swap chain per window, and bgfx makes a frame's framebuffers
+                // before it destroys that frame's, so a framebuffer made now would meet the old one (DXGI refuses the
+                // second, a fatal error in bgfx). It is made two frames from now (afterFrame); a resize meanwhile only
+                // changes the size it is made at, and the editor submits nothing until then (drawable()).
+                w.fb = BGFX_INVALID_HANDLE;
+                if (w.rebuild == 0)
+                    w.rebuild = 2;
+#else
                 w.fb = bgfx::createFrameBuffer(nwh,
                                                static_cast<uint16_t>(physW),
                                                static_cast<uint16_t>(physH));
+#endif
             }
             return;
         }
+    }
+
+    bool BgfxContext::drawable(void* nwh) const
+    {
+        for (int i = 0; i < windowCount_; ++i)
+            if (windows_[i].nwh == nwh)
+                return windows_[i].primary || bgfx::isValid(windows_[i].fb);
+        return false;
     }
 }

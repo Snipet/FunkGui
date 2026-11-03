@@ -21,6 +21,11 @@ picture against SoftRaster.
   Vulkan driver is not a given; a failed start is EditorHost's fallback screen. Headless too (no swap chain), so GPU
   pictures (`renderGpuPicture`) are supported on Windows. No display link: the FramePump runs on its timer. The closed
   hand and the not-allowed cursor are Linux's standard stand-ins.
+- **A second editor's window resized** (Windows): DXGI allows one flip-model swap chain per window, and bgfx makes a
+  frame's framebuffers before it destroys that frame's, so `resizeWindow` destroys a non-primary window's framebuffer
+  and `afterFrame` makes the new one two frames later; meanwhile its editor submits nothing (`BgfxContext::drawable()`,
+  new, true elsewhere and for the primary) rather than draw into the primary's backbuffer. The render view is placed
+  in its peer's DPI context as it is made (Windows reads `SetWindowPos`'s coordinates in the calling thread's).
 - **Shaders:** `dx11` (`--platform windows -p s_5_0`) joins the profiles on a Windows host only (shaderc compiles HLSL
   with the system's `d3dcompiler_47.dll`); `ShaderLibrary::target()` is `{"windows", "s_5_0"}` there, and `set()`
   checks a custom shader's code for the DXBC container's magic. The profile pattern takes digits and underscores.
@@ -29,8 +34,8 @@ picture against SoftRaster.
   place of `<unistd.h>`.
 - **Build:** `FUNKGUI_WITH_BGFX` is accepted on Windows; `src/<module>/win/**` compiles on Windows only, as `linux/**`
   on Linux; bgfx's own warnings are silenced there as on Linux.
-- **API:** additive only, in comments: `NativeSurface.h`, `DisplayLink.h`, `ShaderLibrary.h`, `GpuPicture.h`,
-  `BgfxContext.h` and `CLocale.h` say what Windows does.
+- **API:** additive only: `BgfxContext::drawable()`; and in comments, `NativeSurface.h`, `DisplayLink.h`,
+  `ShaderLibrary.h`, `GpuPicture.h`, `BgfxContext.h` and `CLocale.h` say what Windows does.
 
 ## v0.23.1 — 2026-10-29 · PATCH: the GPU picture's hold takes no editor slot
 
