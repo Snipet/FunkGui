@@ -69,6 +69,14 @@
 // frame, drawn or not. Diagnostics: `frames` counts the frames submitted, `skipped` the frames nothing was recorded
 // for, `unchanged` the frames recorded and found equal.
 //
+// Cadence (0.25.0; FramePump.h "Each editor its own cadence"): the FramePump runs this editor's frame at every tick
+// while its Panel wants full rate or input arrived since (every input event, a resize and the Panel's
+// HostServices::nudgeFullRate() nudge this editor only; a zoom chosen under EditorConfig::zoomPrefKey nudges every
+// editor, since all follow it), and at about 12 Hz otherwise, even while another editor keeps the pump at 60 Hz; the
+// frame's dt is the time since this editor's last frame. A theme another editor wrote is followed at this editor's
+// next frame, so a calm editor follows it up to a twelfth of a second later. Diagnostics::fps and FrameInfo's fps
+// and rate are this editor's own.
+//
 // Capture (02 §5.1 "Diagnostics environment"): CaptureConfig is read once from the <ENV_PREFIX> environment at
 // construction. CANVAS_DUMP pins the FramePump to its fallback clock and ignores the real pointer (HR's captureMode_:
 // a pointer resting over the new window must not hover a widget); UI_FIXED_DT ticks the Panel with a fixed dt, and
@@ -160,7 +168,8 @@ namespace funkgui
             uint32_t overflows = 0;                  // frames BgfxSink dropped (transient buffer full, 02 §4.5)
             uint32_t attachFailures = 0;             // failed surface attaches (render view or BgfxContext::acquire)
             bool     displayLinked = false;          // the FramePump runs off a CADisplayLink (else its timer)
-            float    fps = 0.0f;                     // the FramePump's measured rate
+            float    fps = 0.0f;                     // this editor's measured frame rate (0.25.0: its own cadence,
+                                                     // FramePump.h; the pump's before, the same for one editor)
             double   scale = 0.0;                    // the backing scale the drawable is sized for (0: no surface)
             int      zoomPercent = 100;              // G7c: the zoom the editor is sized and drawn at (after the
                                                      // display fit and any capture pin; the preference may differ)

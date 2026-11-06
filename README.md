@@ -119,7 +119,10 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
   uncovered still draw. That holds on macOS and Windows; on Linux every frame is still drawn, as before, because nothing
   there tells FunkGui when a window's picture is lost (a window unmapped and mapped again comes back empty, compositing
   manager or not; `NativeSurface.h`). `FramePump` gives every editor in the process one clock (a display link on macOS,
-  a timer on Linux and Windows) and one `bgfx::frame()` per tick (none while no editor draws); the link stays on an
+  a timer on Linux and Windows) and one `bgfx::frame()` per tick (none while no editor draws). Each editor keeps its
+  own cadence (0.25.0): one whose Panel wants full rate, or that input has just reached, runs at every tick, and a
+  calm one at 12 Hz with the time since its own last frame as its dt, even while another editor keeps the clock at
+  60 Hz, so one moving instance no longer makes every open instance tick and record at 60 Hz. The link stays on an
   editor whose window is shown, moved by a watchdog when it goes quiet (v0.21.0: a host that hides one plug-in window to
   show the next froze every editor), and `BgfxContext` holds each editor's view until bgfx has run the last command that
   names it (an editor closed before its first frame crashed the host). On macOS the Objective-C classes, and on Windows

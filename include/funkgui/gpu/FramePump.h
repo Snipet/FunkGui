@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_events/juce_events.h>
+#include <memory>
 #include <vector>
 
 namespace funkgui
@@ -28,6 +29,21 @@ namespace funkgui
     // later freed. The link now goes on a client whose view is on screen
     // (viewOnScreen), and a watchdog (four times a second) moves it to one
     // when it has not fired for a quarter of a second.
+    //
+    // Each editor its own cadence (0.25.0): the pump ticks at full rate
+    // (kFullHz) while any client asks for it and at kIdleHz otherwise, as
+    // before, but a tick runs only the clients that want it. A client that
+    // asked for full rate at its last frame (Result::wantsFullRate), or was
+    // nudged since (nudgeFullRate(c): input), runs at every tick; a calm one
+    // runs at the tick nearest a twelfth of a second after its last frame, so
+    // it keeps the idle rate while another editor runs at 60 Hz, and its dt
+    // is the time since its own last frame. While the pump itself idles, or
+    // runs on its pinned clock (forceFallbackClock: captures), every client
+    // runs at every tick, so one editor alone runs exactly as before. Before
+    // 0.25.0 one moving editor put every open editor on 60 Hz, each recording
+    // a frame per tick. The rules are src/gpu/ClientCadence.h.
+    namespace detail { class ClientCadence; }
+
     class FrameClient
     {
     public:
@@ -62,8 +78,16 @@ namespace funkgui
         // Go to the full refresh rate immediately rather than at the end of
         // the next frame. Called from input handlers: coming out of the idle
         // cadence one frame late would put up to 80 ms between the pointer
-        // arriving and the hover animation starting to move.
+        // arriving and the hover animation starting to move. This form
+        // nudges every client: each runs at the next tick.
         void nudgeFullRate();
+
+        // 0.25.0: the same for one client (EditorHost's own nudgeFullRate()):
+        // it runs at the next tick, and the pump goes to full rate; the other
+        // clients keep their own cadence. A nudge during the client's own
+        // frame holds: it runs at the next tick too. A client the pump does
+        // not hold nudges only the pump's rate.
+        void nudgeFullRate(const FrameClient* c);
 
         // Drop any display link bound to this client's view, and rebind to a
         // surviving one. Must be called before the client destroys the view it
@@ -89,6 +113,16 @@ namespace funkgui
         float measuredFps()  const { return fps_; }
         bool  wantedFullRate() const { return ratePref_ == 1; }
 
+        // 0.25.0: the same for one client, on its own cadence: its frames
+        // over windows of at least a second of the pump's clock, the first
+        // opening at its first frame; and whether it asks for full rate (its
+        // last frame's Result::wantsFullRate, or a nudge since; during its
+        // frame, the request before that frame). 0 and false for a client the
+        // pump does not hold. EditorHost reports these (Diagnostics::fps,
+        // FrameInfo::fps and ::fullRate).
+        float measuredFps(const FrameClient* c) const;
+        bool  wantedFullRate(const FrameClient* c) const;
+
         // How often the watchdog moved the link off a view that had gone off
         // screen (v0.21.0). Diagnostics and fg.editorhost.multi.
         int   linkRebinds() const { return rebinds_; }
@@ -100,14 +134,17 @@ namespace funkgui
         // or presented. Diagnostics and fg.editorhost.skip.
         uint64_t framesRun() const { return framesRun_; }
 
+        ~FramePump() override;                   // never runs (get()); out of line, where ClientCadence is complete
+
     private:
-        FramePump() = default;
+        FramePump();
 
         void timerCallback() override;   // fallback clock
         void updateClock();
         void requestRate(bool fullRate);
         void watch();                    // the watchdog's: a link that stopped firing is moved (v0.21.0)
         bool bindLink(bool onScreenOnly);
+        detail::ClientCadence* cadenceOf(const FrameClient* c) const;
 
         struct Watchdog final : juce::Timer
         {
@@ -120,7 +157,15 @@ namespace funkgui
         int    rebinds_ = 0;
         uint64_t framesRun_ = 0;         // 0.25.0: bgfx::frame() calls (framesRun)
 
-        std::vector<FrameClient*> clients_;
+        // The clients, in the order they were added, each with its own
+        // cadence (0.25.0).
+        struct Slot
+        {
+            FrameClient* client = nullptr;
+            std::unique_ptr<detail::ClientCadence> cadence;
+        };
+        std::vector<Slot> clients_;
+        std::vector<FrameClient*> tickClients_;  // tick()'s snapshot of the clients, capacity kept
         void*  link_ = nullptr;
         const FrameClient* linkOwner_ = nullptr;
         double lastStampSec_ = 0.0;

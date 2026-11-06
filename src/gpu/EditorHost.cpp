@@ -30,7 +30,8 @@
 //   drawn when n frames were already submitted (HR's skip count), once; the Panel has been ticked n + 1 times then.
 // - FrameInfo: the Panel's size, dpi = physical / logical height (HR), the theme's ground and gamma, seconds = the sum
 //   of the dts the Panel was ticked with, frame = ticks, clock "fixed" under UI_FIXED_DT (fps 0) else the pump's
-//   clock and measured rate, rate = the pump's last request, overflows = frames dropped so far.
+//   clock and this editor's measured rate, rate = this editor's last request (0.25.0: each editor its own cadence,
+//   below; the pump's rate and request before, the same for one editor alone), overflows = frames dropped so far.
 // - nowSeconds() is the wall clock, or under UI_FIXED_DT the Panel's simulated clock (so nothing a capture draws can
 //   depend on when the capture ran). Panel::idle(nowSeconds()) runs from a 10 Hz timer in both cases.
 // - Input: every event nudges the pump to full rate and is followed by a cursor update; an unconsumed wheel event goes
@@ -122,6 +123,19 @@
 //   nothing is submitted and Diagnostics::unchanged counts it. Under a capture every frame is submitted: CANVAS_DUMP
 //   numbers its frames by those submitted, UI_SCALE_AFTER counts them, and UI_FIXED_DT's live frame must equal
 //   HeadlessHost's of the same tick.
+//
+// 0.25.0, additive (each editor its own cadence; FramePump.h, src/gpu/ClientCadence.h). Choices where the design is
+// silent:
+// - The pump decides when an editor's frame runs: a calm editor (wantsFullRate() false at its last frame, no input
+//   since) runs at about 12 Hz while another editor keeps the pump at 60, its dt the time since its own last frame;
+//   EditorHost itself is unchanged by it, and every step of a frame runs as before when it runs.
+// - Input and everything else that nudged the pump (a resize, a Panel's HostServices::nudgeFullRate()) nudge this
+//   editor only (FramePump::nudgeFullRate(this)): it runs at the next tick, the others keep their cadence. A zoom
+//   chosen with EditorConfig::zoomPrefKey nudges every editor, since every editor follows that preference at its next
+//   frame (fg.editorhost.zoom follow.*). Another editor follows a theme written by a Panel (UiPreferences) at its next
+//   frame, which for a calm editor is its own idle tick, up to a twelfth of a second later.
+// - Diagnostics::fps and FrameInfo's fps and rate are this editor's own (FramePump::measuredFps(this),
+//   wantedFullRate(this)); with one editor open they count the same frames and requests as the pump's did.
 
 namespace funkgui
 {
@@ -279,7 +293,7 @@ namespace funkgui
     {
         Diagnostics d = diag_;
         d.displayLinked = FramePump::get().isDisplayLinked();
-        d.fps = FramePump::get().measuredFps();
+        d.fps = FramePump::get().measuredFps(this);  // 0.25.0: this editor's own cadence
         d.scale = surfaceOk_ ? attachedScale_ : 0.0;
         d.zoomPercent = zoomApplied_;
         return d;
@@ -622,8 +636,8 @@ namespace funkgui
         info.dt = tickDt;
         info.fixedClock = capture_.fixedDt > 0.0f;
         info.displayLinked = pump.isDisplayLinked();
-        info.fps = info.fixedClock ? 0.0f : pump.measuredFps();
-        info.fullRate = pump.wantedFullRate();
+        info.fps = info.fixedClock ? 0.0f : pump.measuredFps(this);
+        info.fullRate = pump.wantedFullRate(this);
         info.overflows = diag_.overflows;
         canvas_.begin(info);
         panel_->draw(canvas_, theme_);
@@ -1062,7 +1076,7 @@ namespace funkgui
 
     void EditorHost::nudgeFullRate()
     {
-        FramePump::get().nudgeFullRate();
+        FramePump::get().nudgeFullRate(this);        // 0.25.0: this editor at the next tick; the others keep theirs
     }
 
     double EditorHost::nowSeconds() const
@@ -1169,11 +1183,17 @@ namespace funkgui
     {
         if (!isZoomStep(percent))
             return;                                  // not a step this product offers: nothing written, nothing moves
-        if (config_.zoomPrefKey != nullptr && config_.zoomPrefKey[0] != '\0')
+        const bool shared = config_.zoomPrefKey != nullptr && config_.zoomPrefKey[0] != '\0';
+        if (shared)
             UiPreferences::get().setInt(config_.zoomPrefKey, percent);   // every editor follows its revision
         zoomChosen_ = percent;
         updateZoomTarget();
-        nudgeFullRate();                             // the next frame, soon, applies it
+        // The next frame, soon, applies it: this editor's, and with the preference written every editor's (0.25.0:
+        // each follows at its next frame, which for a calm editor would otherwise be its own idle tick).
+        if (shared)
+            FramePump::get().nudgeFullRate();
+        else
+            nudgeFullRate();
     }
 
     bool EditorHost::zoomFits(int percent) const

@@ -78,7 +78,8 @@ namespace funkgui
 
         virtual void   setUnboundedDrag(bool on) = 0;    // enableUnboundedMouseMovement(true, true) in EditorHost
         virtual void   showParamMenu(ParamPort&, float x, float y) = 0;   // host context menu for a parameter
-        virtual void   nudgeFullRate() = 0;              // FramePump::nudgeFullRate
+        virtual void   nudgeFullRate() = 0;              // EditorHost: FramePump::nudgeFullRate(this), this
+                                                         // editor's next frame at the next tick (0.25.0)
         virtual double nowSeconds() const = 0;           // wall clock (EditorHost) or simulated (HeadlessHost)
 
         // A batch of writes to several parameters (K2 #23; G2 addition). GestureController::tapMany brackets its
