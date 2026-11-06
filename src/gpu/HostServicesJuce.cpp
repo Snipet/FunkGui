@@ -13,8 +13,13 @@
 // - 0.25.0: every field of the request reaches JUCE. The rows through MenuLook::popupMenuFor (headers, submenus, whose
 //   chosen id JUCE returns from any level, radio items, shortcuts); selectedId as JUCE's initially selected item that
 //   must be visible (a top-level one: JUCE looks no deeper); minWidth as JUCE's minimum width, the Panel's px under
-//   the zoom over JUCE's scale for the menu, plus the look's margins; the anchor through MenuLook::targetAreaFor. The
-//   menu has one column, so a long one scrolls (MenuLook).
+//   the zoom plus the look's margins; the anchor through MenuLook::targetAreaFor. The menu has one column, so a long
+//   one scrolls (MenuLook).
+// - JUCE's scale for the menu (Component::getApproximateScaleFactorForComponent of the owner: a host's content scale
+//   applied to the editor as a transform, for one) is the owner's px to the screen's, and JUCE scales the menu's
+//   window by it too: the window's px, which JUCE's minimum width is in, are the owner's. So minWidth under the zoom
+//   is the panel's width as it is, and only the anchor, which is on the screen, is converted (the margin round it is
+//   the window's, so targetAreaFor scales it).
 // - JUCE has no handle on one popup menu, only PopupMenu::dismissAllActiveMenus(), which closes every menu of the
 //   process and takes this look off them. It is called only while a menu of this host is showing: for dismissMenus(),
 //   for a second showMenu and for letGo(). The dismissed menu's own JUCE callback arrives later with 0 and finds its
@@ -72,25 +77,7 @@ namespace funkgui
 
         juce::PopupMenu m = MenuLook::popupMenuFor(request);
         m.setLookAndFeel(look_.get());
-        // The Panel's logical px to the editor's (the UI zoom), then to the screen; then the target that puts the
-        // look's panel, not its shadow's margin, against it (JUCE scales the menu by `menuScale`).
-        const Rect& r = request.anchor;
-        const juce::Rectangle<int> anchor = owner_.localAreaToGlobal(
-            juce::Rectangle<float>(r.x * scale, r.y * scale, r.w * scale, r.h * scale).toNearestInt());
-        const float menuScale = juce::Component::getApproximateScaleFactorForComponent(&owner_);
-        const juce::Rectangle<int> area = look_->targetAreaFor(anchor, menuScale);
-        // One column, which scrolls (MenuLook); a dropdown's width and current choice.
-        juce::PopupMenu::Options options = juce::PopupMenu::Options()
-                                               .withTargetComponent(&owner_)
-                                               .withTargetScreenArea(area)
-                                               .withMaximumNumColumns(1);
-        if (request.minWidth > 0.0f)
-        {
-            const float panelPx = request.minWidth * scale / (menuScale > 0.0f ? menuScale : 1.0f);
-            options = options.withMinimumWidth(juce::roundToInt(panelPx) + 2 * look_->shadowPx());
-        }
-        if (request.selectedId > 0)
-            options = options.withInitiallySelectedItem(request.selectedId).withItemThatMustBeVisible(request.selectedId);
+        const juce::PopupMenu::Options options = menuOptions(request, *look_, owner_, scale);
 
         Pending& p = *pending_;
         const uint32_t serial = ++p.menuSerial;
@@ -114,6 +101,27 @@ namespace funkgui
                         });
         p.asking = false;
         return true;
+    }
+
+    juce::PopupMenu::Options HostServicesJuce::menuOptions(const MenuRequest& request, const MenuLook& look,
+                                                           juce::Component& owner, float scale)
+    {
+        // The Panel's logical px to the owner's (the UI zoom), then to the screen; then the target that puts the look's
+        // panel, not its shadow's margin, against it.
+        const Rect& r = request.anchor;
+        const juce::Rectangle<int> anchor = owner.localAreaToGlobal(
+            juce::Rectangle<float>(r.x * scale, r.y * scale, r.w * scale, r.h * scale).toNearestInt());
+        const float menuScale = juce::Component::getApproximateScaleFactorForComponent(&owner);
+        // One column, which scrolls (MenuLook); a dropdown's width and current choice.
+        juce::PopupMenu::Options options = juce::PopupMenu::Options()
+                                               .withTargetComponent(&owner)
+                                               .withTargetScreenArea(look.targetAreaFor(anchor, menuScale))
+                                               .withMaximumNumColumns(1);
+        if (request.minWidth > 0.0f)       // in the window's px, which are the owner's (the comment at the top)
+            options = options.withMinimumWidth(juce::roundToInt(request.minWidth * scale) + 2 * look.shadowPx());
+        if (request.selectedId > 0)
+            options = options.withInitiallySelectedItem(request.selectedId).withItemThatMustBeVisible(request.selectedId);
+        return options;
     }
 
     void HostServicesJuce::dismissMenus()

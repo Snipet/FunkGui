@@ -11,23 +11,37 @@
 //   of the process, and HardwareReverb opens its own on ownerComponent()). That menu is shown inside a component that
 //   is on no desktop, so it needs a display and no window; the last row dismisses it as the host must not, to show
 //   that the rows before it would have seen it;
-// - still answers ownerComponent() with itself (HardwareReverb anchors its own menus there).
+// - still answers ownerComponent() with itself (HardwareReverb anchors its own menus there);
+// - options.*: gives JUCE every field of a request it takes (HostServicesJuce::menuOptions, which showMenu uses), over
+//   an owner under a transform of 1 and of 1.5 (a host's content scale, which JUCE's scale for the menu follows) at a
+//   UI zoom of 1 and 1.25: the owner as the target, the target area round the anchor on screen, one column, selectedId
+//   initially selected and kept visible, minWidth under the zoom plus the look's margins (in the window's px, which are
+//   the owner's), and none of those last two for a request without them. The menu is then shown with those options
+//   inside the owner, which stands for the window JUCE scales by the same factor (on no desktop, so with no window):
+//   a long one is one column that scrolls, and its panel is as wide on screen as the anchor and starts where it does.
 // A menu that shows, its dismissal, replacement and the editor leaving its window are fg.host.services.live (a window
-// server); the chooser and the clipboard are tried by hand in the gallery app's "services" section. Spec rows only.
+// server), and so are the selected row and the width on a real window; the chooser and the clipboard are tried by
+// hand in the gallery app's "services" section. Spec rows only.
 
 #include <funkgui/a11y/A11yItem.h>
 #include <funkgui/canvas/Canvas.h>
 #include <funkgui/core/Theme.h>
 #include <funkgui/gpu/EditorHost.h>
+#include <funkgui/juce/MenuLook.h>
 #include <funkgui/panel/HostServices.h>
 #include <funkgui/panel/Panel.h>
 #include <funkgui/test/Harness.h>
+
+#include "../../src/gpu/HostServicesJuce.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -117,6 +131,19 @@ namespace
             return modal != nullptr && modal->getParentComponent() == &parent;
         }
     };
+
+    // A dropdown's list: 40 rows, the 30th the current choice, as wide as its 160 px trigger at least. The trigger is
+    // in from the owner's edges, which JUCE keeps a menu shown inside it within (less the menu's border).
+    funkgui::MenuRequest longMenu()
+    {
+        funkgui::MenuRequest r;
+        for (int i = 1; i <= 40; ++i)
+            r.items.push_back({ i, "Item " + std::to_string(i) });
+        r.anchor = { 40.0f, 30.0f, 160.0f, 20.0f };
+        r.selectedId = 30;
+        r.minWidth = 160.0f;
+        return r;
+    }
 }
 
 int main(int argc, char** argv)
@@ -179,5 +206,64 @@ int main(int argc, char** argv)
         const bool dismissed = juce::PopupMenu::dismissAllActiveMenus();
         P.eq("juce_menu.a_dismissal_is_seen", dismissed && !juceMenu->open(), 1);
     }
+
+    // ---- the options of a request that is taken ---------------------------------------------------------------------
+    using funkgui::MenuLook;
+    for (const int scalePct : { 100, 150 })
+        for (const int zoomPct : { 100, 125 })
+        {
+            const float menuScale = static_cast<float>(scalePct) / 100.0f, zoom = static_cast<float>(zoomPct) / 100.0f;
+            const std::string k = "options.scale" + std::to_string(scalePct) + ".zoom" + std::to_string(zoomPct) + ".";
+            juce::Component owner;                       // wide enough that JUCE would take more columns if it could
+            owner.setBounds(0, 0, 600, 300);
+            owner.setTransform(juce::AffineTransform::scale(menuScale));
+            MenuLook look(funkgui::Theme::graphite());
+            const int m = look.shadowPx();
+            const funkgui::MenuRequest request = longMenu();
+            const juce::PopupMenu::Options o = funkgui::HostServicesJuce::menuOptions(request, look, owner, zoom);
+            const funkgui::Rect& a = request.anchor;
+            const juce::Rectangle<int> anchor = owner.localAreaToGlobal(
+                juce::Rectangle<float>(a.x * zoom, a.y * zoom, a.w * zoom, a.h * zoom).toNearestInt());
+            P.eq(k + "menu_scale_is_the_owners",
+                 juce::Component::getApproximateScaleFactorForComponent(&owner) == menuScale, 1);
+            P.eq(k + "target_component", o.getTargetComponent() == &owner, 1);
+            P.eq(k + "target_area", o.getTargetScreenArea() == look.targetAreaFor(anchor, menuScale), 1);
+            P.eq(k + "one_column", o.getMaximumNumColumns(), 1);
+            P.eq(k + "selected_and_visible", o.getInitiallySelectedItemId() == 30 && o.getItemThatMustBeVisible() == 30,
+                 1);
+            P.eq(k + "min_width", o.getMinimumWidth(), juce::roundToInt(160.0f * zoom) + 2 * m);
+            funkgui::MenuRequest plain = request;
+            plain.selectedId = 0;
+            plain.minWidth = 0.0f;
+            const juce::PopupMenu::Options none = funkgui::HostServicesJuce::menuOptions(plain, look, owner, zoom);
+            P.eq(k + "unset", none.getMinimumWidth() == 0 && none.getInitiallySelectedItemId() == 0
+                                  && none.getItemThatMustBeVisible() == 0, 1);
+
+            if (juce::Desktop::getInstance().getDisplays().getPrimaryDisplay() == nullptr)
+                continue;                                // JUCE places a menu on a display
+            juce::PopupMenu menu = MenuLook::popupMenuFor(request);
+            menu.setLookAndFeel(&look);
+            menu.showMenuAsync(o.withParentComponent(&owner), [](int) {});
+            juce::Component* window = nullptr;
+            for (juce::Component* c : owner.getChildren())
+                if (c->getName() == "menu")
+                    window = c;
+            if (P.eq(k + "shown", window != nullptr, 1))
+            {
+                bool oneColumn = window->getNumChildComponents() == 40;
+                for (const juce::Component* row : window->getChildren())
+                    oneColumn = oneColumn && row->getX() == 0 && row->getWidth() == window->getWidth();
+                P.eq(k + "shown_one_column", oneColumn, 1);
+                P.eq(k + "shown_scrolls", window->getHeight() < 40 * MenuLook::kRowPx, 1);
+                // The panel (the window less the look's margins) on screen, against the anchor on screen.
+                const juce::Rectangle<int> panel = owner.localAreaToGlobal(window->getBounds().reduced(m));
+                std::printf("%spanel on screen %d %d %d %d, anchor %d %d %d %d\n", k.c_str(), panel.getX(),
+                            panel.getY(), panel.getWidth(), panel.getHeight(), anchor.getX(), anchor.getY(),
+                            anchor.getWidth(), anchor.getHeight());
+                P.eq(k + "shown_panel_as_wide_as_anchor", std::abs(panel.getWidth() - anchor.getWidth()) <= 1, 1);
+                P.eq(k + "shown_panel_left_on_anchor", std::abs(panel.getX() - anchor.getX()) <= 1, 1);
+            }
+            juce::PopupMenu::dismissAllActiveMenus();   // its window goes at JUCE's shutdown, after the look
+        }
     return P.finish();
 }

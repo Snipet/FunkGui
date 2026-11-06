@@ -21,6 +21,11 @@
 //   window.*     the editor is taken out of its window with a menu and a chooser pending: both are closed, neither runs
 //   destroy.*    the editor is destroyed with a menu and a chooser pending: both are closed, neither runs
 //   chooser.*    a second chooseFiles replaces the first (asked back to back, so no dialog gets to open)
+//   scale<p>.*   a request's fields on a real menu window (HostServicesJuce over an owner in a borderless window,
+//                under a transform of p %, which JUCE's scale for the menu follows, at a UI zoom of 1.25): a long
+//                list is one column that scrolls, the selected row opens highlighted and between the scroll strips,
+//                and the panel (the window less the look's margins) is as wide on screen as the anchor and starts
+//                where it does; the host then goes before JUCE deletes the dismissed menu's window
 // A callback that was dropped is checked where it is dropped (its token has expired, so it can never run after that);
 // the run loop still turns afterwards, so JUCE's own late callback of each closed menu arrives and must find nothing.
 // "Open" and "closed" are JUCE's count of modal components, read with no run-loop turn: a menu's window and a chooser
@@ -30,16 +35,22 @@
 #include <funkgui/canvas/Canvas.h>
 #include <funkgui/core/Theme.h>
 #include <funkgui/gpu/EditorHost.h>
+#include <funkgui/juce/MenuLook.h>
 #include <funkgui/panel/HostServices.h>
 #include <funkgui/panel/Panel.h>
 #include <funkgui/test/Harness.h>
+
+#include "../../src/gpu/HostServicesJuce.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <CoreFoundation/CoreFoundation.h>
 
+#include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <utility>
@@ -172,6 +183,17 @@ namespace
         return true;
     }
 
+    // The menu window's row index that holds JUCE's accessibility focus (JUCE gives it to a row as it highlights it),
+    // or -1.
+    int highlighted(juce::Component& window)
+    {
+        for (int i = 0; i < window.getNumChildComponents(); ++i)
+            if (const juce::AccessibilityHandler* h = window.getChildComponent(i)->getAccessibilityHandler())
+                if (h->hasFocus(false))
+                    return i;
+        return -1;
+    }
+
     struct Rig
     {
         PlainPanel* panel = nullptr;
@@ -280,7 +302,8 @@ int main(int argc, char** argv)
         P.eq("destroy.menu_dropped", m.dropped(), 1);
         P.eq("destroy.chooser_dropped", i.dropped(), 1);
         P.eq("destroy.both_closed", modalCount(), 0);
-        spin(0.3);                                   // whatever JUCE still had queued finds nothing to call
+        spin(0.3);                                   // whatever JUCE still had queued finds nothing to call, and the
+                                                     // menu's window, deleted now, nothing of the look's
         userDismisses();
     }
 
@@ -317,6 +340,70 @@ int main(int argc, char** argv)
         P.eq("window.serves_again", taken && back.pending(), 1);
         userDismisses();
         P.eq("window.again_ran_once_with_zero", back.ranOnceWithZero(), 1);
+        top.removeFromDesktop();
+    }
+
+    // ---- a request's fields on a real menu window -------------------------------------------------------------------
+    using funkgui::MenuLook;
+    for (const int scalePct : { 100, 150 })
+    {
+        const float menuScale = static_cast<float>(scalePct) / 100.0f, zoom = 1.25f;
+        const std::string k = "scale" + std::to_string(scalePct) + ".";
+        juce::Component top, owner;
+        top.setOpaque(true);
+        top.setBounds(200, 160, 560, 360);           // screen coordinates: a borderless window
+        owner.setBounds(10, 10, 300, 200);
+        owner.setTransform(juce::AffineTransform::scale(menuScale));
+        top.addAndMakeVisible(owner);
+        top.setVisible(true);
+        top.addToDesktop(0);
+        spin(0.2);
+        P.eq(k + "menu_scale_is_the_owners",
+             juce::Component::getApproximateScaleFactorForComponent(&owner) == menuScale, 1);
+        {
+            funkgui::HostServicesJuce services(owner);
+            funkgui::MenuRequest request;
+            for (int i = 1; i <= 100; ++i)
+                request.items.push_back({ i, "Item " + std::to_string(i) });
+            request.anchor = { 10.0f, 10.0f, 120.0f, 20.0f };
+            request.selectedId = 70;
+            request.minWidth = 120.0f;
+            Call c;
+            P.eq(k + "taken", services.showMenu(request, c.menu(), zoom), 1);
+            juce::Component* w = juce::Component::getCurrentlyModalComponent();
+            if (P.eq(k + "open", w != nullptr && w->getPeer() != nullptr, 1))
+            {
+                const int m = juce::Desktop::canUseSemiTransparentWindows() ? MenuLook::kShadowPx : 0;
+                const juce::Rectangle<int> anchor = owner.localAreaToGlobal(
+                    juce::Rectangle<float>(10.0f * zoom, 10.0f * zoom, 120.0f * zoom, 20.0f * zoom).toNearestInt());
+                const juce::Rectangle<int> win = w->getScreenBounds();
+                const float margin = static_cast<float>(m) * menuScale;
+                std::printf("%swindow on screen %d %d %d %d (own px %d x %d), anchor %d %d %d %d\n", k.c_str(), win.getX(),
+                            win.getY(), win.getWidth(), win.getHeight(), w->getWidth(), w->getHeight(), anchor.getX(),
+                            anchor.getY(), anchor.getWidth(), anchor.getHeight());
+                P.eq(k + "window_scaled_by_menu_scale",
+                     std::abs(static_cast<float>(win.getWidth()) - static_cast<float>(w->getWidth()) * menuScale) <= 1.0f,
+                     1);
+                P.eq(k + "panel_as_wide_as_anchor",
+                     std::abs(static_cast<float>(win.getWidth()) - 2.0f * margin - static_cast<float>(anchor.getWidth()))
+                         <= 2.0f,
+                     1);
+                P.eq(k + "panel_left_on_anchor",
+                     std::abs(static_cast<float>(win.getX()) + margin - static_cast<float>(anchor.getX())) <= 2.0f, 1);
+                bool oneColumn = w->getNumChildComponents() == 100;
+                for (const juce::Component* row : w->getChildren())
+                    oneColumn = oneColumn && row->getX() == 0;
+                P.eq(k + "one_column", oneColumn, 1);
+                P.eq(k + "scrolls", w->getHeight() < 100 * MenuLook::kRowPx, 1);
+                const juce::Component* chosen = w->getNumChildComponents() > 69 ? w->getChildComponent(69) : nullptr;
+                P.eq(k + "selected_highlighted", highlighted(*w), 69);
+                P.eq(k + "selected_between_strips", chosen != nullptr && chosen->isVisible() && chosen->getY() >= 24
+                                                        && chosen->getBottom() <= w->getHeight() - 24, 1);
+            }
+            services.dismissMenus();
+            P.eq(k + "dismissed", c.dropped() && modalCount() == 0, 1);
+        }                                            // the host and its look go first
+        spin(0.3);                                   // JUCE deletes the dismissed menu's window
         top.removeFromDesktop();
     }
     return P.finish();
