@@ -9,8 +9,9 @@ Golden impact: **none** (no golden file changed; nothing records, draws, dumps o
 draws: a skipped frame is one that would have drawn the same picture). New tests: `fg.editorhost.skip`,
 `fg.framepump.cadence`, `fg.editorhost.cadence`, `fg.shader.check`, `fg.shader.texture`, `fg.shader.sampler`,
 `fg.menulook`, with new rows in `fg.texteditor`, `fg.gpu.picture` and `fg.host.services.live`. FCompressor green
-against it (agent and agent-gui). Linux: the changes there are plain C++ or a stated fallback (below). Windows: not
-compiled here.
+against it (agent and agent-gui). Linux: the changes there are plain C++ or a stated fallback (below); `nojuce` and
+`agent-gui` pass on x86-64 (a container, under Xvfb with no compositor, so menus there have no shadow margin).
+Windows: not compiled here.
 
 - **Unchanged frames are not drawn** (macOS, Windows): `Panel::needsDraw()` (new, default `true`) lets a Panel say
   nothing it draws has changed; the editor then records, uploads and submits nothing and leaves its last picture up.
