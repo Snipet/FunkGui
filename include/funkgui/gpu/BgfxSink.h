@@ -11,9 +11,11 @@
 // sequential mode, so the drawing order is the recording order. Every draw of the frame reads the one transient
 // vertex buffer: the primitives' vertices, then each shader draw's six (funkgui::expandShader), in list order. A
 // shader draw's state is the UI's (BGFX_STATE_WRITE_RGB | WRITE_A | BLEND_ALPHA), its scissor funkgui::shaderPixels
-// (rect ∩ clip in device px), its uniforms u_viewSize (the UI's value), u_rect and u_params, and it binds no texture.
-// One whose program is missing or was refused, or whose scissor is empty, makes no draw call. A frame without shader
-// draws is submitted exactly as before v0.19.0: one draw call, the same calls in the same order.
+// (rect ∩ clip in device px), its uniforms u_viewSize (the UI's value), u_rect and u_params, and it binds no texture
+// unless its shader declares samplers (0.25.0: then each sampler's bound texture at its stage, or a 1 x 1 texture of
+// zeros; gpu/ShaderLibrary.h "Textures"). One whose program is missing or was refused, or whose scissor is empty,
+// makes no draw call. A frame without shader draws is submitted exactly as before v0.19.0: one draw call, the same
+// calls in the same order.
 //
 // v0.20.0, image draws (Canvas::image; canvas/PrimList.h ImageDraw): split out of the runs the same way (drawSteps,
 // in recording order with the shader draws), each one draw call of FunkGui's image program (shaders/vs_custom.sc with

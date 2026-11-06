@@ -149,6 +149,7 @@ namespace funkgui
             bgfx::setUniform(ctx.uViewSize(), viewSize);
             bgfx::setUniform(shaders::detail::uRect(), rect);
             bgfx::setUniform(shaders::detail::uParams(), s.params, 4);
+            shaders::detail::bindTextures(s.id);     // 0.25.0: its samplers' textures; none without samplers
             bgfx::setScissor(px16(px.x), px16(px.y), px16(px.w), px16(px.h));
             bgfx::setVertexBuffer(0, &tvb, primVertices + step.first * static_cast<uint32_t>(kVerticesPerPrim),
                                   static_cast<uint32_t>(kVerticesPerPrim));

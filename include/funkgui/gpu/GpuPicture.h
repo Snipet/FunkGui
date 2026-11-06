@@ -7,9 +7,10 @@
 //
 // ---- What is drawn --------------------------------------------------------------------------------------------------
 // The PrimList (what Canvas::end() returns: an editor's frame, HeadlessHost's frame) is submitted by BgfxSink::submit
-// itself, with BgfxContext's program, font texture, custom programs (gpu/ShaderLibrary.h) and picture textures, the
-// same state and the same draw calls in the same order as an editor's frame, into an offscreen BGRA8 render target (the
-// format of an editor's drawable) cleared to info.clear, which is then copied to a read-back texture and read.
+// itself, with BgfxContext's program, font texture, custom programs (gpu/ShaderLibrary.h; 0.25.0: with their bound
+// textures) and picture textures, the same state and the same draw calls in the same order as an editor's frame, into
+// an offscreen BGRA8 render target (the format of an editor's drawable) cleared to info.clear, which is then copied to
+// a read-back texture and read.
 // - Size and scale are the list's own: round(info.logicalW * dpi) x round(info.logicalH * dpi) device px, SoftRaster's
 //   size (a dpi <= 0.05 or not finite draws at 1, as Canvas::begin). Record the frame at the scale wanted
 //   (FrameInfo::dpi, HeadlessHost's dpi). A shader's clock (u_viewSize.w) is info.seconds.

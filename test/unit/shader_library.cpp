@@ -12,10 +12,10 @@
 //   and declares the three uniforms; bgfxShaderSh() is bgfx's header.
 // - target.*: empty strings while bgfx is not running.
 // - set.*: this platform's test binary is registered (on macOS after Metal compiled its code), replaced, and removed;
-//   each refusal (no bytes, not a shader, cut short, a vertex shader, other varyings, a sampler, an unknown uniform, a
-//   resized u_params, the other renderer's code, and on macOS code Metal refuses or without bgfx's entry point) is
-//   false with a reason and leaves the id as it was. Without a Metal device (a VM) the rows that need one are skipped
-//   and noted.
+//   each refusal (no bytes, not a shader, cut short, a vertex shader, other varyings, u_params as a sampler, an unknown
+//   uniform, a resized u_params, the other renderer's code, and on macOS code Metal refuses or without bgfx's entry
+//   point) is false with a reason and leaves the id as it was. Without a Metal device (a VM) the rows that need one are
+//   skipped and noted.
 
 #include <funkgui/gpu/ShaderLibrary.h>
 #include <funkgui/shaders/fs_custom_test.mtl.h>
@@ -202,7 +202,8 @@ int main(int argc, char** argv)
     {
         Bytes sampler = mine;
         sampler[params->typeAt] = static_cast<uint8_t>((sampler[params->typeAt] & 0xF0) | 0);   // Sampler
-        refused(P, "set.sampler", 2, sampler, "samples a texture");
+        // 0.25.0: samplers are taken (fg.shader.texture), but not one named u_params.
+        refused(P, "set.params_sampler", 2, sampler, "uniform vec4 u_params[4];");
         Bytes resized = mine;
         resized[params->typeAt + 1] = 16;                        // u_params[16]
         refused(P, "set.resized_params", 2, resized, "uniform vec4 u_params[4];");

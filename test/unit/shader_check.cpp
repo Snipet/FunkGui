@@ -204,7 +204,7 @@ int main(int argc, char** argv)
     {
         Bytes sampler = mine;
         sampler[typeAt] = static_cast<uint8_t>(sampler[typeAt] & 0xF0);
-        refusal(P, "check.sampler", sampler, "samples a texture");
+        refusal(P, "check.params_sampler", sampler, "uniform vec4 u_params[4];");   // a sampler so named
         Bytes resized = mine;
         resized[typeAt + 1] = 16;
         refusal(P, "check.resized_params", resized, "uniform vec4 u_params[4];");

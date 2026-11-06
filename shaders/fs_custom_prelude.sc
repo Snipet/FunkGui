@@ -7,7 +7,8 @@ $input v_uv, v_px
 //   u_viewSize  vec4  xy the view's logical size, z one physical px in logical px, w seconds since the editor opened
 //   u_rect      vec4  the rect: x, y, w, h in logical px
 //   u_params    vec4[4]  the 16 params of Canvas::shader: param i is u_params[i / 4][i % 4] (unset ones are 0)
-// No textures, and no other uniforms: FunkGui sets only these.
+// Textures (FunkGui 0.25.0): up to four SAMPLER2D(s_name, stage), stage 0 to 3, each reading the texture the host
+// bound to s_name (shaders::bindTexture). No other uniforms: FunkGui sets only these.
 
 #include <bgfx_shader.sh>
 

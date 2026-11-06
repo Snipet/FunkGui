@@ -24,10 +24,12 @@
 //                      wantsFullRate() true while it should move)
 //     u_rect           the shader draw's rect: x, y, w, h in logical px (Canvas::shader's r, before any clip)
 //     u_params[4]      the 16 params of Canvas::shader: param i is u_params[i / 4][i % 4]; those not given are 0
+//   Samplers (0.25.0): up to four SAMPLER2D(name, stage), stage 0 to 3, each reading the texture a host bound to that
+//   name for this id ("Textures" below).
 //   Output: gl_FragColor, straight (not premultiplied) RGBA, blended over what is beneath as the primitives are
-//   (BGFX_STATE_BLEND_ALPHA: rgb = src.rgb * a + dst.rgb * (1 - a)). No depth, no culling, no textures: set() refuses
-//   a shader that samples a texture or reads a uniform neither FunkGui nor bgfx sets (bgfx_shader.sh's predefined
-//   ones, u_viewRect and the rest, are bgfx's and allowed), since nothing would ever be bound or set for it.
+//   (BGFX_STATE_BLEND_ALPHA: rgb = src.rgb * a + dst.rgb * (1 - a)). No depth, no culling: set() refuses a shader that
+//   reads a uniform neither FunkGui nor bgfx sets (bgfx_shader.sh's predefined ones, u_viewRect and the rest, are
+//   bgfx's and allowed), or a texture other than a 2D sampler as above: nothing would ever be set or bound for it.
 //   The rect is drawn whole and the clip in force when it was recorded is a scissor, so v_uv never depends on a clip.
 //
 // ---- Compiling it (the host's side) ---------------------------------------------------------------------------------
@@ -55,6 +57,29 @@
 // arguments gets it there first. On Linux and Windows check() runs set()'s quick checks, on any thread too: no driver
 // compile there (the Linux and Windows paragraph below).
 //
+// ---- Textures (0.25.0) ----------------------------------------------------------------------------------------------
+// A host registers texels under a texture id (setTexture: RGBA8 or R8, from memory) and binds that id to a sampler's
+// name for one shader id (bindTexture); every draw of that shader then samples it, on Metal, Direct3D 11 and Vulkan
+// alike: bgfx binds it at the sampler's stage with the texture's own sampling (linear or nearest, clamped or
+// repeated; one level, no mipmaps). Message thread only, as set().
+//   - RGBA8 reads as (r, g, b, a) / 255, R8 as (r / 255, 0, 0, 1): the texels as given (FunkGui converts nothing, so a
+//     host that stores premultiplied colour reads premultiplied colour). Row 0 is the top: v = 0, as v_uv's.
+//   - A sampler with no binding, or bound to an id with no texture (or one bgfx refused), reads (0, 0, 0, 0): FunkGui
+//     binds a 1 x 1 texture of zeros there, never nothing.
+//   - A binding belongs to (shader id, sampler name), not to a binary: set() replacing id's shader keeps it, remove(id)
+//     drops id's. Many shaders may bind one texture id. removeTexture() keeps the bindings to it, which read zeros
+//     until a texture is set under that id again; setTexture() of a registered id replaces its texels.
+//   - The GPU textures are process-wide, one per texture id for every editor, made at their first draw after
+//     setTexture() (and after every bgfx start) and destroyed by removeTexture(), a replacement or bgfx's shutdown; the
+//     texels stay in the registry, as the shaders' binaries do.
+//   - set() and check() take a sampler that is a 2D sampler of floats (SAMPLER2D: not 3D, cube, array, shadow or
+//     integer) at a stage 0 to 3, one a stage, named otherwise than FunkGui's and bgfx's uniforms. The stage is the
+//     Metal code's [[texture(n)]] on macOS, the SPIR-V binding less bgfx's shift of 2 on Linux, and the sampler's
+//     register on Windows. Direct3D's reflection does not say a sampler's kind, so Windows checks the stage only; and
+//     it lists sampler states, not textures, so there a texture read with texelFetch alone is not in the binary and
+//     reads zeros: read it with texture2D or texture2DLod at least once (the stated fallback).
+//   - Where shaders are not drawn (SoftRaster's placeholder, the web) textures change nothing.
+//
 // ---- Lifetime -------------------------------------------------------------------------------------------------------
 // The registry keeps each id's binary. bgfx itself comes and goes with the editors (BgfxContext shuts it down when the
 // last one closes, and rebuilds it when the primary one closes): its programs are destroyed with it, and each is built
@@ -71,6 +96,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace funkgui::shaders
 {
@@ -88,12 +114,13 @@ namespace funkgui::shaders
     // The bytes are copied; the caller's may go. Returns false, with why set to a reason a host can show (or hand back
     // to whoever wrote the shader: one sentence, followed by Metal's compile log when Metal refused the code), when the
     // binary is empty or not a bgfx shader, is not a fragment shader, is of a shader format this bgfx does not read,
-    // does not take `$input v_uv, v_px` with varyingDef()'s varyings, samples a texture, reads a uniform neither
-    // FunkGui nor bgfx sets (or one of FunkGui's with another type or size), carries code for another renderer, does
-    // not compile (macOS: Metal's own compiler, as bgfx will call it, unless check() or set() accepted the same code
-    // lately: "Checking it off the message thread" above), or bgfx refuses to create the shader or link the
-    // program (only checked while bgfx runs). On false the id keeps what it had (its previous program, or nothing). On
-    // true, why is cleared and the next frame draws the new program.
+    // does not take `$input v_uv, v_px` with varyingDef()'s varyings, samples a texture otherwise than "Textures"
+    // above allows, reads a uniform neither FunkGui nor bgfx sets (or one of FunkGui's with another type or size),
+    // carries code for another renderer, does not compile (macOS: Metal's own compiler, as bgfx will call it, unless
+    // check() or set() accepted the same code lately: "Checking it off the message thread" above), or bgfx refuses to
+    // create the shader or link the program (only checked while bgfx runs). On false the id keeps what it had (its
+    // previous program, or nothing). On true, why is cleared and the next frame draws the new program; id's texture
+    // bindings are kept.
     bool set(uint32_t id, const void* fragmentBinary, uint32_t size, std::string& why);
 
     // set()'s checks without registering anything (0.25.0): on any thread, at any time, alongside anything (set() and
@@ -104,7 +131,8 @@ namespace funkgui::shaders
     // above: the last 256 codes used).
     bool check(const void* fragmentBinary, uint32_t size, std::string& why);
 
-    // Unregisters id and destroys its program; shader draws of it then draw nothing. An unknown id is ignored.
+    // Unregisters id, destroys its program and drops its texture bindings; shader draws of it then draw nothing. An
+    // unknown id is ignored.
     void remove(uint32_t id);
 
     // Whether a program is registered under id (set() succeeded and remove() has not been called since).
@@ -122,4 +150,45 @@ namespace funkgui::shaders
     // The pinned bgfx's src/bgfx_shader.sh, exactly: the header every .sc file includes, for a host that compiles where
     // bgfx's sources are not (write it beside the shader and pass that directory as -i).
     const char* bgfxShaderSh();
+
+    // ---- Textures (0.25.0; "Textures" above) ------------------------------------------------------------------------
+    enum class TextureFormat : uint8_t
+    {
+        rgba8,                                   // 4 bytes a texel (r, g, b, a), read as (r, g, b, a) / 255
+        r8,                                      // 1 byte a texel (r), read as (r / 255, 0, 0, 1)
+    };
+
+    struct TextureSampling
+    {
+        bool nearest = false;                    // the nearest texel; else bilinear between the four nearest
+        bool repeat = false;                     // u and v wrap outside 0..1; else clamped to the edge texels
+    };
+
+    inline constexpr int kMaxTextureSide = 4096;     // the largest width and height setTexture() takes
+    inline constexpr int kMaxSamplerStages = 4;      // a sampler's stage is 0 to kMaxSamplerStages - 1
+
+    // Registers (or replaces) textureId's texels: w x h of format, row y at texels + y * strideBytes (0 = tightly
+    // packed: w * 4 for rgba8, w for r8), the first row the top. The texels are copied; the caller's may go. Returns
+    // false, and changes nothing, when w or h is outside 1..kMaxTextureSide, texels is null, or strideBytes is neither
+    // 0 nor at least a row's bytes. The next frame draws the new texels wherever a shader binds textureId.
+    bool setTexture(uint32_t textureId, int w, int h, TextureFormat format, const void* texels, int strideBytes = 0,
+                    TextureSampling sampling = {});
+
+    // Unregisters textureId and destroys its GPU texture; the samplers bound to it read (0, 0, 0, 0). Its bindings
+    // stay. An unknown id is ignored.
+    void removeTexture(uint32_t textureId);
+
+    // Whether texels are registered under textureId (setTexture() succeeded and removeTexture() has not been called
+    // since).
+    bool hasTexture(uint32_t textureId);
+
+    // Binds textureId to the sampler named `sampler` (as in SAMPLER2D(sampler, stage)) of shaderId's shader, replacing
+    // what was bound there. Kept whether or not shaderId or textureId is registered yet (so a host may bind before
+    // set()) until unbindTexture() or remove(shaderId). Returns whether shaderId's shader, as registered now, has a
+    // sampler of that name: false for a name it does not declare (a binding no draw reads, until a shader that does
+    // is set under shaderId).
+    bool bindTexture(uint32_t shaderId, std::string_view sampler, uint32_t textureId);
+
+    // Drops the binding of shaderId's sampler `sampler`: it reads (0, 0, 0, 0). An unknown binding is ignored.
+    void unbindTexture(uint32_t shaderId, std::string_view sampler);
 }
