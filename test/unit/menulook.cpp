@@ -380,8 +380,11 @@ int main(int argc, char** argv)
         P.eq("target.panel_gap_under", r.getBottom() + m - a.getBottom(), MenuLook::kGapPx);
         P.eq("target.panel_gap_over", a.getY() - (r.getY() - m), MenuLook::kGapPx);
         const juce::Rectangle<int> point = look0.targetAreaFor({ 100, 200, 1, 1 });
-        P.eq("target.point_kept_whole", point.getHeight() >= 0 && point.getX() + m == 100
-                                            && point.getY() >= 199 && point.getY() <= 201, 1);
+        // With a margin wider than the gap, the point stays a point; with none (an opaque window: Linux without a
+        // compositor), the area grows by the gap round it, so the panel opens kGapPx under the point as under a button.
+        const bool pointKept = d > 0 ? point.getY() >= 199 && point.getY() <= 201
+                                     : point.getY() == 200 + d && point.getHeight() == 1 - 2 * d;
+        P.eq("target.point_kept_whole", point.getHeight() >= 0 && point.getX() + m == 100 && pointKept, 1);
         const juce::Rectangle<int> scaled = look0.targetAreaFor(a, 2.0f);
         P.eq("target.scaled_margin", scaled.getX(), 100 - 2 * m);
     }
@@ -619,9 +622,10 @@ int main(int argc, char** argv)
                         ++outside;
                 }
                 P.eq(k + "scrolls", win.getHeight() < 40 * MenuLook::kRowPx && win.getHeight() <= kind.canvasH, 1);
-                P.eq(k + "rows_in_margin_hidden", (m == 0 || hidden > 0) && outside == 0, 1);
+                // With no margin (an opaque window) no row is hidden: the window clips the rows scrolled past its edge.
+                P.eq(k + "rows_in_margin_hidden", m == 0 ? hidden == 0 : hidden > 0 && outside == 0, 1);
                 juce::Component* first = rowAt(s.window, 0);
-                P.eq(k + "wheel_scrolled", first != nullptr && first->getY() < 0 && !first->isVisible(), 1);
+                P.eq(k + "wheel_scrolled", first != nullptr && first->getY() < 0 && (m == 0 || !first->isVisible()), 1);
                 const float topStrip = static_cast<float>(win.getY() + (m + 24) / 2);
                 const float bottomStrip = static_cast<float>(win.getBottom() - (m + 24) / 2);
                 const juce::Rectangle<float> mid(static_cast<float>(panel.getCentreX()) - 6.0f, 0.0f, 12.0f, 0.0f);
