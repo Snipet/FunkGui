@@ -35,7 +35,8 @@
 //   mixed.*     a second editor (its layer counted) that changes every frame beside an idle one: each frame holds the
 //               busy editor's draw calls only (the idle editor's view gets no draw call or clear) and only the busy
 //               window's layer gives up a drawable, one a frame, so nothing is presented to the idle window; one frame
-//               of the idle editor adds its calls once and takes one drawable from its layer; the same with the
+//               of the idle editor (its change nudged, as input nudges it) adds its calls once and takes one drawable
+//               from its layer; the same with the
 //               editors' roles swapped (the busy one now the primary, bgfx's default swapchain); both idle, no
 //               bgfx::frame()
 //   closed.*    an editor closed while the others are idle: the pump still runs the frames that let its view go
@@ -142,6 +143,7 @@ namespace
         int  draws = 0;
         mutable int asked = 0;
         bool dirty = true, alwaysAsk = false, animate = false;
+        funkgui::HostServices* host = nullptr;
 
         void recolour()
         {
@@ -149,7 +151,7 @@ namespace
             dirty = true;
         }
 
-        void attach(funkgui::HostServices&) override {}
+        void attach(funkgui::HostServices& h) override { host = &h; }
         int  width() const override { return w_; }
         int  height() const override { return h_; }
         bool resizable() const override { return true; }
@@ -519,6 +521,8 @@ int main(int argc, char** argv)
             P.eq("mixed.idle_not_presented", since(a, sa).taken, 0);
 
             a.panel->recolour();
+            a.panel->host->nudgeFullRate();          // as input does: A's next frame at the next tick (0.25.0: a calm
+                                                     // editor otherwise runs at its own twelfth of a second)
             tickByHand();                            // frame 4: A and B
             P.eq("mixed.idle_drew_once", since(a, sa).draws, 1);
             P.eq("mixed.idle_presented_once", since(a, sa).taken, 1);
