@@ -482,7 +482,7 @@ if(FUNKGUI_WITH_BGFX)
   # they always were.
   # v0.20.0 added fs_image (Canvas::image's fragment shader, linked with vs_custom: canvas/PrimList.h ImageDraw).
   # 0.25.0 added a second test program, fs_texture_test (test/shaders/fs_texture_test.main.sc: custom shaders'
-  # samplers, fg.shader.texture), built the same way.
+  # samplers, fg.shader.texture and fg.shader.sampler), built the same way.
   set(_fg_shader_list vs_ui=vertex=${PROJECT_SOURCE_DIR}/shaders/vs_ui.sc=varying.def
                       fs_ui=fragment=${PROJECT_SOURCE_DIR}/shaders/fs_ui.sc=varying.def
                       vs_custom=vertex=${PROJECT_SOURCE_DIR}/shaders/vs_custom.sc=varying_custom.def

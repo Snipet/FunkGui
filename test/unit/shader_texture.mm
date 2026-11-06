@@ -1,24 +1,13 @@
 // FUNKGUI_TEST name=fg.shader.texture timeout=300 gpu=1
 //
-// fg.shader.texture (0.25.0; gpu/ShaderLibrary.h "Textures"): textures for custom shaders. The registry's own rules
-// with no bgfx, then a shader that samples known textures drawn for real by GPU pictures (renderGpuPicture: bgfx
-// headless on Metal, BgfxSink's draws, read back), its pixels checked. fs_texture_test is shaders/
-// fs_custom_prelude.sc + test/shaders/fs_texture_test.main.sc, compiled at build time as a host compiles one: two
-// samplers, s_tex at stage 0 and s_mask at stage 2. Without a Metal device (a VM) the rows that need one are skipped
-// and noted. Spec rows only.
+// fg.shader.texture (0.25.0; gpu/ShaderLibrary.h "Textures"): textures for custom shaders, drawn: a shader that
+// samples known textures drawn for real by GPU pictures (renderGpuPicture: bgfx headless on Metal, BgfxSink's draws,
+// read back), its pixels checked. fs_texture_test is shaders/fs_custom_prelude.sc + test/shaders/
+// fs_texture_test.main.sc, compiled at build time as a host compiles one: two samplers, s_tex at stage 0 and s_mask at
+// stage 2. The registry's rules and each compiler's sampler rules, which need no GPU, are fg.shader.sampler's, on
+// every host. Without a Metal device (a VM) the rows that need one are skipped and noted. Spec rows only.
 //
-// - api.*      setTexture() refuses a size outside 1..kMaxTextureSide, no texels or a short stride, changing nothing;
-//              takes RGBA8 and R8 (a stride wider than a row too); removeTexture() and unbindTexture() of unknown
-//              ones change nothing; bindTexture() before set() is kept and says false; the generation moves with
-//              every change and only then.
-// - samplers.* detail::samplers by each compiler's rules: the Metal and SPIR-V binaries give s_tex at 0 and s_mask at
-//              2; the SPIR-V table read as Direct3D 11's (stage = register) after its registers are rewritten; each
-//              refusal (another kind of texture, a stage of 4, two samplers at one stage, a sampler named after a
-//              uniform FunkGui sets, a buffer or image that is no sampler's part; on SPIR-V a shadow sampler, an
-//              integer one, a stage below the shift and a binary of version 10) with its reason.
-// - set.*      check() and set() take fs_texture_test; a texture of another kind is refused before Metal compiles it;
-//              u_params declared as a sampler is "declared otherwise"; bindTexture() says whether the shader has the
-//              sampler.
+// - set.*      the textures registered, fs_texture_test set under four ids (check() taking it first) and bound.
 // - plain.*    a picture of fs_custom_test (no samplers) makes no texture.
 // - draw.*     one picture (dpi 1): a 4 x 4 RGBA8 nearest texture fills 64 x 64 px, each texel 16 x 16 px exactly,
 //              row 0 at the top; an R8 texture at stage 2 reads (r, 0, 0, 1); a 2 x 1 linear one is interpolated
@@ -42,7 +31,6 @@
 #include <funkgui/gpu/ShaderLibrary.h>
 #include <funkgui/shaders/fs_custom_test.mtl.h>
 #include <funkgui/shaders/fs_texture_test.mtl.h>
-#include <funkgui/shaders/fs_texture_test.spv.h>
 #include <funkgui/test/Harness.h>
 #include <funkgui/text/FontService.h>
 
@@ -56,9 +44,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace T = funkgui::test;
@@ -81,7 +67,7 @@ namespace
 
     // Shader ids (fs_texture_test under each, bound differently) and texture ids.
     constexpr uint32_t kA = 21, kB = 22, kC = 23, kBare = 24, kPlain = 25;
-    constexpr uint32_t kGrid = 101, kRamp = 102, kTile = 103, kMask = 104, kNever = 199;
+    constexpr uint32_t kGrid = 101, kRamp = 102, kTile = 103, kMask = 104;
 
     // The 4 x 4 grid's texel (x, y): every one its own opaque colour.
     Col gridTexel(int x, int y)
@@ -190,70 +176,6 @@ namespace
         v = (py + 0.5 - r.y) / r.h * scale;
     }
 
-    bool patch(Bytes& b, std::string_view from, std::string_view to, std::size_t start = 0)
-    {
-        if (from.size() != to.size() || b.size() < from.size())
-            return false;
-        for (std::size_t i = start; i + from.size() <= b.size(); ++i)
-            if (std::memcmp(&b[i], from.data(), from.size()) == 0)
-            {
-                std::memcpy(&b[i], to.data(), to.size());
-                return true;
-            }
-        return false;
-    }
-
-    // Where a uniform's type byte is in a binary's table (shaderc v11: name size, name, type, num, reg index, reg
-    // count, tex info, tex format); 0 when absent.
-    std::size_t typeAt(const Bytes& b, std::string_view name)
-    {
-        std::size_t at = 12;
-        const unsigned count = static_cast<unsigned>(b[at]) | static_cast<unsigned>(b[at + 1]) << 8;
-        at += 2;
-        for (unsigned i = 0; i < count && at < b.size(); ++i)
-        {
-            const std::size_t n = b[at++];
-            const std::string_view here(reinterpret_cast<const char*>(&b[at]), n);
-            at += n;
-            if (here == name)
-                return at;
-            at += 10;
-        }
-        return 0;
-    }
-
-    void put16(Bytes& b, std::size_t at, uint16_t v)
-    {
-        b[at] = static_cast<uint8_t>(v & 0xFF);
-        b[at + 1] = static_cast<uint8_t>(v >> 8);
-    }
-
-    std::string list(const std::vector<D::Sampler>& s)
-    {
-        std::string out;
-        for (const D::Sampler& x : s)
-            out += (out.empty() ? "" : " ") + x.name + "@" + std::to_string(x.stage);
-        return out;
-    }
-
-    bool samplersAre(T::Probe& P, const std::string& key, const Bytes& b, D::Code code, std::string_view want)
-    {
-        std::vector<D::Sampler> got;
-        std::string why;
-        const bool ok = D::samplers(b.data(), static_cast<uint32_t>(b.size()), code, got, why);
-        std::printf("INFO     %s: %s%s\n", key.c_str(), list(got).c_str(), ok ? "" : (" refused: " + why).c_str());
-        return P.eq(key, ok && list(got) == want, 1);
-    }
-
-    bool samplersRefuse(T::Probe& P, const std::string& key, const Bytes& b, D::Code code, std::string_view needle)
-    {
-        std::vector<D::Sampler> got;
-        std::string why;
-        const bool ok = D::samplers(b.data(), static_cast<uint32_t>(b.size()), code, got, why);
-        std::printf("INFO     %s: %s\n", key.c_str(), why.c_str());
-        return P.eq(key, !ok && why.find(needle) != std::string::npos, 1);
-    }
-
     bool moved(uint64_t& gen)
     {
         const uint64_t now = D::generation();
@@ -267,105 +189,19 @@ int main(int argc, char** argv)
 {
     T::Probe P("fg.shader.texture", "", argc, argv);
     const Bytes mtl(fs_texture_test_mtl, fs_texture_test_mtl + sizeof fs_texture_test_mtl);
-    const Bytes spv(fs_texture_test_spv, fs_texture_test_spv + sizeof fs_texture_test_spv);
     {
         const juce::ScopedJuceInitialiser_GUI juceInit;      // the message thread (this one) and the font's bake
 
-        // ---- api: the texture registry --------------------------------------------------------------------------
-        uint64_t gen = D::generation();
+        // ---- set: the textures and the shaders the pictures draw ---------------------------------------------------
         const Bytes grid = rgba(4, 4, gridTexel);
-        P.eq("api.zero_width", S::setTexture(kGrid, 0, 4, S::TextureFormat::rgba8, grid.data()), 0);
-        P.eq("api.too_tall", S::setTexture(kGrid, 4, S::kMaxTextureSide + 1, S::TextureFormat::rgba8, grid.data()),
-             0);
-        P.eq("api.no_texels", S::setTexture(kGrid, 4, 4, S::TextureFormat::rgba8, nullptr), 0);
-        P.eq("api.short_stride", S::setTexture(kGrid, 4, 4, S::TextureFormat::rgba8, grid.data(), 15), 0);
-        P.eq("api.r8_short_stride", S::setTexture(kMask, 4, 1, S::TextureFormat::r8, kMaskTexels, 3), 0);
-        P.eq("api.refusals_change_nothing", !S::hasTexture(kGrid) && !S::hasTexture(kMask) && !moved(gen), 1);
-        P.eq("api.rgba8", S::setTexture(kGrid, 4, 4, S::TextureFormat::rgba8, grid.data(), 0, { true, false })
-                              && S::hasTexture(kGrid) && moved(gen), 1);
-        P.eq("api.r8", S::setTexture(kMask, 4, 1, S::TextureFormat::r8, kMaskTexels, 4, { true, false })
-                           && S::hasTexture(kMask) && moved(gen), 1);
         const Bytes ramp = rgba(2, 1, [](int x, int) {
             return x == 0 ? Col{ 0, 0, 0, 255 } : Col{ 255, 255, 255, 255 };
         });
         const Bytes tile = rgba(2, 2, tileTexel, 12);                 // a stride wider than a row (8 bytes)
-        P.eq("api.wide_stride", S::setTexture(kTile, 2, 2, S::TextureFormat::rgba8, tile.data(), 12, { true, true }),
-             1);
-        P.eq("api.linear", S::setTexture(kRamp, 2, 1, S::TextureFormat::rgba8, ramp.data()), 1);
-        moved(gen);
-        S::removeTexture(kNever);
-        S::unbindTexture(kA, "s_tex");
-        P.eq("api.unknown_removals_change_nothing", moved(gen), 0);
-        P.eq("api.bind_before_set_false", S::bindTexture(kA, "s_tex", kGrid), 0);
-        P.eq("api.bind_moves", moved(gen), 1);
-        P.eq("api.same_bind_stays", !S::bindTexture(kA, "s_tex", kGrid) && !moved(gen), 1);
-
-        // ---- samplers: each compiler's rules --------------------------------------------------------------------
-        samplersAre(P, "samplers.metal", mtl, D::Code::metal, "s_tex@0 s_mask@2");
-        samplersAre(P, "samplers.spirv", spv, D::Code::spirv, "s_tex@0 s_mask@2");
-        Bytes dx = spv;                                              // Direct3D 11's table: the register is the stage
-        const std::size_t texAt = typeAt(spv, "s_tex"), maskAt = typeAt(spv, "s_mask");
-        P.eq("samplers.found_spirv_table", texAt != 0 && maskAt != 0, 1);
-        if (texAt != 0 && maskAt != 0)
-        {
-            put16(dx, texAt + 2, 0);
-            put16(dx, maskAt + 2, 2);
-            samplersAre(P, "samplers.dxbc", dx, D::Code::dxbc, "s_tex@0 s_mask@2");
-            put16(dx, maskAt + 2, 4);
-            samplersRefuse(P, "samplers.dxbc_stage_4", dx, D::Code::dxbc, "at stage 4");
-
-            Bytes b = spv;
-            put16(b, texAt + 6, 0x0600);                             // a 3D texture
-            samplersRefuse(P, "samplers.spirv_3d", b, D::Code::spirv, "not a 2D sampler of floats");
-            b = spv;
-            put16(b, texAt + 6, 0x0201);                             // integer texels
-            samplersRefuse(P, "samplers.spirv_int", b, D::Code::spirv, "not a 2D sampler of floats");
-            b = spv;
-            b[texAt] = static_cast<uint8_t>(b[texAt] | 0x80);        // a comparison (shadow) sampler
-            samplersRefuse(P, "samplers.spirv_shadow", b, D::Code::spirv, "not a 2D sampler of floats");
-            b = spv;
-            put16(b, maskAt + 2, 6);                                 // stage 4
-            samplersRefuse(P, "samplers.spirv_stage_4", b, D::Code::spirv, "at stage 4");
-            b = spv;
-            put16(b, maskAt + 2, 2);                                 // stage 0, s_tex's
-            samplersRefuse(P, "samplers.spirv_shared_stage", b, D::Code::spirv, "both at stage 0");
-            b = spv;
-            put16(b, texAt + 2, 1);                                  // below the shift
-            samplersRefuse(P, "samplers.spirv_below_shift", b, D::Code::spirv, "at stage -1");
-            b = spv;
-            b[3] = 10;
-            samplersRefuse(P, "samplers.spirv_version_10", b, D::Code::spirv, "version 10");
-            b = spv;
-            const std::size_t paramsAt = typeAt(spv, "u_params");
-            if (P.eq("samplers.found_u_params", paramsAt != 0, 1))
-            {
-                b[paramsAt] = static_cast<uint8_t>((b[paramsAt] & 0xF0) | 1);   // End: a buffer or image
-                samplersRefuse(P, "samplers.spirv_buffer", b, D::Code::spirv, "never binds");
-            }
-        }
-        // Metal: the stage and the kind are in the code, beside the uniform table.
-        const std::size_t mslAt = typeAt(mtl, "s_mask") + 10;
-        Bytes m = mtl;
-        P.eq("samplers.metal_3d_patch", patch(m, "texture2d<float> s_tex [[", "texture3d<float> s_tex [[", mslAt), 1);
-        samplersRefuse(P, "samplers.metal_3d", m, D::Code::metal, "s_tex is not a 2D sampler of floats");
-        m = mtl;
-        P.eq("samplers.metal_int_patch", patch(m, "texture2d<float> s_mask", "texture2d<int>   s_mask", mslAt), 1);
-        samplersRefuse(P, "samplers.metal_int", m, D::Code::metal, "s_mask is not a 2D sampler of floats");
-        m = mtl;
-        P.eq("samplers.metal_stage_patch", patch(m, "s_mask [[texture(2)]]", "s_mask [[texture(4)]]", mslAt), 1);
-        samplersRefuse(P, "samplers.metal_stage_4", m, D::Code::metal, "s_mask is at stage 4");
-        m = mtl;
-        P.eq("samplers.metal_shared_patch", patch(m, "s_mask [[texture(2)]]", "s_mask [[texture(0)]]", mslAt), 1);
-        samplersRefuse(P, "samplers.metal_shared_stage", m, D::Code::metal, "both at stage 0");
-        m = mtl;
-        P.eq("samplers.metal_part_patch", patch(m, "s_maskSampler", "s_maskSamplex"), 1);   // the table's, first
-        samplersRefuse(P, "samplers.metal_stray_part", m, D::Code::metal, "s_maskSamplex");
-        m = mtl;
-        P.eq("samplers.metal_name_patch", patch(m, std::string_view("\x06s_mask\x10", 8),
-                                                std::string_view("\x06u_rect\x10", 8)), 1);
-        samplersRefuse(P, "samplers.funkgui_name", m, D::Code::metal, "has the name of a uniform FunkGui");
-
-        // ---- set: through check() and set() ---------------------------------------------------------------------
+        P.eq("set.textures", S::setTexture(kGrid, 4, 4, S::TextureFormat::rgba8, grid.data(), 0, { true, false })
+                                 && S::setTexture(kMask, 4, 1, S::TextureFormat::r8, kMaskTexels, 4, { true, false })
+                                 && S::setTexture(kTile, 2, 2, S::TextureFormat::rgba8, tile.data(), 12, { true, true })
+                                 && S::setTexture(kRamp, 2, 1, S::TextureFormat::rgba8, ramp.data()), 1);
         std::string why = "stale";
         const bool checked = S::check(mtl.data(), static_cast<uint32_t>(mtl.size()), why);
         std::printf("INFO     check(fs_texture_test): %s%s\n", checked ? "true" : "false",
@@ -373,20 +209,6 @@ int main(int argc, char** argv)
         const bool noMetal = !checked && why.starts_with("no Metal device");
         const bool checkedClean = checked && why.empty();
         P.note("metal", noMetal ? "\"absent\"" : "\"present\"");
-        m = mtl;
-        patch(m, "texture2d<float> s_tex [[", "texture3d<float> s_tex [[", mslAt);
-        const uint64_t compiles = D::metalCompileCount();
-        P.eq("set.other_kind_refused", S::check(m.data(), static_cast<uint32_t>(m.size()), why)
-                                           || why.find("not a 2D sampler") == std::string::npos, 0);
-        P.eq("set.other_kind_not_compiled", static_cast<int64_t>(D::metalCompileCount() - compiles), 0);
-        m = mtl;
-        const std::size_t mtlParams = typeAt(mtl, "u_params");
-        if (P.eq("set.found_u_params", mtlParams != 0, 1))
-        {
-            m[mtlParams] = static_cast<uint8_t>(m[mtlParams] & 0xF0);   // u_params as a sampler
-            P.eq("set.params_sampler", S::check(m.data(), static_cast<uint32_t>(m.size()), why)
-                                           || why.find("uniform vec4 u_params[4];") == std::string::npos, 0);
-        }
         if (noMetal)
         {
             std::printf("INFO     no Metal device: nothing to draw on, the drawing rows skipped\n");
@@ -394,7 +216,6 @@ int main(int argc, char** argv)
             S::removeTexture(kMask);
             S::removeTexture(kTile);
             S::removeTexture(kRamp);
-            S::unbindTexture(kA, "s_tex");
             return P.finish();
         }
         P.eq("set.checked", checkedClean, 1);
@@ -405,8 +226,6 @@ int main(int argc, char** argv)
         P.eq("set.bind_has_sampler", S::bindTexture(kA, "s_tex", kGrid) && S::bindTexture(kA, "s_mask", kMask)
                                          && S::bindTexture(kB, "s_tex", kRamp) && S::bindTexture(kC, "s_tex", kTile),
              1);
-        P.eq("set.bind_unknown_sampler", S::bindTexture(kB, "s_none", kGrid), 0);
-        P.eq("set.bind_plain_none", S::bindTexture(kPlain, "s_tex", kGrid), 0);
 
         // ---- plain: a shader without samplers makes no texture --------------------------------------------------
         {

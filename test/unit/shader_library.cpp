@@ -202,7 +202,7 @@ int main(int argc, char** argv)
     {
         Bytes sampler = mine;
         sampler[params->typeAt] = static_cast<uint8_t>((sampler[params->typeAt] & 0xF0) | 0);   // Sampler
-        // 0.25.0: samplers are taken (fg.shader.texture), but not one named u_params.
+        // 0.25.0: samplers are taken (fg.shader.sampler), but not one named u_params.
         refused(P, "set.params_sampler", 2, sampler, "uniform vec4 u_params[4];");
         Bytes resized = mine;
         resized[params->typeAt + 1] = 16;                        // u_params[16]
