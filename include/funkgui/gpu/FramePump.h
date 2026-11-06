@@ -42,6 +42,14 @@ namespace funkgui
     // runs at every tick, so one editor alone runs exactly as before. Before
     // 0.25.0 one moving editor put every open editor on 60 Hz, each recording
     // a frame per tick. The rules are src/gpu/ClientCadence.h.
+    //
+    // v0.25.1: a nudge also holds its client at full rate for a quarter of
+    // a second of the pump's clock (ClientCadence::kHoldSec), and the pump
+    // with it, so the frames of an interaction (a hover, a click) come at
+    // the display's rate rather than at the idle rate between its events.
+    // wantedFullRate(c) still reports the client's own request. And bgfx
+    // presents every frame before bgfx::frame() returns, so the last frame
+    // drawn before the pump runs none is on screen (src/gpu/BgfxReset.h).
     namespace detail { class ClientCadence; }
 
     class FrameClient

@@ -277,9 +277,13 @@ namespace funkgui
         }
         inTick_ = false;
 
+        // A client's request, or the hold after its last nudge (v0.25.1,
+        // ClientCadence::kHoldSec): the clock stays at full rate between the
+        // events of an interaction, so the frame that answers the next event
+        // comes at the next display frame, not at the next idle tick.
         bool fullRate = false;
         for (const auto& s : clients_)
-            fullRate = fullRate || s.cadence->fullRate();
+            fullRate = fullRate || s.cadence->fullRate() || s.cadence->held();
 
         // Exactly one present per frame for every editor in the process.
         // Skipped entirely when nothing drew, so a minimised host window, or

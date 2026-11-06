@@ -9,16 +9,23 @@
 //              for full rate
 //   idle.*     the busy one calm too: the pump asks for the idle rate and every client runs at every tick, as before
 //              0.25.0; busy again, the calm one is back to every fifth tick
-//   nudge.*    nudgeFullRate(c) runs that client at the next tick and no other; nudgeFullRate() runs every client at
-//              the next tick; a client that nudges itself during its own frame runs at the next tick too
+//   nudge.*    nudgeFullRate(c) runs that client at the next tick and no other; the hold (v0.25.1) runs it at every
+//              tick for a quarter of a second after that frame, the other at its own cadence, then its own cadence
+//              again; nudgeFullRate() runs every client at the next tick; a client that nudges itself during its own
+//              frame runs at the next tick too
 //   change.*   a client removed during another's frame does not run and is forgotten; one removed by its own frame
 //              is forgotten; one added during a frame runs at the next tick
 //   unknown.*  a client the pump does not hold: no rate, no request; nudging it nudges only the pump's rate
+//   hold.*     (v0.25.1) every client calm, the pump idle: a nudged client keeps the pump at full rate while its hold
+//              lasts (its nudged frame and the 14 ticks after it), running at each of those ticks though it asks for
+//              nothing, and the pump idles at the first tick after
 //   editors.*  two EditorHosts (never on screen) beside a busy client: both calm at 12 fps (Diagnostics::fps); the
 //              pointer over one (EditorHost::mouseMove) or its Panel's HostServices::nudgeFullRate() runs that one at
 //              the next tick, the other keeps 12 fps; a zoom chosen under a preference key nudges both, and the other
-//              follows it at the next tick
+//              follows it at the next tick; mouseUp and mouseExit nudge that editor too (v0.25.1)
 // Spec rows only.
+
+#include "../../src/gpu/ClientCadence.h"
 
 #include <funkgui/a11y/A11yItem.h>
 #include <funkgui/canvas/Canvas.h>
@@ -59,6 +66,14 @@ namespace
         stamp += seconds;
         ++tickIndex;
         funkgui::FramePump::get().tick(stamp);
+    }
+
+    // Ticks of the pump enough for every hold to end (v0.25.1, ClientCadence::kHoldSec), and one more.
+    void pastHolds()
+    {
+        const int n = static_cast<int>(std::ceil(funkgui::detail::ClientCadence::kHoldSec / kTick)) + 1;
+        for (int i = 0; i < n; ++i)
+            pumpTick();
     }
 
     // A FrameClient with no view: it records the ticks it ran at and the dt of each.
@@ -261,9 +276,18 @@ int main(int argc, char** argv)
         P.near("nudge.dt_since_own_frame", a.dts.back(), 3.0 * kTick, 1e-6);
         P.eq("nudge.consumed", pump.wantedFullRate(&a), 0);
         const int at = tickIndex;
+        const int a0 = a.frames(), b0 = b.frames();
         for (int i = 0; i < 5; ++i)
             pumpTick();
-        P.eq("nudge.then_own_cadence", a.ranAt.back(), at + 5);
+        P.eq("nudge.held_every_tick", a.frames() - a0, 5);       // v0.25.1: the hold; before, its own cadence
+        P.eq("nudge.held_other_own_cadence", b.frames() - b0, 1);
+        while (tickIndex < at + 14)
+            pumpTick();
+        P.eq("nudge.held_to_last_tick", a.ranLast(), 1);         // the nudged frame and the 14 ticks after it
+        for (int i = 0; i < 5; ++i)
+            pumpTick();
+        P.eq("nudge.then_own_cadence", a.ranAt.back(), at + 19);
+        P.eq("nudge.then_own_cadence_alone", a.frames() - a0, 15);
 
         pumpTick();                                  // neither is due at the next tick unless nudged
         pump.nudgeFullRate();
@@ -282,7 +306,7 @@ int main(int argc, char** argv)
         P.eq("nudge.in_frame_next_tick", a.ranLast(), 1);
         P.eq("nudge.in_frame_then_calm", pump.wantedFullRate(&a), 0);
         pumpTick();
-        P.eq("nudge.in_frame_then_waits", a.ranLast(), 0);
+        P.eq("nudge.in_frame_then_held", a.ranLast(), 1);        // v0.25.1: the hold; before, it waited
 
         // ---- change: removed and added during a tick ---------------------------------------------------------------
         FakeClient c(false);
@@ -311,13 +335,41 @@ int main(int argc, char** argv)
         P.eq("unknown.no_fps", pump.measuredFps(&stranger) == 0.0f ? 1 : 0, 1);
         P.eq("unknown.no_request", pump.wantedFullRate(&stranger), 0);
         busy.wants = false;
-        pumpTick();
-        pumpTick();
+        pastHolds();                                 // v0.25.1: nudgeFullRate() above held every client
         P.eq("unknown.pump_idle", pump.wantedFullRate(), 0);
         pump.nudgeFullRate(&stranger);
         P.eq("unknown.nudges_pump", pump.wantedFullRate(), 1);
         P.eq("unknown.still_no_request", pump.wantedFullRate(&stranger), 0);
         P.eq("unknown.not_run", stranger.frames(), 0);
+        busy.wants = true;
+        pumpTick();
+    }
+
+    // ---- hold: the pump's rate while a nudged client is held (v0.25.1) ---------------------------------------------
+    {
+        busy.wants = false;
+        FakeClient h(false);
+        pump.add(&h);
+        pastHolds();
+        P.eq("hold.pump_idle_before", pump.wantedFullRate(), 0);
+        pump.nudgeFullRate(&h);
+        P.eq("hold.nudge_full_at_once", pump.wantedFullRate(), 1);
+        pumpTick();                                  // h's nudged frame: the hold starts
+        P.eq("hold.nudged_frame", h.ranLast(), 1);
+        const int at = tickIndex;
+        int fullAfter = 0, ran = 0;
+        while (tickIndex < at + 14)
+        {
+            pumpTick();
+            fullAfter += pump.wantedFullRate() ? 1 : 0;
+            ran += h.ranLast() ? 1 : 0;
+        }
+        P.eq("hold.pump_full_while_held", fullAfter, 14);
+        P.eq("hold.client_every_tick", ran, 14);
+        P.eq("hold.not_a_request", pump.wantedFullRate(&h), 0);
+        pumpTick();                                  // at + 15: a quarter of a second after the nudged frame
+        P.eq("hold.pump_idle_after", pump.wantedFullRate(), 0);
+        pump.remove(&h);
         busy.wants = true;
         pumpTick();
     }
@@ -372,6 +424,21 @@ int main(int argc, char** argv)
         P.eq("editors.zoom_b_follows", b.editor->getWidth(), 360);
         P.eq("editors.zoom_both_ran", pump.wantedFullRate(a.client()) || pump.wantedFullRate(b.client()), 0);
         prefs.setInt(kKey, 100);
+
+        // A button released and the pointer leaving (v0.25.1: they nudged nothing, so a calm editor drew them at its
+        // own twelfth of a second).
+        pastHolds();                                 // both follow the zoom back at their next frames
+        P.eq("editors.calm_before_up", pump.wantedFullRate(a.client()) || pump.wantedFullRate(b.client()), 0);
+        a.editor->mouseUp(mouseAt(*a.editor, 20.0f, 20.0f));
+        P.eq("editors.up_nudges_own", pump.wantedFullRate(a.client()), 1);
+        P.eq("editors.up_not_other", pump.wantedFullRate(b.client()), 0);
+        pumpTick();
+        P.eq("editors.up_ran", pump.wantedFullRate(a.client()), 0);
+        a.editor->mouseExit(mouseAt(*a.editor, 20.0f, 20.0f));
+        P.eq("editors.exit_nudges_own", pump.wantedFullRate(a.client()), 1);
+        P.eq("editors.exit_not_other", pump.wantedFullRate(b.client()), 0);
+        pumpTick();
+        P.eq("editors.exit_ran", pump.wantedFullRate(a.client()), 0);
     }
     pump.remove(&busy);
     return P.finish();
