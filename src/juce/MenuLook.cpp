@@ -279,6 +279,9 @@ namespace funkgui
 
     void MenuLook::setTheme(const Theme& th)
     {
+        // Asked here, not at every draw: on Linux it is a round trip to the X server. A product calls setTheme before
+        // each menu it shows (HostServicesJuce does), so the answer is as fresh as JUCE's own for the window.
+        transparentWindows_ = juce::Desktop::canUseSemiTransparentWindows();
         palette_ = paletteFor(th);
         // Not opaque, so the window is not (the header); the panel is drawn opaque in this colour.
         setColour(juce::PopupMenu::backgroundColourId,            toJuce(palette_.surface).withAlpha(juce::uint8{ 254 }));
@@ -301,9 +304,7 @@ namespace funkgui
 
     int MenuLook::shadowPx() const
     {
-        return !findColour(juce::PopupMenu::backgroundColourId).isOpaque() && juce::Desktop::canUseSemiTransparentWindows()
-                   ? kShadowPx
-                   : 0;
+        return transparentWindows_ && !findColour(juce::PopupMenu::backgroundColourId).isOpaque() ? kShadowPx : 0;
     }
 
     juce::Rectangle<int> MenuLook::targetAreaFor(juce::Rectangle<int> anchor, float menuScale) const

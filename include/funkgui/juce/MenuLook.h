@@ -99,8 +99,9 @@ namespace funkgui
         static constexpr int   kGapPx = 4;               // between the anchor and the panel (targetAreaFor)
         static constexpr int   kTypeAheadMs = 1000;      // typing after a pause this long starts a new prefix
 
-        // The margin round the panel of this look's menus: kShadowPx when the window can be transparent (above), else
-        // 0. A menu window of w x h has its panel at (m, m, w - 2m, h - 2m).
+        // The margin round the panel of this look's menus: kShadowPx when the window can be transparent (above, asked
+        // of the platform at construction and at each setTheme()), else 0. A menu window of w x h has its panel at
+        // (m, m, w - 2m, h - 2m).
         int shadowPx() const;
 
         // The target screen area to give JUCE (PopupMenu::Options::withTargetScreenArea) so that the panel, not the
@@ -163,6 +164,7 @@ namespace funkgui
 
         juce::Typeface::Ptr face_;
         Palette palette_{};
+        bool transparentWindows_ = false;                // Desktop::canUseSemiTransparentWindows(), at setTheme()
         std::unique_ptr<Keys> keys_;
         std::unique_ptr<Rows> rows_;
     };
