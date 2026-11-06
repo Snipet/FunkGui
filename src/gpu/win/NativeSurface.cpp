@@ -330,6 +330,16 @@ namespace funkgui
         return scaleOfPeerWindow(w);
     }
 
+    bool renderViewOccluded(void*)
+    {
+        return false;                                // bgfx's Direct3D 11 presents whatever covers the window (0.25.0)
+    }
+
+    bool renderViewKeepsFrame(void* view)
+    {
+        return view != nullptr;                      // the desktop window manager composes every window (0.25.0)
+    }
+
     void* nativeDisplay()
     {
         return nullptr;                              // Direct3D needs no display connection

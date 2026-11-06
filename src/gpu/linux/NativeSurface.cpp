@@ -225,6 +225,20 @@ namespace funkgui
         return scaleOfPeerWindow(w);
     }
 
+    // Unchanged frames (0.25.0; NativeSurface.h). Linux draws every frame (renderViewKeepsFrame), so nothing rests on
+    // this answer.
+    bool renderViewOccluded(void*)
+    {
+        return false;
+    }
+
+    // False, the stated fallback (NativeSurface.h says why): nothing here learns when the window's picture is lost, so
+    // the editor draws every frame, as before 0.25.0.
+    bool renderViewKeepsFrame(void*)
+    {
+        return false;
+    }
+
     void* nativeDisplay()
     {
         return xDisplay();

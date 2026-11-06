@@ -48,6 +48,35 @@
 // be had nothing moved it) constrained to that user area, which is on the control for a drag that started in the
 // Dock's band and at the screen edge where it vanished otherwise.
 //
+// Unchanged frames (0.25.0): an editor whose picture has not changed leaves it up and draws nothing. Each frame the
+// Panel is ticked as ever; then the editor draws (records the Panel, expands, uploads and submits) only when
+//   - the Panel's needsDraw() is true (panel/Panel.h "Unchanged frames"; true by default), or
+//   - it has a reason of its own: the first frame; a capture (CANVAS_DUMP, UI_SCALE or UI_FIXED_DT draw every frame,
+//     as before, so their frame counts stand); a size, backing scale, zoom or theme other than the last frame's; a
+//     surface made again since (BgfxContext::surfaceRevision: attached, re-attached, resized, rebuilt); a picture or
+//     custom shader replaced or removed since (canvas/Images.h, gpu/ShaderLibrary.h); a last frame that may not be
+//     on screen (a frame found the window hidden, minimised or detached, the sink dropped it, or it was drawn while
+//     macOS reported the window occluded, when bgfx presents nothing) once a frame would reach the screen again
+//     (NativeSurface.h renderViewOccluded); a window that does not keep its last frame (renderViewKeepsFrame: on
+//     Linux every frame is drawn, as before); a window waiting for its framebuffer (BgfxContext::drawable(), which
+//     records and counts the frame as before). On macOS no frame may come while the window is off screen (the
+//     display link stops): shown again, it is not drawn for that, since its CAMetalLayer kept the picture.
+// A frame the Panel asked for and the editor had no reason of its own to draw is still recorded, then compared with
+// the last frame drawn (canvas/FrameCompare.h sameDrawing): equal, it is not submitted (the safety net, which every
+// Panel gets, needsDraw() or not). A frame that draws nothing leaves FrameClient::Result::submitted false, and when no
+// editor submitted the FramePump calls no bgfx::frame(), so nothing is presented; when another editor draws, bgfx
+// presents only the windows whose views drew (FramePump.cpp). Accessibility is synced and wantsFullRate() asked every
+// frame, drawn or not. Diagnostics: `frames` counts the frames submitted, `skipped` the frames nothing was recorded
+// for, `unchanged` the frames recorded and found equal.
+//
+// Cadence (0.25.0; FramePump.h "Each editor its own cadence"): the FramePump runs this editor's frame at every tick
+// while its Panel wants full rate or input arrived since (every input event, a resize and the Panel's
+// HostServices::nudgeFullRate() nudge this editor only; a zoom chosen under EditorConfig::zoomPrefKey nudges every
+// editor, since all follow it), and at about 12 Hz otherwise, even while another editor keeps the pump at 60 Hz; the
+// frame's dt is the time since this editor's last frame. A theme another editor wrote is followed at this editor's
+// next frame, so a calm editor follows it up to a twelfth of a second later. Diagnostics::fps and FrameInfo's fps
+// and rate are this editor's own.
+//
 // Capture (02 §5.1 "Diagnostics environment"): CaptureConfig is read once from the <ENV_PREFIX> environment at
 // construction. CANVAS_DUMP pins the FramePump to its fallback clock and ignores the real pointer (HR's captureMode_:
 // a pointer resting over the new window must not hover a widget); UI_FIXED_DT ticks the Panel with a fixed dt, and
@@ -96,6 +125,7 @@ namespace funkgui
 {
     class HostServicesJuce;                          // Web Sprint B: src/gpu/HostServicesJuce.h
     struct EditorCursors;                            // FSynth G1: src/gpu/Cursors.h
+    namespace detail { class FrameGate; }            // 0.25.0: src/gpu/FrameGate.h ("Unchanged frames")
 
     struct EditorConfig
     {
@@ -138,10 +168,14 @@ namespace funkgui
             uint32_t overflows = 0;                  // frames BgfxSink dropped (transient buffer full, 02 §4.5)
             uint32_t attachFailures = 0;             // failed surface attaches (render view or BgfxContext::acquire)
             bool     displayLinked = false;          // the FramePump runs off a CADisplayLink (else its timer)
-            float    fps = 0.0f;                     // the FramePump's measured rate
+            float    fps = 0.0f;                     // this editor's measured frame rate (0.25.0: its own cadence,
+                                                     // FramePump.h; the pump's before, the same for one editor)
             double   scale = 0.0;                    // the backing scale the drawable is sized for (0: no surface)
             int      zoomPercent = 100;              // G7c: the zoom the editor is sized and drawn at (after the
                                                      // display fit and any capture pin; the preference may differ)
+            // 0.25.0 ("Unchanged frames"): frames that left the last picture up.
+            uint32_t skipped = 0;                    // nothing recorded: needsDraw() false and no reason to draw
+            uint32_t unchanged = 0;                  // recorded, equal to the last frame drawn: not submitted
         };
         Diagnostics diagnostics() const;
         const CaptureConfig& capture() const noexcept { return capture_; }
@@ -170,6 +204,7 @@ namespace funkgui
     private:
         // FrameClient
         Result submitFrame(float dt) override;
+        void   finishFrame(bool firstFrame, Result&);   // 0.25.0: accessibility and the rate, drawn or not
         void*  frameClockView() const override { return renderView_; }
         // juce::Timer, 10 Hz: Panel::idle(now) even while the display link is stopped (closes wheel gestures)
         void   timerCallback() override;
@@ -264,6 +299,11 @@ namespace funkgui
         bool     overflowLogged_ = false;
         bool     dumpAttempted_ = false;
         Diagnostics diag_{};
+
+        // 0.25.0 ("Unchanged frames"): what the picture on screen was drawn for, and the last recording submitted
+        // (the safety net compares the next one with it; capacity kept).
+        std::unique_ptr<detail::FrameGate> gate_;
+        PrimList drawnList_;
 
         // G7c zoom. The logical size is EditorConfig's (the Panel's); zoom percents are whole.
         int   logicalW_ = 0, logicalH_ = 0;

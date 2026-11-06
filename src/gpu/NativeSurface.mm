@@ -71,6 +71,21 @@ namespace funkgui
         // The CAMetalLayer scales any drawable into the view's points (v0.11.0; NativeSurface.h).
     }
 
+    bool renderViewOccluded(void* view)
+    {
+        // bgfx's renderer_mtl.cpp isWindowOccluded(), as it asks before taking a drawable: a view in no window is not
+        // occluded there either.
+        if (view == nullptr) return false;
+        NSWindow* w = [(NSView*) view window];
+        if (w == nil) return false;
+        return ([w occlusionState] & NSWindowOcclusionStateVisible) == 0;
+    }
+
+    bool renderViewKeepsFrame(void* view)
+    {
+        return view != nullptr;                      // a CAMetalLayer keeps its last drawable's contents (0.25.0)
+    }
+
     void* nativeDisplay()
     {
         return nullptr;                              // Metal needs no display connection (v0.11.0)

@@ -11,8 +11,8 @@
 // The rules are HostServices' own (panel/HostServices.h, "Web Sprint B additions"): a callback runs on the main
 // thread, at most once, never inside the call that took it, and never after dismissMenus(), after letGo() or after
 // this object is destroyed; a second showMenu replaces a menu still showing (even when the second is refused); a
-// request with no items, with no item that is not a separator, or with a non-separator id <= 0 is refused and its
-// callback dropped unrun. A file chooser is not served here: a web host reports no hostservice::fileChooser.
+// request that fails validMenu() is refused and its callback dropped unrun. A file chooser is not served here: a web
+// host reports no hostservice::fileChooser.
 
 #include <funkgui/panel/HostServices.h>
 
@@ -35,7 +35,10 @@ namespace funkgui::web
         // HostServices::showMenu. `logicalWidth` is the Panel's width in its own px: the canvas's CSS width over it is
         // the CSS px per Panel px (the UI zoom times any page scaling), so request.anchor times that factor is the
         // anchor in CSS px from the canvas's top-left corner. The menu takes request.theme's colours, the bundled
-        // face and the native menu's metrics (MenuLook over JUCE's LookAndFeel_V4), which do not follow the UI zoom.
+        // face and the native menu's metrics (MenuLook over JUCE's LookAndFeel_V4 before 0.25.0), which do not follow
+        // the UI zoom. The 0.25.0 fields, as a fallback: a header and a submenu's row show as a disabled row of the
+        // label with the submenu's rows after it in place, a radio item as a tick, no shortcut; selectedId and
+        // minWidth are not read.
         // True: the menu is open and `done` will run once, from a later event of the page, with the chosen id (an
         // item's click or key; a release over an item the pointer moved onto with the opening button still held, as
         // JUCE chooses) or with 0 (a press outside the menu, Escape, the window losing focus or being resized, a

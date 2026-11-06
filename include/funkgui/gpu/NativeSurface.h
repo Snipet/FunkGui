@@ -44,6 +44,23 @@ namespace funkgui
     // swap chain's size (v0.24.0). On macOS it does nothing: the CAMetalLayer scales any drawable into the view.
     void   setRenderViewScale(void* view, double scale);
 
+    // Unchanged frames (0.25.0; gpu/EditorHost.h "Unchanged frames"): what an editor that leaves its last picture up
+    // must know about the screen.
+    // - renderViewOccluded: whether a frame drawn into <view> now would not reach the screen. macOS: its window's
+    //   occlusion state lacks NSWindowOcclusionStateVisible, exactly the test bgfx's Metal renderer makes before it
+    //   takes a drawable (it draws such a frame offscreen and presents nothing). Windows: false (bgfx's Direct3D 11
+    //   presents whatever covers the window). Linux: false, and moot (every frame is drawn). nullptr: false.
+    // - renderViewKeepsFrame: whether <view> goes on showing the last frame presented into it, through being covered
+    //   and uncovered, until the next. macOS: true (a CAMetalLayer keeps its contents). Windows: true (the desktop
+    //   window manager composes every window). Linux: false, so the editor draws every frame, as before (the stated
+    //   fallback), because nothing tells FunkGui there when the picture is lost: a remapped window (the host minimised
+    //   and restored, a workspace switched, a floating plug-in window hidden and shown) comes back without its
+    //   contents, a compositing manager or not, while the render view selects no events and JUCE's peer, an embedded
+    //   child window, never reads as hidden; and bgfx's Vulkan takes a second window's image without waiting and skips
+    //   that window's frame, untold, when none is ready. nullptr: false.
+    bool   renderViewOccluded(void* view);
+    bool   renderViewKeepsFrame(void* view);
+
     // What bgfx's PlatformData::ndt pairs with the render views (v0.11.0): the X11 Display* on Linux (JUCE's
     // connection, which the views are created on; nullptr when JUCE has no display open); nullptr on macOS and
     // Windows.

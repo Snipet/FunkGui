@@ -5,7 +5,9 @@
 // host answered:
 //
 //   MENU       HostServices::showMenu under the cell: First, Second, a separator, a disabled item, and a label with
-//              U+2014 and U+00B7 (UTF-8 through the host). The item chosen last is ticked (Second at first).
+//              U+2014 and U+00B7 (UTF-8 through the host). The item chosen last is ticked (Second at first). 0.25.0:
+//              a "Pick one" section header over them, shortcuts on First and Second, a "More" submenu of two radio
+//              items, and the item chosen last highlighted as the menu opens.
 //   OPEN       chooseFiles, Mode::open, "*.txt"
 //   OPEN MANY  chooseFiles, Mode::openMany, every file
 //   SAVE       chooseFiles, Mode::save, "*.txt", suggested name "FunkGui: gallery?.txt" (the host drops ':' and '?';
@@ -69,6 +71,7 @@ namespace funkgui::gallery
         constexpr uint32_t kIdCells = 100, kIdLines = 900;
         constexpr const char* kLineTitle[] = { "HOST", "MENU", "FILES", "COPY" };
         constexpr int      kThirdId = 4;
+        constexpr int      kFourthId = 5, kFifthId = 6;  // radio items in the "More" submenu (0.25.0)
 
         // The file name of a path, as text the atlas draws.
         std::string fileName(const std::string& path)
@@ -206,11 +209,26 @@ namespace funkgui::gallery
             void showMenu()
             {
                 MenuRequest m;
+                funkgui::MenuItem head;                      // 0.25.0: a section header, shortcuts, a submenu
+                head.label = "Pick one";
+                head.header = true;
+                m.items.push_back(head);
                 m.items.push_back({ 1, "First", true, ticked_ == 1 });
+                m.items.back().shortcut = "Cmd+1";
                 m.items.push_back({ 2, "Second", true, ticked_ == 2 });
+                m.items.back().shortcut = "Cmd+2";
                 m.items.push_back({ .separator = true });
                 m.items.push_back({ 3, "Disabled", false });
                 m.items.push_back({ kThirdId, "Third \xE2\x80\x94 UTF-8 \xC2\xB7 label", true, ticked_ == kThirdId });
+                funkgui::MenuItem more;
+                more.label = "More";
+                for (const int id : { kFourthId, kFifthId })
+                {
+                    more.submenu.push_back({ id, id == kFourthId ? "Fourth" : "Fifth", true, ticked_ == id });
+                    more.submenu.back().radio = true;
+                }
+                m.items.push_back(more);
+                m.selectedId = ticked_;
                 m.anchor = kCell[kMenu].r;
                 m.theme = Theme::byIndex(host()->themeIndex());
                 const std::weak_ptr<int> alive = alive_;

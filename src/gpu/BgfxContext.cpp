@@ -258,6 +258,7 @@ namespace funkgui
             w = {};
             w.nwh = nwh; w.primary = true; w.w = physW; w.h = physH;
             w.view = 0;
+            w.revision = stamp();
             retainRenderView(nwh);                   // held until bgfx is done with it (the header, v0.21.0)
             return true;
         }
@@ -312,6 +313,7 @@ namespace funkgui
         w.h    = physH;
         w.view = view;
         w.fb   = fb;
+        w.revision = stamp();
         // The framebuffer is made at the next frame: until then, and until its destruction has run too, bgfx holds a
         // pointer to this view that the editor may free first (the header, v0.21.0).
         retainRenderView(nwh);
@@ -347,7 +349,10 @@ namespace funkgui
         {
             Window& w = windows_[i];
             if (w.rebuild > 0 && --w.rebuild == 0 && w.nwh != nullptr)
+            {
                 w.fb = bgfx::createFrameBuffer(w.nwh, static_cast<uint16_t>(w.w), static_cast<uint16_t>(w.h));
+                w.revision = stamp();
+            }
         }
 #endif
         int kept = 0;
@@ -448,6 +453,7 @@ namespace funkgui
                 p.nwh = survivors[0].nwh; p.primary = true;
                 p.w = survivors[0].w; p.h = survivors[0].h;
                 p.view = 0;
+                p.revision = stamp();
                 retainRenderView(p.nwh);
                 for (int i = 1; i < n; ++i)
                     acquire(survivors[i].nwh, survivors[i].w, survivors[i].h);
@@ -483,6 +489,7 @@ namespace funkgui
             if (w.nwh != nwh) continue;
             if (w.w == physW && w.h == physH) return;
             w.w = physW; w.h = physH;
+            w.revision = stamp();
             if (w.primary)
             {
                 primaryW_ = physW; primaryH_ = physH;
@@ -508,6 +515,30 @@ namespace funkgui
             }
             return;
         }
+    }
+
+    uint32_t BgfxContext::stamp() noexcept
+    {
+        if (++revisions_ == 0)
+            revisions_ = 1;                          // 0 means "not registered"
+        return revisions_;
+    }
+
+    uint32_t BgfxContext::surfaceRevision(void* nwh) const
+    {
+        if (nwh == nullptr) return 0;                // a headless registration has no surface
+        for (int i = 0; i < windowCount_; ++i)
+            if (windows_[i].nwh == nwh) return windows_[i].revision;
+        return 0;
+    }
+
+    bool BgfxContext::framePending() const noexcept
+    {
+        if (!initialised_) return false;
+        if (retiredCount_ > 0) return true;
+        for (int i = 0; i < windowCount_; ++i)
+            if (windows_[i].rebuild > 0) return true;
+        return false;
     }
 
     bool BgfxContext::drawable(void* nwh) const

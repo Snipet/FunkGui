@@ -54,8 +54,12 @@
 // selection as they were before the step.
 //
 // Highlighting. setHighlighter() gives the editor a text::Highlighter; the editor keeps the state every line starts
-// in, re-runs the highlighter after an edit from the first changed line until a start state comes out unchanged, and
-// tokenises only the rows it draws. setPalette() maps style indices to inks of the theme, weights and underlines
+// in and every line's spans, and re-runs the highlighter after an edit from the first changed line until a start state
+// comes out unchanged, so it sees each changed line once and drawing (the rows, the minimap, a bracket match) never
+// calls it (0.25.0; before, every drawn row was tokenised again each frame). A highlighter whose output depends on
+// more than the line and its state (a list of names the product updates) is re-run over every line by rehighlight()
+// when that changes; it leaves the text and revision() as they were, so a Panel whose needsDraw() follows revision()
+// marks itself changed too. setPalette() maps style indices to inks of the theme, weights and underlines
 // (defaultPalette() fits KeywordHighlighter's indices); index 0 and any index past the palette are plain ink100.
 //
 // Drawing (tags EDIT_FRAME, EDIT_GUTTER, EDIT_TEXT, EDIT_SELECT, EDIT_CARET): a 1 px ink16 frame with 2 px corners;
@@ -292,6 +296,7 @@ namespace funkgui
         void attach(HostServices*);                      // the clipboard and the keyboard convention; nullptr = none
         void setHighlighter(std::unique_ptr<text::Highlighter>);   // nullptr: plain text (the default)
         const text::Highlighter* highlighter() const noexcept { return highlighter_.get(); }
+        void rehighlight();                              // 0.25.0: re-runs it over every line (its output changed)
         void setPalette(std::vector<text::HighlightStyle>);
         const std::vector<text::HighlightStyle>& palette() const noexcept { return palette_; }
         static std::vector<text::HighlightStyle> defaultPalette();   // KeywordHighlighter's eight styles
@@ -440,8 +445,8 @@ namespace funkgui
         TextPos spliceText(TextPos a, TextPos b, std::string_view text);           // a <= b, clamped; not recorded
         void    pushStep(Edit&&);
         void    mapThrough(TextPos a, TextPos b, TextPos end);   // decorations, marks and auto-closers after a splice
-        void    rehighlightFrom(int firstLine, int lastChanged);
-        void    tokenise(int ln) const;                  // spans_ for a line
+        void    rehighlightFrom(int firstLine, int lastChanged);   // the states and the spans of the lines it reaches
+        const std::vector<text::Span>& spansOf(int ln) const noexcept { return lineSpans_[static_cast<size_t>(ln)]; }
         uint16_t styleIn(const std::vector<text::Span>&, int col) const noexcept;
         bool    scanBracket(TextPos from, char open, char close, bool forward, int style, TextPos& out) const;
         int     guideLevels(int ln) const;               // indent levels of a line (a blank one: its neighbours')
@@ -490,6 +495,7 @@ namespace funkgui
         std::vector<int>              rowOfLine_;        // per line, the index of its first row; [n] = rowCount()
         std::vector<float>            lineW_;            // per line, its width in px (tabs expanded)
         std::vector<uint32_t>         lineState_;        // per line, the highlighter state it starts in
+        std::vector<std::vector<text::Span>> lineSpans_; // per line, the highlighter's spans (none without one)
         float                         maxLineW_ = 0.0f;
 
         TextPos  caret_{}, anchor_{};
@@ -520,14 +526,10 @@ namespace funkgui
         float    scale_ = 0.0f, spaceW_ = 0.0f, tabW_ = 0.0f, digitW_ = 0.0f, rowH_ = 1.0f, textTop_ = 0.0f;
         bool     fontOk_ = false;
 
-        mutable std::vector<text::Span> spans_;          // scratch: the spans of the line last tokenised
-        mutable int                     spansLine_ = -1;
-        mutable uint32_t                spansRev_ = 0;
         mutable std::vector<float>      xs_;             // scratch: the x of each column of a row
         mutable std::string             run_;            // scratch: one run of text
         mutable std::vector<const Decoration*> shown_;   // scratch: the decorations on the lines in view
-        mutable std::vector<text::Span> scanSpans_;      // scratch: a line's spans while matching brackets
-        mutable bool    pairOk_ = false;                 // the bracket pair at the caret, cached by revision, caret
+        mutable bool    pairOk_ = false;               // the bracket pair at the caret, cached by revision, caret
         mutable bool    pairValid_ = false;              // and style generation
         mutable TextPos pairAt_{}, pairOpen_{}, pairClose_{};
         mutable uint32_t pairRev_ = 0, pairGen_ = 0;

@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <string>
 #include <utility>
+#include <vector>
 
 // WebServices (v0.13.0; FCompressor ADR-93, web Sprint C; WebServices.h): what src/gpu/HostServicesJuce does with a
 // juce::PopupMenu and JUCE's clipboard, in a page. The rules are kept the way that file keeps them: one request is
@@ -28,7 +29,8 @@
 //   callback may show another. Should an event ever arrive while showMenu is still running (a focus listener of the
 //   page that clicks an item when the menu takes the focus), it is posted to a timer instead (HostServices' rule:
 //   never from inside the call that took it).
-// - The look is funkgui::MenuLook's on JUCE's LookAndFeel_V4, reproduced in CSS px: the native menu's metrics (the
+// - The look is funkgui::MenuLook's on JUCE's LookAndFeel_V4 as it was before 0.25.0 (0.25.0 draws the native menu
+//   itself, juce/MenuLook.h; this one keeps the older look), reproduced in CSS px: the native menu's metrics (the
 //   lead's decision at the review of this card; the manifest said a 14 px em). Where each number comes from:
 //     colours     MenuLook: ground, ink100 text, the highlighted row ink16; V4 draws a disabled item at half alpha.
 //     14          MenuLook::kMenuPx. It is a JUCE font height, the face's ascent plus descent, not its em.
@@ -458,19 +460,26 @@ namespace funkgui::web
 {
     namespace
     {
-        // HostServices' rule: an item that is not a separator, and an id > 0 on each (HostServicesJuce's menuIsValid).
-        bool menuIsValid(const MenuRequest& request)
+        // The rows as this menu shows the 0.25.0 fields (WebServices.h): a header, and a submenu's row, as a disabled
+        // row of its label, the submenu's rows after it in place (disabled when the row is); a radio item as a tick;
+        // no shortcut. One flags word per row: bit 0 a separator, bit 1 enabled, bit 2 ticked.
+        void addRows(uint32_t serial, const std::vector<MenuItem>& items, bool enabled)
         {
-            bool anyItem = false;
-            for (const MenuItem& it : request.items)
+            for (const MenuItem& it : items)
             {
                 if (it.separator)
-                    continue;
-                if (it.id <= 0)
-                    return false;
-                anyItem = true;
+                    funkgui_web_menu_add(serial, 1, 0, "");
+                else if (it.header || !it.submenu.empty())
+                {
+                    funkgui_web_menu_add(serial, 0, 0, it.label.c_str());   // shown, never chosen
+                    addRows(serial, it.submenu, enabled && it.enabled);
+                }
+                else
+                {
+                    const int flags = (enabled && it.enabled ? 2 : 0) | (it.checked ? 4 : 0);
+                    funkgui_web_menu_add(serial, flags, it.id, it.label.c_str());
+                }
             }
-            return anyItem;
         }
 
         unsigned packed(Col c) noexcept
@@ -555,7 +564,7 @@ namespace funkgui::web
     bool WebServices::showMenu(const MenuRequest& request, MenuCallback done, float logicalWidth)
     {
         dismissMenus();                              // a second menu replaces the first, even when it is refused
-        if (!menuIsValid(request))
+        if (!validMenu(request))                     // HostServices' rule (0.25.0: shared by every host)
             return false;
         Impl& p = *impl_;
         const uint32_t serial = ++Impl::lastSerial;
@@ -563,11 +572,7 @@ namespace funkgui::web
         if (funkgui_web_menu_begin(serial, p.selector.c_str(), packed(th.ground), packed(th.ink100), packed(th.ink16),
                                    kFontPx, kMeasured, &Impl::onEvent) == 0)
             return false;                            // no canvas to show it beside
-        for (const MenuItem& it : request.items)
-        {
-            const int flags = (it.separator ? 1 : 0) | (it.enabled ? 2 : 0) | (it.checked ? 4 : 0);
-            funkgui_web_menu_add(serial, flags, it.id, it.label.c_str());
-        }
+        addRows(serial, request.items, true);
 
         p.serial = serial;
         p.menu = std::move(done);

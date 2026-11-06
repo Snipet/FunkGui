@@ -15,16 +15,22 @@
 // font presets. v0.22.0, the code-editor hooks: decorations (set by kind, clamped and sorted, moved with the text and
 // dropped with it, kept on their text through indent, outdent and a wrap, cleared by setText; where the underlines,
 // backgrounds and boxes are drawn) and line marks (moved with their lines, through indent and its undo too, the mark
-// column or the tinted number); bracketPair (before and after the caret, nesting, across lines, unmatched, only its
-// own highlight style) and its boxes; autoClosePairs (insert, step over, wrap, pair delete, the quote and word rules,
-// undo) and braceIndent (Return between and after an opener, from the line's own indent without autoIndent, a closer
-// typed on a blank line); replaceRange, applyEdits and replaceText (one undo step each, the caret mapped or kept,
-// overlap refused, decorations moved); pointOf, posAt, visibleLineRange, wordRangeAt; indent guides, trailing blanks
-// and the minimap (its geometry, a press and a drag). No JUCE: the test also runs without it and as wasm32.
+// column or the tinted number); bracketPair (before and after the caret, nesting, across lines, unmatched, only its own
+// highlight style) and its boxes; autoClosePairs (insert, step over, wrap, pair delete, the quote and word rules, undo)
+// and braceIndent (Return between and after an opener, from the line's own indent without autoIndent, a closer typed on
+// a blank line); replaceRange, applyEdits and replaceText (one undo step each, the caret mapped or kept, overlap
+// refused, decorations moved); pointOf, posAt, visibleLineRange, wordRangeAt; indent guides, trailing blanks and the
+// minimap (its geometry, a press and a drag). 0.25.0, the span cache: the highlighter asked once per line by setText
+// and rehighlight(), never by drawing (frames, the minimap, a scroll, the bracket pair), and by an edit only for its
+// own lines and then the lines whose start state it moved (typing, Return, a join, a block comment opened and undone,
+// lines removed and inserted, applyEdits, replaceText); spans kept until rehighlight(); random edits, undos and redos
+// drawn as an editor given the same text from scratch draws, with and without word wrap. No JUCE: the test also runs
+// without it and as wasm32.
 
 #include <funkgui/a11y/A11yItem.h>
 #include <funkgui/canvas/Canvas.h>
 #include <funkgui/canvas/Fingerprint.h>
+#include <funkgui/canvas/FrameCompare.h>
 #include <funkgui/canvas/PrimList.h>
 #include <funkgui/canvas/Tags.h>
 #include <funkgui/core/Theme.h>
@@ -40,6 +46,7 @@
 #include <cmath>
 #include <cstdint>
 #include <algorithm>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -1689,6 +1696,351 @@ namespace
                                    && is(funkgui::tagName(tags::editGuide), "EDIT_GUIDE")
                                    && funkgui::tagFromName("EDIT_MAP") == tags::editMap, 1);
     }
+    // ---- 0.25.0: the span cache -------------------------------------------------------------------------------------
+
+    // What a highlighter was asked for, and a setting of the product's that LoggingHighlighter reads (output that
+    // depends on more than the line and its state, as a list of names would).
+    struct HighlightLog
+    {
+        std::vector<std::string> lines;
+        bool keywordsAsTypes = false;
+    };
+
+    // KeywordHighlighter's C rules, logging every line it is asked for.
+    class LoggingHighlighter final : public funkgui::text::Highlighter
+    {
+    public:
+        explicit LoggingHighlighter(HighlightLog& log) : log_(log), inner_(KeywordRules::cLike()) {}
+
+        uint32_t line(std::string_view l, uint32_t stateIn, std::vector<Span>& out) const override
+        {
+            log_.lines.emplace_back(l);
+            const size_t first = out.size();
+            const uint32_t next = inner_.line(l, stateIn, out);
+            if (log_.keywordsAsTypes)
+                for (size_t i = first; i < out.size(); ++i)
+                    if (out[i].style == KeywordHighlighter::keyword)
+                        out[i].style = KeywordHighlighter::type;
+            return next;
+        }
+
+    private:
+        HighlightLog&      log_;
+        KeywordHighlighter inner_;
+    };
+
+    // The editor's lines from `first` to `last`, both included.
+    std::vector<std::string> linesOf(const TextEditor& e, int first, int last)
+    {
+        std::vector<std::string> out;
+        for (int i = first; i <= last; ++i)
+            out.push_back(e.line(i));
+        return out;
+    }
+
+    // The state each line starts in, by a highlighter of its own.
+    std::vector<uint32_t> startStates(const TextEditor& e)
+    {
+        const KeywordHighlighter h(KeywordRules::cLike());
+        std::vector<uint32_t> out;
+        std::vector<Span> scratch;
+        uint32_t st = 0;
+        for (int i = 0; i < e.lineCount(); ++i)
+        {
+            out.push_back(st);
+            scratch.clear();
+            st = h.line(e.line(i), st, scratch);
+        }
+        return out;
+    }
+
+    // The editor's text from `a` to `b` (a before b; a column past its line's end counts as the end).
+    std::string rangeOf(const TextEditor& e, TextPos a, TextPos b)
+    {
+        const auto part = [&e](int ln, int from, int to) {
+            const std::string& l = e.line(ln);
+            const size_t f = std::min(static_cast<size_t>(std::max(from, 0)), l.size());
+            const size_t t = std::max(f, std::min(static_cast<size_t>(std::max(to, 0)), l.size()));
+            return l.substr(f, t - f);
+        };
+        if (a.line == b.line)
+            return part(a.line, a.col, std::max(a.col, b.col));
+        std::string out = part(a.line, a.col, std::numeric_limits<int>::max());
+        for (int ln = a.line + 1; ln < b.line; ++ln)
+            out += "\n" + e.line(ln);
+        return out + "\n" + part(b.line, 0, b.col);
+    }
+
+    // Where `inserted`, put in at `at`, ends.
+    TextPos endAfter(TextPos at, const std::string& inserted)
+    {
+        const size_t nl = inserted.rfind('\n');
+        if (nl == std::string::npos)
+            return { at.line, at.col + static_cast<int>(inserted.size()) };
+        return { at.line + static_cast<int>(std::count(inserted.begin(), inserted.end(), '\n')),
+                 static_cast<int>(inserted.size() - nl - 1) };
+    }
+
+    // The last line the editor should ask for when the lines from `first`, `oldCount` of them, became `newCount`
+    // lines: the new ones, then the lines after while their start state moved (start states before and after).
+    int lastAsked(const std::vector<uint32_t>& before, const std::vector<uint32_t>& after, int first, int oldCount,
+                  int newCount)
+    {
+        const int n = static_cast<int>(after.size());
+        int last = first + newCount - 1;
+        while (last + 1 < n
+               && after[static_cast<size_t>(last + 1)] != before[static_cast<size_t>(last + 1 - newCount + oldCount)])
+            ++last;
+        return last;
+    }
+
+    // Whether `drawn` is what an editor given the same text from scratch draws, with the same caret, selection, focus
+    // and scroll (`fresh` has the same options, highlighter and palette).
+    bool sameAsFresh(Fixture& fresh, const TextEditor& e, const PrimList& drawn)
+    {
+        TextEditor& r = fresh.ed();
+        r.setText(e.text());
+        r.setFocused(e.focused());
+        r.select(e.anchor(), e.caret());
+        r.setScroll(e.scroll().x, e.scroll().y);
+        return funkgui::sameDrawing(drawn, fresh.host.draw());
+    }
+
+    void spanCache(T::Probe& P)
+    {
+        Fixture f;
+        TextEditor& e = f.ed();
+        HighlightLog log;
+        e.setPalette(TextEditor::defaultPalette());
+        TextEditorOptions o = e.options();
+        o.minimap = true;
+        o.matchBrackets = true;
+        e.setOptions(o);
+        e.setHighlighter(std::make_unique<LoggingHighlighter>(log));
+        P.eq("cache.set_highlighter_each_line", log.lines == std::vector<std::string>{ "" }, 1);
+
+        const std::string doc = "int a;\nif (a) {\n\tb();\n}\n/* c */\nreturn a;\nx\ny\nz\nint q;";
+        log.lines.clear();
+        e.setText(doc);
+        P.eq("cache.set_text_each_line_once", log.lines == linesOf(e, 0, 9), 1);
+
+        // Drawing never asks: frames, the minimap's every row, a scroll, the bracket pair at the caret.
+        log.lines.clear();
+        f.host.draw();
+        f.host.draw();
+        e.setFocused(true);
+        e.setCaret({ 1, 8 });                                   // after the '{' of line 1: its pair on line 3
+        const PrimList& paired = f.host.draw();
+        P.eq("cache.bracket_pair_drawn", countTag(paired, tags::editMark), 2);
+        e.setScroll(0.0f, 1.0e6f);
+        f.host.draw();
+        P.eq("cache.draw_never_asks", static_cast<int>(log.lines.size()), 0);
+
+        // An edit asks for the lines it changed, once, and for the lines after only while their start state moves.
+        log.lines.clear();
+        e.setCaret({ 2, 1 });
+        typeKeys(f, "x");
+        P.eq("cache.typing_one_line", log.lines == std::vector<std::string>{ "\txb();" }, 1);
+        log.lines.clear();
+        e.setCaret({ 2, 3 });
+        f.host.keys("return");
+        P.eq("cache.return_two_lines", log.lines == linesOf(e, 2, 3), 1);
+        log.lines.clear();
+        e.setCaret({ 3, 0 });
+        f.host.keys("backspace");                               // the lines joined again: one line
+        P.eq("cache.join_one_line", log.lines == linesOf(e, 2, 2) && e.lineCount() == 10, 1);
+        log.lines.clear();
+        e.setCaret({ 1, 0 });
+        typeKeys(f, "/*");                                      // a comment opened: on until line 4's closes it
+        std::vector<std::string> opened{ "/if (a) {" };
+        for (const std::string& l : linesOf(e, 1, 4))
+            opened.push_back(l);
+        P.eq("cache.comment_opened_runs_on", log.lines == opened && e.line(4) == "/* c */", 1);
+        log.lines.clear();
+        e.undo();
+        P.eq("cache.undo_runs_on", log.lines == linesOf(e, 1, 4) && e.line(1) == "if (a) {", 1);
+        log.lines.clear();
+        e.select({ 5, 0 }, { 8, 1 });
+        f.host.keys("delete");                                  // lines removed: the one left
+        P.eq("cache.remove_lines_one", log.lines == std::vector<std::string>{ "" } && e.lineCount() == 7, 1);
+        log.lines.clear();
+        e.setCaret({ 5, 0 });
+        e.insert("p\nq\nr");
+        P.eq("cache.insert_lines_each_once", log.lines == linesOf(e, 5, 7), 1);
+        log.lines.clear();
+        e.applyEdits({ { { 0, 4 }, { 0, 5 }, "b" }, { { 8, 4 }, { 8, 5 }, "w" } });
+        P.eq("cache.apply_edits_their_lines", log.lines.size() == 2 && e.line(0) == "int b;" && e.line(8) == "int w;"
+                                                  && std::count(log.lines.begin(), log.lines.end(), "int b;") == 1
+                                                  && std::count(log.lines.begin(), log.lines.end(), "int w;") == 1,
+             1);
+        log.lines.clear();
+        e.undo();                                               // a step of two pieces: each piece's line, once
+        const std::string ninth = e.line(8);
+        P.eq("cache.undo_pieces_their_lines", log.lines.size() == 2 && e.line(0) == "int a;" && ninth != "int w;"
+                                                  && std::count(log.lines.begin(), log.lines.end(), "int a;") == 1
+                                                  && std::count(log.lines.begin(), log.lines.end(), ninth) == 1,
+             1);
+        log.lines.clear();
+        e.redo();
+        P.eq("cache.redo_pieces_their_lines", log.lines.size() == 2 && e.line(0) == "int b;" && e.line(8) == "int w;"
+                                                  && std::count(log.lines.begin(), log.lines.end(), "int b;") == 1
+                                                  && std::count(log.lines.begin(), log.lines.end(), "int w;") == 1,
+             1);
+        log.lines.clear();
+        e.replaceText(e.text() + "\nend");
+        P.eq("cache.replace_text_changed_only", log.lines == linesOf(e, 8, 9) && e.line(9) == "end", 1);
+        log.lines.clear();
+        f.host.draw();
+        P.eq("cache.draw_after_edits_never_asks", static_cast<int>(log.lines.size()), 0);
+        Fixture g;
+        g.ed().setOptions(e.options());
+        g.ed().setHighlighter(std::make_unique<KeywordHighlighter>(KeywordRules::cLike()));
+        g.ed().setPalette(TextEditor::defaultPalette());
+        P.eq("cache.edits_same_as_fresh", sameAsFresh(g, e, f.host.draw()), 1);
+
+        // A highlighter that reads the product's setting: its spans stay until rehighlight(), which asks for every
+        // line once and draws the new styles.
+        const Theme th = Theme::graphite();
+        const float w0 = e.options().style.weight;
+        e.setFocused(false);
+        e.setScroll(0.0f, 0.0f);
+        const int keywordGlyphs = countGlyphs(f.host.draw(), tags::editText, th.accent, w0 + 0.03f);
+        log.keywordsAsTypes = true;
+        log.lines.clear();
+        P.eq("cache.kept_until_rehighlight",
+             countGlyphs(f.host.draw(), tags::editText, th.accent, w0 + 0.03f) == keywordGlyphs && keywordGlyphs > 0
+                 && log.lines.empty(),
+             1);
+        e.rehighlight();
+        P.eq("cache.rehighlight_each_line_once", log.lines == linesOf(e, 0, e.lineCount() - 1), 1);
+        const PrimList& swapped = f.host.draw();
+        P.eq("cache.rehighlight_new_styles", countGlyphs(swapped, tags::editText, th.accent, w0 + 0.03f) == 0
+                                                 && countGlyphs(swapped, tags::editText, th.ink70, w0 + 0.03f) > 0,
+             1);
+        log.keywordsAsTypes = false;
+        e.setHighlighter(nullptr);
+        const PrimList& plain = f.host.draw();
+        P.eq("cache.none_plain", countGlyphs(plain, tags::editText, th.ink100) == countTag(plain, tags::editText), 1);
+
+        // Random edits, undos and redos: after each, the editor draws what one given its text from scratch draws (the
+        // rows, the minimap, the bracket pair), drawing asks for nothing, and an edit, an undo or a redo asks for its
+        // own lines and then only for the lines whose start state it moved. Once on rows, once with word wrap.
+        constexpr const char* kPieces[] = { "", "x", "if ", "int ", "/*", "*/", "\n", "\"", "'", "{", "}", "(", ")",
+                                            "// c", "\t", "return 1;", "a\nb", "*/\n/*", "\n\n",
+                                            "int x;\n\tif (y) {\n\t}" };
+        uint32_t seed = 0x2545F491u;
+        const auto rnd = [&seed](int n) {
+            seed = seed * 1664525u + 1013904223u;
+            return static_cast<int>((seed >> 8) % static_cast<uint32_t>(n));
+        };
+        for (const bool wrap : { false, true })
+        {
+            Fixture h, fresh;
+            TextEditor& x = h.ed();
+            HighlightLog hl;
+            TextEditorOptions xo = x.options();
+            xo.minimap = true;
+            xo.matchBrackets = true;
+            xo.wordWrap = wrap;
+            x.setOptions(xo);
+            x.setPalette(TextEditor::defaultPalette());
+            x.setHighlighter(std::make_unique<LoggingHighlighter>(hl));
+            fresh.ed().setOptions(xo);
+            fresh.ed().setPalette(TextEditor::defaultPalette());
+            fresh.ed().setHighlighter(std::make_unique<KeywordHighlighter>(KeywordRules::cLike()));
+            x.setText("int a; /* b */\nif (a) { \"s\" }\n// c\nreturn (a);\n/* d\n e */ int f;\n#define g 1\n"
+                      "float h = 2.5;\nwhile (i) {\n\tj('k');\n}\nreturn;");
+            x.setFocused(!wrap);                                // with wrap, no caret: where one at a break is drawn
+            // The steps as the test made them (replaceRange makes each one step of one piece, never merged), to know
+            // the lines an undo or a redo splices: it puts `removed` back where `inserted` stood, or the other way.
+            struct Step
+            {
+                TextPos     from;
+                std::string removed, inserted;
+            };
+            std::vector<Step> undos, redos;
+            int differ = 0, drawAsks = 0, wrongAsks = 0, edits = 0, wrongUndoAsks = 0, undone = 0, redone = 0;
+            for (int step = 0; step < 300; ++step)
+            {
+                const int kind = rnd(10);
+                if (kind <= 2)                                  // an undo (0, 1) or a redo (2)
+                {
+                    const bool isUndo = kind <= 1;
+                    std::vector<Step>& from = isUndo ? undos : redos;
+                    std::vector<Step>& to = isUndo ? redos : undos;
+                    const std::vector<uint32_t> before = startStates(x);
+                    hl.lines.clear();
+                    const bool did = isUndo ? x.undo() : x.redo();
+                    if (did != !from.empty())
+                        ++wrongUndoAsks;                        // the test's record and the editor's disagree
+                    else if (!did)
+                        wrongUndoAsks += hl.lines.empty() ? 0 : 1;
+                    else
+                    {
+                        ++(isUndo ? undone : redone);
+                        const Step s = from.back();
+                        from.pop_back();
+                        const std::string& out = isUndo ? s.inserted : s.removed;   // the text taken out
+                        const std::string& in = isUndo ? s.removed : s.inserted;    // and the text put in
+                        const int oldCount = static_cast<int>(std::count(out.begin(), out.end(), '\n')) + 1;
+                        const int newCount = static_cast<int>(std::count(in.begin(), in.end(), '\n')) + 1;
+                        const int last = lastAsked(before, startStates(x), s.from.line, oldCount, newCount);
+                        wrongUndoAsks += hl.lines == linesOf(x, s.from.line, last)
+                                                 && rangeOf(x, s.from, endAfter(s.from, in)) == in
+                                             ? 0
+                                             : 1;
+                        to.push_back(s);
+                    }
+                }
+                else
+                {
+                    // An insertion, a few characters replaced, or a span across a line break: small edits, so the
+                    // document keeps its lines.
+                    const int ln = rnd(x.lineCount());
+                    const auto lenOf = [&x](int l) { return static_cast<int>(x.line(l).size()); };
+                    TextPos a{ ln, rnd(lenOf(ln) + 1) }, b = a;
+                    const int shape = rnd(10);
+                    if (shape >= 8 && ln + 1 < x.lineCount())
+                        b = { ln + 1, rnd(lenOf(ln + 1) + 1) };
+                    else if (shape >= 5)
+                        b.col = std::min(lenOf(ln), a.col + 1 + rnd(4));
+                    std::string piece = kPieces[rnd(static_cast<int>(std::size(kPieces)))];
+                    if (x.lineCount() > 30)
+                    {
+                        a = { rnd(10), 0 };                     // keep it to what the minimap shows: remove lines
+                        b = { a.line + 8, 0 };
+                        piece.clear();
+                    }
+                    const std::vector<uint32_t> before = startStates(x);
+                    std::string removed = rangeOf(x, a, b);
+                    hl.lines.clear();
+                    if (x.replaceRange(a, b, piece))
+                    {
+                        ++edits;
+                        const int oldCount = b.line - a.line + 1;
+                        const int newCount = static_cast<int>(std::count(piece.begin(), piece.end(), '\n')) + 1;
+                        const int last = lastAsked(before, startStates(x), a.line, oldCount, newCount);
+                        wrongAsks += hl.lines == linesOf(x, a.line, last) ? 0 : 1;
+                        undos.push_back({ a, std::move(removed), TextEditor::sanitise(piece) });
+                        redos.clear();
+                    }
+                }
+                if (rnd(4) == 0)
+                    x.setScroll(0.0f, static_cast<float>(rnd(400)));
+                hl.lines.clear();
+                const PrimList& drawn = h.host.draw();
+                drawAsks += static_cast<int>(hl.lines.size());
+                differ += sameAsFresh(fresh, x, drawn) ? 0 : 1;
+            }
+            const std::string tag = wrap ? "cache.random_wrap." : "cache.random.";
+            P.eq((tag + "edits").c_str(), edits > 150, 1);
+            P.eq((tag + "same_as_fresh").c_str(), differ, 0);
+            P.eq((tag + "draw_never_asks").c_str(), drawAsks, 0);
+            P.eq((tag + "edit_asks_changed_only").c_str(), wrongAsks, 0);
+            P.eq((tag + "undos_and_redos").c_str(), undone > 40 && redone > 4, 1);
+            P.eq((tag + "undo_asks_changed_only").c_str(), wrongUndoAsks, 0);
+        }
+    }
 }
 
 int main(int argc, char** argv)
@@ -1721,5 +2073,6 @@ int main(int argc, char** argv)
     serviceEdits(P);
     overlayGeometry(P);
     codeLooks(P);
+    spanCache(P);
     return P.finish();
 }

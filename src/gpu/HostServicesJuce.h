@@ -42,6 +42,13 @@ namespace funkgui
         // closed, and neither callback runs.
         void letGo();
 
+        // The options showMenu gives JUCE for a request shown in `look` from `owner` at `scale` (as showMenu's): the
+        // owner as the target component, MenuLook::targetAreaFor of the anchor on screen under JUCE's scale for the
+        // menu, one column, selectedId as the initially selected item that must be visible, and minWidth as the
+        // minimum width. Public for fg.host.services.editor.
+        static juce::PopupMenu::Options menuOptions(const MenuRequest&, const MenuLook& look, juce::Component& owner,
+                                                    float scale);
+
     private:
         // What a JUCE callback finds when it arrives: shared with it, so one that arrives after this object has gone
         // finds nothing to do.

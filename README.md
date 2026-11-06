@@ -19,7 +19,7 @@ Emscripten, on a `<canvas>`, where a WebGL2 sink draws the recorded frame in one
 
 FunkGui is the GUI of [FCompressor](https://github.com/Snipet/FCompressor). HardwareReverb, a private plugin whose GUI
 code FunkGui grew from, has moved onto it too. FunkGui is at 0.x, and its API may change between minor versions.
-Every release is an annotated tag on `main` (latest: `v0.23.1`), and [`CHANGELOG.md`](CHANGELOG.md) says what each
+Every release is an annotated tag on `main` (latest: `v0.25.0`), and [`CHANGELOG.md`](CHANGELOG.md) says what each
 release does to a consumer's golden files.
 
 ![Widgets from FunkGui's gallery: slider states, filled areas and a transfer curve, segmented selectors, latches and a focus ring](docs/images/gallery.png)
@@ -61,9 +61,10 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
   and `FUNKGUI_HAS_JUCE` (`core/HasJuce.h`): 1 when JUCE is under the build, 0 without.
 - **canvas**: the recorder. Rounded rectangles (per-corner radii, borders, soft edges), hairlines snapped to device
   pixels, segments, polylines, filled areas and strips, discs, dotted rules and text. Each primitive carries a semantic
-  tag and a live flag for tests. Nested clipping, a text dump format, fingerprints, and `SoftRaster`, a CPU rasteriser
-  that mirrors the fragment shader. `shader()` (v0.19.0) records a rectangle that a host's own fragment shader fills,
-  in order with the primitives and under the clip in force; `SoftRaster` draws it as a striped placeholder.
+  tag and a live flag for tests. Nested clipping, a text dump format, fingerprints, `sameDrawing()` (0.25.0: whether two
+  recorded frames draw the same picture), and `SoftRaster`, a CPU rasteriser that mirrors the fragment shader.
+  `shader()` (v0.19.0) records a rectangle that a host's own fragment shader fills, in order with the primitives and
+  under the clip in force; `SoftRaster` draws it as a striped placeholder.
   `image(id, dst, radius, opacity, uv)` (v0.20.0) draws a picture from `Images.h`, a process-wide registry of decoded
   RGBA8 pictures by id (`images::set`, `remove`, `has`; any thread may read it while one sets): stretched over `dst`,
   sampling the sub-rectangle `uv` (crop it for "cover"), with corners rounded and antialiased as an rrect's, faded by
@@ -79,8 +80,10 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
   bake, bit for bit).
 - **panel**: the `Panel` interface; `HostServices`, what a Panel may ask of its host, including (from v0.12.0) a popup
   menu, a file chooser and the clipboard as plain calls that need no JUCE in the Panel, with `services()` saying which
-  the host serves; `HeadlessHost`, which serves all three to a test (every call logged, a menu or a chooser pending
-  until the test answers it); `HeadlessGuiScope`, what a headless program holds before it draws (JUCE's GUI
+  the host serves; from 0.25.0 a menu's rows may be section headers, radio items, items with a shortcut shown and
+  submenus, a request may name the item highlighted as it opens and a minimum width, and `validMenu()` is the one
+  rule every host applies to a request; `HeadlessHost`, which serves all three to a test (every call logged, a menu
+  or a chooser pending until the test answers it, items chosen through submenus as a user would); `HeadlessGuiScope`, what a headless program holds before it draws (JUCE's GUI
   initialiser with JUCE, nothing without); and the capture settings read from the environment.
 - **params**: `ParamPort` (a host parameter as 0..1), `JuceParamPort` over a `juce::RangedAudioParameter`, and
   `GestureController`, which wraps every write in a begin/end gesture: drags, clicks, wheel bursts and batches of
@@ -95,30 +98,53 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
   text as it is edited; indent guides, trailing blanks, a bracket pair matched at the caret, auto-closed pairs,
   brace indent and a minimap; geometry for the product's overlays (`pointOf`, `posAt`, `visibleLineRange`,
   `wordRangeAt`); and one-step undoable edits for language services (`replaceRange`, `applyEdits` for a formatter,
-  `replaceText`). The completion list, hover cards and find bar stay the product's. Controls render models the
-  product implements and write only through `GestureController`.
+  `replaceText`). The completion list, hover cards and find bar stay the product's. From 0.25.0 the editor keeps every
+  line's highlight spans: an edit runs the highlighter over the lines it changed (and on while a line's start state
+  moves), and drawing (the rows, the minimap, the bracket pair) never runs it, so a frame no longer re-tokenises every
+  row it shows; a highlighter that reads more than its line and state (a list of names the product updates) is re-run
+  over the whole text by `rehighlight()`. Controls render models the product implements and write only through
+  `GestureController`.
 - **a11y**: the accessibility items a Panel lists, and their one-line text form for tests.
 - **prefs**, **live**, **juce**: UI preferences (theme, zoom, integer keys) behind a storage backend: with JUCE a
   machine-wide file in `~/Library/Application Support/<product>/` (Linux: `~/.config/<product>/`), without JUCE memory
   for the life of the process unless the host installs another backend; `LiveFeed`, which tells a live telemetry
-  stream from a stale one; `MenuLook`, the theme applied to JUCE popup menus.
+  stream from a stale one; `MenuLook`, the theme applied to JUCE popup menus. From 0.25.0 `MenuLook` draws the whole
+  menu in the canvas's style: a rounded panel of the theme's surface with a hairline edge and a soft shadow (in a
+  window that is not opaque, where the platform has them), a hover pill, ticks and radio dots, section headers,
+  separators, dimmed disabled rows, submenu chevrons and a shortcut column, one column that scrolls under its own
+  strips, Up/Down/Home/End/Page keys that scroll the row into view, and type-ahead; `fg.menulook` writes a picture of
+  every kind of row in both themes (`menulook-*.png` in its sandbox).
 - **gpu**: `EditorHost`, a `juce::AudioProcessorEditor` that runs one Panel on bgfx: Metal on a click-through NSView
   on macOS, Vulkan on an X11 child window of JUCE's peer on Linux (which is XWayland on a Wayland desktop), Direct3D
   11 on a click-through child window of JUCE's peer on Windows (v0.24.0). It handles the surface lifecycle with a
   no-GPU fallback screen, converts JUCE input, mirrors the accessibility items for the screen reader, offers UI zoom
   steps, resizes the window for a resizable Panel, serves the menu, the file chooser and the clipboard of
-  `HostServices` through JUCE, and can capture frames. `FramePump` gives every editor in the process one clock (a
-  display link on macOS, a timer on Linux and Windows) and one `bgfx::frame()` per tick; the link stays on an editor
-  whose window is shown, moved by a watchdog when it goes quiet (v0.21.0: a host that hides one plug-in window to show
-  the next froze every editor), and `BgfxContext` holds each editor's view until bgfx has run the last command that
-  names it (an editor closed before its first frame crashed the host). On macOS the Objective-C classes, and on
-  Windows the render view's window class, are registered at run time under randomised names, so two products using
+  `HostServices` through JUCE, and can capture frames. An editor whose picture has not changed draws nothing and
+  leaves its last picture up (0.25.0): when the Panel's `needsDraw()` says nothing it draws has changed, the frame is
+  neither recorded nor submitted, and a frame recorded equal to the last one drawn is not submitted either, so an idle
+  editor costs no GPU time; a new size, scale, zoom or theme, a surface made again and a window shown again or
+  uncovered still draw. That holds on macOS and Windows; on Linux every frame is still drawn, as before, because nothing
+  there tells FunkGui when a window's picture is lost (a window unmapped and mapped again comes back empty, compositing
+  manager or not; `NativeSurface.h`). `FramePump` gives every editor in the process one clock (a display link on macOS,
+  a timer on Linux and Windows) and one `bgfx::frame()` per tick (none while no editor draws). Each editor keeps its
+  own cadence (0.25.0): one whose Panel wants full rate, or that input has just reached, runs at every tick, and a
+  calm one at 12 Hz with the time since its own last frame as its dt, even while another editor keeps the clock at
+  60 Hz, so one moving instance no longer makes every open instance tick and record at 60 Hz. The link stays on an
+  editor whose window is shown, moved by a watchdog when it goes quiet (v0.21.0: a host that hides one plug-in window to
+  show the next froze every editor), and `BgfxContext` holds each editor's view until bgfx has run the last command that
+  names it (an editor closed before its first frame crashed the host). On macOS the Objective-C classes, and on Windows
+  the render view's window class, are registered at run time under randomised names, so two products using
   FunkGui in one host never collide. `ShaderLibrary.h` (`funkgui::shaders`, v0.19.0) registers custom fragment shaders by id: a host
   compiles one at run time with bgfx's shaderc (`target()`, `varyingDef()`, `fragmentPrelude()` and `bgfxShaderSh()`
   give it what to compile with), `set()` checks it (on macOS Metal compiles it too) and links it with FunkGui's own
   vertex shader, and `BgfxSink` draws it wherever a Canvas recorded `shader()`, with its rectangle, the frame's clock
-  and 16 parameters as uniforms. Pictures (`Canvas::image`, v0.20.0) draw with FunkGui's own image program; their
-  textures are shared by every editor in the process, uploaded at a picture's first draw and destroyed after
+  and 16 parameters as uniforms. `check()` (0.25.0) runs `set()`'s checks on any thread: a host that builds shaders on
+  a worker checks them there, and `set()` on the message thread then does not compile again a code Metal accepted
+  (the last 256 used, up to 2 MiB of text). A custom shader may sample up to four textures (0.25.0): a host registers
+  RGBA8 or R8 texels from memory with `setTexture()` and binds a texture to a `SAMPLER2D` of a shader by name with
+  `bindTexture()`; bgfx binds it at the sampler's stage on Metal, Direct3D 11 and Vulkan, and an unbound sampler reads
+  zeros. Pictures (`Canvas::image`, v0.20.0) draw with FunkGui's own image program;
+  their textures are shared by every editor in the process, uploaded at a picture's first draw and destroyed after
   `images::remove()` or a replacement, and when bgfx shuts down.
   `GpuPicture.h` (v0.23.0) draws a recorded frame offscreen with `BgfxSink` and reads it back as an RGBA `Image`
   (`renderGpuPicture`), so a picture of a Panel for a person or a model shows its custom shaders and pictures as the
@@ -131,7 +157,9 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
 - **web** (`FunkGui::web`; Emscripten only, no JUCE): `WebHost`, `EditorHost`'s counterpart on a `<canvas>`. It runs the
   frame clock on `requestAnimationFrame` (about 60 Hz while anything moves, 12 Hz idle, nothing while the document is
   hidden), sizes the canvas for the UI zoom and the device pixel ratio, converts the browser's pointer, wheel and key
-  events by JUCE's rules, and serves menus (DOM elements in the request's theme) and the clipboard write (`copyText`;
+  events by JUCE's rules, and serves menus (DOM elements in the request's theme, with the look `MenuLook` had before
+  0.25.0; a header or a submenu shows as a disabled row of its label with the submenu's rows after it, a radio item as
+  a tick, no shortcut) and the clipboard write (`copyText`;
   `clipboardText` reads empty there); it has no file chooser, no IME, no file drops and no accessibility mirror.
   `WebHostConfig::beforeTick` (v0.14.0) is a product's function called just before each tick of the Panel. `WebGlSink`
   draws a recorded frame with WebGL2 in one draw call, from shader text generated out of the same `shaders/*.sc`, and
@@ -262,6 +290,8 @@ public:
     int  height() const override { return 120; }
     void tick(float /*dt*/) override {}                         // advance eases here
     bool wantsFullRate() const override { return false; }       // true while anything moves
+    bool needsDraw() const override { return false; }           // true when what draw() records changed (default
+                                                                // true: EditorHost draws every frame)
     void draw(funkgui::Canvas& c, const funkgui::Theme& th) override
     {
         c.rrect(16, 16, 288, 88, 4, th.ink16);

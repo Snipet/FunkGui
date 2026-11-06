@@ -104,7 +104,9 @@ namespace funkgui
         const MenuRequest* pendingMenu() const noexcept { return menuPending_ ? &log.lastMenu : nullptr; }
         const FileRequest* pendingFiles() const noexcept { return filesPending_ ? &log.lastFiles : nullptr; }
         // The user chooses an item: by id, or by label (the first item with exactly that label). False for an item
-        // the menu does not hold, a disabled one or a separator.
+        // the menu does not hold, a disabled one or a separator. 0.25.0: items in submenus are searched too, depth
+        // first in the menu's order, and chosen as the user would through their rows (false when a row above the
+        // item is disabled); a header and a submenu's own row are never chosen.
         bool chooseMenuItem(int id);
         bool chooseMenuItem(std::string_view label);
         bool cancelMenu();                           // the user dismisses the menu: its callback runs with 0

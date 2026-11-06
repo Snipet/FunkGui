@@ -1,8 +1,12 @@
 #include <funkgui/gpu/EditorHost.h>
 
 #include "Cursors.h"
+#include "FrameGate.h"
 #include "HostServicesJuce.h"
+#include "ShaderLibraryDetail.h"
 
+#include <funkgui/canvas/FrameCompare.h>
+#include <funkgui/canvas/Images.h>
 #include <funkgui/core/Config.h>
 #include <funkgui/gpu/BgfxContext.h>
 #include <funkgui/gpu/NativeSurface.h>
@@ -26,7 +30,8 @@
 //   drawn when n frames were already submitted (HR's skip count), once; the Panel has been ticked n + 1 times then.
 // - FrameInfo: the Panel's size, dpi = physical / logical height (HR), the theme's ground and gamma, seconds = the sum
 //   of the dts the Panel was ticked with, frame = ticks, clock "fixed" under UI_FIXED_DT (fps 0) else the pump's
-//   clock and measured rate, rate = the pump's last request, overflows = frames dropped so far.
+//   clock and this editor's measured rate, rate = this editor's last request (0.25.0: each editor its own cadence,
+//   below; the pump's rate and request before, the same for one editor alone), overflows = frames dropped so far.
 // - nowSeconds() is the wall clock, or under UI_FIXED_DT the Panel's simulated clock (so nothing a capture draws can
 //   depend on when the capture ran). Panel::idle(nowSeconds()) runs from a 10 Hz timer in both cases.
 // - Input: every event nudges the pump to full rate and is followed by a cursor update; an unconsumed wheel event goes
@@ -101,6 +106,36 @@
 //   it is nested in, and JUCE clears the focus with either). So the rule needs no count of rebuilds. "Grabbed" is
 //   what JUCE reports afterwards (hasFocus): a grab that JUCE refused (a modal component in the way) is tried again
 //   at the next sync. Without a peer JUCE gives no handler, nothing is grabbed, and the target waits.
+//
+// 0.25.0, additive (unchanged frames; EditorHost.h "Unchanged frames", src/gpu/FrameGate.h). Choices where the design
+// is silent:
+// - needsDraw() is asked every frame the Panel is ticked, after tick(), whether or not the editor has a reason of its
+//   own to draw, so a Panel sees one call per tick.
+// - The state a picture is drawn for (detail::SurfaceState) is compared whole: the surface's revision, the drawable's
+//   device size, the Panel's size, the theme index and the two registries' generations. A zoom or backing scale
+//   change shows as a new device size; a context rebuilt under the editor (the primary closed) as a new revision.
+// - Occlusion counts only where bgfx itself skips the present (macOS): a frame drawn while the window reads occluded
+//   is drawn again on the first frame it does not, and nothing is drawn meanwhile unless the Panel asks. The skip
+//   never depends on the occlusion state alone, which macOS reports late after a window is shown.
+// - A frame the sink dropped (overflow) is drawn again at the next frame. A window waiting for its framebuffer
+//   (Windows) records and counts frames as before, so the pump's frames keep running until it has one, and then draws.
+// - The safety net compares with the last recording submitted, also when the Panel asked (needsDraw() true): equal,
+//   nothing is submitted and Diagnostics::unchanged counts it. Under a capture every frame is submitted: CANVAS_DUMP
+//   numbers its frames by those submitted, UI_SCALE_AFTER counts them, and UI_FIXED_DT's live frame must equal
+//   HeadlessHost's of the same tick.
+//
+// 0.25.0, additive (each editor its own cadence; FramePump.h, src/gpu/ClientCadence.h). Choices where the design is
+// silent:
+// - The pump decides when an editor's frame runs: a calm editor (wantsFullRate() false at its last frame, no input
+//   since) runs at about 12 Hz while another editor keeps the pump at 60, its dt the time since its own last frame;
+//   EditorHost itself is unchanged by it, and every step of a frame runs as before when it runs.
+// - Input and everything else that nudged the pump (a resize, a Panel's HostServices::nudgeFullRate()) nudge this
+//   editor only (FramePump::nudgeFullRate(this)): it runs at the next tick, the others keep their cadence. A zoom
+//   chosen with EditorConfig::zoomPrefKey nudges every editor, since every editor follows that preference at its next
+//   frame (fg.editorhost.zoom follow.*). Another editor follows a theme written by a Panel (UiPreferences) at its next
+//   frame, which for a calm editor is its own idle tick, up to a twelfth of a second later.
+// - Diagnostics::fps and FrameInfo's fps and rate are this editor's own (FramePump::measuredFps(this),
+//   wantedFullRate(this)); with one editor open they count the same frames and requests as the pump's did.
 
 namespace funkgui
 {
@@ -188,6 +223,7 @@ namespace funkgui
     {
         jassert(panel_ != nullptr);                  // an EditorHost always runs a Panel
         cursors_ = std::make_unique<EditorCursors>();   // FSynth G1: a share of the process's cursors, none made yet
+        gate_ = std::make_unique<detail::FrameGate>();  // 0.25.0: nothing drawn yet ("Unchanged frames")
         services_ = std::make_unique<HostServicesJuce>(*this);
         setOpaque(true);
         setWantsKeyboardFocus(true);
@@ -257,7 +293,7 @@ namespace funkgui
     {
         Diagnostics d = diag_;
         d.displayLinked = FramePump::get().isDisplayLinked();
-        d.fps = FramePump::get().measuredFps();
+        d.fps = FramePump::get().measuredFps(this);  // 0.25.0: this editor's own cadence
         d.scale = surfaceOk_ ? attachedScale_ : 0.0;
         d.zoomPercent = zoomApplied_;
         return d;
@@ -493,7 +529,11 @@ namespace funkgui
 
         // 2. A minimised or hidden host window would otherwise burn a GPU frame every tick, for every open instance,
         //    forever (HR :862-864).
-        if (!isShowing()) return result;
+        if (!isShowing())
+        {
+            gate_->lost();                           // 0.25.0: shown again, it draws ("Unchanged frames")
+            return result;
+        }
 
         // 3. Attach, back off between retries, and paint the fallback once per state change, not every tick
         //    (HR :866-884).
@@ -507,6 +547,7 @@ namespace funkgui
             }
             if (!surfaceOk_)
             {
+                gate_->lost();
                 if (!fallbackPainted_)
                 {
                     fallbackPainted_ = true;
@@ -523,6 +564,7 @@ namespace funkgui
         {
             gpuLog("owns: surface no longer registered; re-attaching");
             detachSurface();
+            gate_->lost();
             retrySec_ = kRetryHopefulSec;
             fallbackPainted_ = false;
             return result;
@@ -532,7 +574,7 @@ namespace funkgui
         refreshDrawableScale();
 
         // 5. First frame only: the key replay, then the accessibility tree it produced (its dump follows this frame,
-        //    step 10). Here and not in the constructor: JUCE creates accessibility handlers only for a component that
+        //    step 12). Here and not in the constructor: JUCE creates accessibility handlers only for a component that
         //    has a window (HR :904-925).
         const bool firstFrame = !firstFrameDone_;
         if (firstFrame)
@@ -549,7 +591,33 @@ namespace funkgui
         seconds_ += static_cast<double>(tickDt);
         ++ticks_;
 
-        // 7. Record the frame.
+        // 7. Whether to draw (0.25.0, "Unchanged frames"): the Panel's answer, or a reason of the editor's own. The
+        //    first frame, a capture (CANVAS_DUMP, UI_SCALE, UI_FIXED_DT: their frame counts and clock stand), a window
+        //    that keeps no frame (Linux: NativeSurface.h renderViewKeepsFrame) and one that waits for its framebuffer
+        //    draw every frame, as before; the gate draws for a new state and to put a lost picture back on screen.
+        const bool panelWants = panel_->needsDraw();
+        const bool canSubmit = ctx.drawable(renderView_);
+        const bool capturing = captureMode_ || capture_.uiScale > 0.0f || capture_.fixedDt > 0.0f;
+        const bool always = firstFrame || capturing || !canSubmit || !renderViewKeepsFrame(renderView_);
+        const bool reachesScreen = !renderViewOccluded(renderView_);
+        detail::SurfaceState state;
+        state.surface = ctx.surfaceRevision(renderView_);
+        state.physW = physW_;
+        state.physH = physH_;
+        state.logicalW = panel_->width();
+        state.logicalH = panel_->height();
+        state.theme = themeIdx_;
+        state.images = images::generation();
+        state.shaders = shaders::detail::generation();
+        const bool forced = always || gate_->mustDraw(state, reachesScreen);
+        if (!forced && !panelWants)
+        {
+            ++diag_.skipped;
+            finishFrame(firstFrame, result);
+            return result;
+        }
+
+        // 8. Record the frame.
         const auto& pump = FramePump::get();
         FrameInfo info;
         info.logicalW = panel_->width();
@@ -568,14 +636,14 @@ namespace funkgui
         info.dt = tickDt;
         info.fixedClock = capture_.fixedDt > 0.0f;
         info.displayLinked = pump.isDisplayLinked();
-        info.fps = info.fixedClock ? 0.0f : pump.measuredFps();
-        info.fullRate = pump.wantedFullRate();
+        info.fps = info.fixedClock ? 0.0f : pump.measuredFps(this);
+        info.fullRate = pump.wantedFullRate(this);
         info.overflows = diag_.overflows;
         canvas_.begin(info);
         panel_->draw(canvas_, theme_);
         const PrimList& list = canvas_.end();
 
-        // 8. The capture dump, once, of frame CANVAS_DUMP_AFTER.
+        // 9. The capture dump, once, of frame CANVAS_DUMP_AFTER.
         if (captureMode_ && !dumpAttempted_ && diag_.frames >= static_cast<uint32_t>(capture_.canvasDumpAfter))
         {
             dumpAttempted_ = true;
@@ -584,26 +652,52 @@ namespace funkgui
                    + " (frame " + juce::String(static_cast<int64_t>(diag_.frames)) + ")");
         }
 
-        // 9. Submit. Deliberately no bgfx::frame() here: it presents every view at once, so the pump calls it once
+        // 10. The safety net (0.25.0): a frame drawn only because the Panel asked, whose recording equals the last
+        //     frame submitted, is not submitted; the picture on screen is already that frame.
+        if (!forced && sameDrawing(list, drawnList_))
+        {
+            ++diag_.unchanged;
+            finishFrame(firstFrame, result);
+            return result;
+        }
+
+        // 11. Submit. Deliberately no bgfx::frame() here: it presents every view at once, so the pump calls it once
         //    after all open editors have submitted. Not while the window waits for its framebuffer (v0.24.0, Windows:
         //    BgfxContext::drawable()): its view would draw into the primary's backbuffer.
-        if (ctx.drawable(renderView_)
-            && sink_.submit(list, ctx.viewIdFor(renderView_), ctx.framebufferFor(renderView_), physW_, physH_)
-                   == BgfxSink::Result::droppedOverflow)
-            onOverflow();
+        bool shown = false;
+        if (canSubmit)
+        {
+            if (sink_.submit(list, ctx.viewIdFor(renderView_), ctx.framebufferFor(renderView_), physW_, physH_)
+                == BgfxSink::Result::droppedOverflow)
+                onOverflow();
+            else
+                shown = reachesScreen;
+        }
+        if (shown)
+            gate_->drawn(state, true);
+        else if (canSubmit)
+            gate_->drawn(state, false);              // occluded or dropped: drawn again once it can be shown
+        else
+            gate_->lost();                           // nothing reached the window: drawn once it has a framebuffer
+        drawnList_ = list;                           // capacity kept
         ++diag_.frames;
         result.submitted = true;
+        finishFrame(firstFrame, result);
+        return result;
+    }
 
-        // 10. Accessibility: structure on a revision change, values at <= 10 Hz; after the first frame, its dump
+    // Steps 12 and 13 of every frame that ticked the Panel, drawn or not.
+    void EditorHost::finishFrame(bool firstFrame, Result& result)
+    {
+        // 12. Accessibility: structure on a revision change, values at <= 10 Hz; after the first frame, its dump
         //     (02 §5.1: the tree as it stands once the replayed keys have been ticked and drawn).
         if (firstFrame || panel_->a11yRevision() != a11yRevision_ || wallSeconds() - a11ySyncedAt_ >= kA11yValuePeriod)
             syncAccessibility();
         if (firstFrame && !capture_.a11yDump.empty() && !writeA11yDump(capture_.a11yDump))
             gpuLog("A11Y_DUMP: could not write " + juce::String(capture_.a11yDump));
 
-        // 11. Full rate only while something moves.
+        // 13. Full rate only while something moves.
         result.wantsFullRate = panel_->wantsFullRate();
-        return result;
     }
 
     void EditorHost::onOverflow()
@@ -982,7 +1076,7 @@ namespace funkgui
 
     void EditorHost::nudgeFullRate()
     {
-        FramePump::get().nudgeFullRate();
+        FramePump::get().nudgeFullRate(this);        // 0.25.0: this editor at the next tick; the others keep theirs
     }
 
     double EditorHost::nowSeconds() const
@@ -1089,11 +1183,17 @@ namespace funkgui
     {
         if (!isZoomStep(percent))
             return;                                  // not a step this product offers: nothing written, nothing moves
-        if (config_.zoomPrefKey != nullptr && config_.zoomPrefKey[0] != '\0')
+        const bool shared = config_.zoomPrefKey != nullptr && config_.zoomPrefKey[0] != '\0';
+        if (shared)
             UiPreferences::get().setInt(config_.zoomPrefKey, percent);   // every editor follows its revision
         zoomChosen_ = percent;
         updateZoomTarget();
-        nudgeFullRate();                             // the next frame, soon, applies it
+        // The next frame, soon, applies it: this editor's, and with the preference written every editor's (0.25.0:
+        // each follows at its next frame, which for a calm editor would otherwise be its own idle tick).
+        if (shared)
+            FramePump::get().nudgeFullRate();
+        else
+            nudgeFullRate();
     }
 
     bool EditorHost::zoomFits(int percent) const

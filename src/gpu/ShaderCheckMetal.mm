@@ -10,6 +10,10 @@
 // NS::String::string(code, NS::ASCIIStringEncoding)), then the entry point bgfx asks for. A refusal here is a false
 // from set(), with Metal's log, instead of an abort later.
 //
+// Since 0.25.0 shaders::check() calls it too, from any thread: it keeps no state, the default device is thread-safe,
+// and the pool below is its own (a worker thread has none). ShaderLibrary.cpp counts the calls and remembers the
+// codes it accepted.
+//
 // Compiled without ARC, like NativeSurface.mm: what the Create and new methods return is released here.
 
 namespace funkgui::shaders::detail
