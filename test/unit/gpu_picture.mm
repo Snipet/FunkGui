@@ -11,7 +11,9 @@
 //               params), none is the placeholder, the rrect after it covers it; away from the shader every pixel is
 //               within fg.image.draw's bounds of SoftRaster (none off by more than 4, at most 1 % by more than 2);
 //               opaque. The pictures are written to gpu-picture.png and gpu-picture-softraster.png in the sandbox.
-// - again.*     a second call reuses the hold and draws the same bytes.
+// - again.*     a second call reuses the hold and draws the same bytes; its render target and read-back texture are
+//               gone when it returns (a further bgfx frame frees no texture or framebuffer): it runs the frame that
+//               destroys them itself, since no other frame may follow soon (0.25.0: idle editors run none).
 // - scale.*     the same list recorded at dpi 1.25: SoftRaster's size, within the same bounds away from the shader.
 // - size.*      a 0 x 0 frame and one over 16384 px are badSize, and start nothing.
 // - thread.*    from another thread while the message thread turns its run loop: posted, drawn, the same bytes; while
@@ -518,6 +520,15 @@ int main(int argc, char** argv)
             P.eq("again.ok", again.ok(), 1);
             P.eq("again.reused", !again.startedContext && funkgui::gpuPictureContextHeld(), 1);
             P.eq("again.same_bytes", again.image.rgba == first.image.rgba, 1);
+            // Its targets are freed by the time it returns: one more frame frees nothing further.
+            const bgfx::Stats* st = bgfx::getStats();
+            const unsigned textures = st->numTextures, framebuffers = st->numFrameBuffers;
+            bgfx::frame();
+            ctx.afterFrame();
+            st = bgfx::getStats();
+            std::printf("INFO     again: bgfx textures %u (%u a frame later), framebuffers %u (%u)\n", textures,
+                        unsigned{ st->numTextures }, framebuffers, unsigned{ st->numFrameBuffers });
+            P.eq("again.targets_freed", st->numTextures == textures && st->numFrameBuffers == framebuffers, 1);
         }
 
         // ---- scale: dpi 1.25 ----------------------------------------------------------------------------------------

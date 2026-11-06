@@ -22,7 +22,9 @@
 // frame inside bgfx::frame(), and the read lands within two of them). Everything that touches bgfx runs on the message
 // thread: inline when called there, else posted to it and waited for with a timeout. Choices the header leaves open:
 // - The render target and the read-back texture are made and destroyed per picture (a picture is a tool's request, not
-//   a frame of an animation); their destruction runs at bgfx's next frame, as every bgfx destroy does.
+//   a frame of an animation); their destruction runs at bgfx's next frame, as every bgfx destroy does, and the picture
+//   runs that frame itself before it returns (0.25.0): editors that leave their last picture up run none, so the
+//   targets of a large picture would otherwise stay allocated until something drew.
 // - Both views draw into the picture's target, the blit view too: a view touched while it names the default backbuffer
 //   opens a render pass on the primary editor's swapchain, which takes that window's next drawable (loaded, not
 //   cleared) and presents it at the frame's end, a stale frame on screen until the editor's next one.
@@ -160,6 +162,8 @@ namespace funkgui
                 if (bgfx::isValid(fb)) bgfx::destroy(fb);
                 if (bgfx::isValid(readback)) bgfx::destroy(readback);
                 if (bgfx::isValid(colour)) bgfx::destroy(colour);
+                bgfx::frame();                       // runs the destroys (see above)
+                ctx.afterFrame();
             };
             if (!bgfx::isValid(colour) || !bgfx::isValid(readback) || !bgfx::isValid(fb))
             {
