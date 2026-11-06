@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -32,7 +33,11 @@
 // - the samplers (0.25.0): only 2D samplers of floats at stages 0 to 3 are bound (with the texture bound to the name,
 //   or a 1 x 1 texture of zeros), so any other kind of texture, a stage outside them or shared, or a buffer or image
 //   would read what nothing binds; each is refused by name, with the stage found as bgfx's renderer finds it (the
-//   Metal text's [[texture(n)]], the SPIR-V binding less kSpirvBindShift, the Direct3D 11 register);
+//   Metal text's [[texture(n)]], the SPIR-V binding less kSpirvBindShift, the Direct3D 11 register) and the kind
+//   from the code where it says (the Metal text's texture2d<float>, the SPIR-V OpTypeImage). shaderc lists a plain
+//   int uniform as a sampler too, and Metal's float, vec2 and vec3 uniforms with no type: those are uniforms FunkGui
+//   never sets, refused as such. The samplers are read after the code's format (a binary for another renderer is
+//   called that) and before Metal compiles it;
 // - the code: Metal compiles the text at the next frame and aborts the process when it cannot (BGFX_FATAL), so macOS
 //   compiles it here first (src/gpu/ShaderCheckMetal.mm); Linux checks the SPIR-V words' magic and size only, and
 //   Windows (v0.24.0) the Direct3D 11 bytecode's DXBC container magic only (bgfx's Direct3D 11 creates the shader from
@@ -88,8 +93,12 @@ namespace funkgui::shaders
         // bgfx's uniform types (bgfx::UniformType: Sampler 0, End 1, Vec4 2) and the flag bits shaderc ORs into a
         // binary's type byte (bgfx_p.h kUniformMask: fragment, sampler, read-only, compare).
         constexpr uint8_t kSamplerType = 0, kEndType = 1, kVec4Type = 2;
-        constexpr uint8_t kCompareFlag = 0x80;
-        constexpr uint8_t kUniformFlags = 0x10 | 0x20 | 0x40 | kCompareFlag;
+        constexpr uint8_t kSamplerFlag = 0x20, kCompareFlag = 0x80;
+        constexpr uint8_t kUniformFlags = 0x10 | kSamplerFlag | 0x40 | kCompareFlag;
+
+        // The register index shaderc's Metal path writes for a live uniform outside the uniform buffer (glslang's
+        // offset -1: a separate texture, sampler state or image); a plain uniform has its byte offset there.
+        constexpr uint16_t kNoOffset = 0xFFFF;
 
         // A SPIR-V binary's texture bindings are the declared stage plus bgfx's shift (shader.h kSpirvBindShift) in
         // its binding model of version 11 on, the one renderer_vk.cpp reads as `stage = regIndex - kSpirvBindShift`;
@@ -381,6 +390,110 @@ namespace funkgui::shaders
                                [name](const char* p) { return name == p; });
         }
 
+        std::string neverSet(const std::string& name)
+        {
+            return "the shader reads the uniform " + name
+                   + ", which FunkGui never sets: use u_params (16 floats), u_rect and u_viewSize";
+        }
+
+        std::string neverBound(const std::string& name)
+        {
+            return "the shader uses " + name + ", a buffer, image or texture FunkGui never binds: custom shaders read "
+                   "2D textures through SAMPLER2D only";
+        }
+
+        // Whether an entry of type Sampler is a texture (0.25.0). shaderc writes a live int uniform as a Sampler too
+        // (its reflection's GL_INT case, with the int's byte offset as its register); SPIR-V and Direct3D 11 mark a
+        // texture with the sampler bit, as bgfx's renderers read it, and Metal sets no bit but lists a texture with
+        // num 0 (an int has its array size, 1 or more).
+        bool isTexture(const Binary::Uniform& u, Code code)
+        {
+            return code == Code::metal ? u.num == 0 : (u.flags & kSamplerFlag) != 0;
+        }
+
+        // The type of the SPIR-V image at a binding, as the code declares it (OpTypeImage's operands): what the tex
+        // info does not say, since shaderc's dimension drops the multisample flag and says nothing of the format.
+        struct SpirvImage
+        {
+            uint32_t dim = 0, arrayed = 0, ms = 0, sampled = 0, format = 0;
+        };
+
+        // The image type of the variable decorated with Binding `binding`; false when the code is no SPIR-V module,
+        // is cut short or has no image there. Types precede the variables that use them in a module, so one pass.
+        bool spirvImage(const Binary& b, uint32_t binding, SpirvImage& out)
+        {
+            constexpr uint32_t kMagic = 0x07230203, kOpTypeImage = 25, kOpTypePointer = 32, kOpVariable = 59;
+            constexpr uint32_t kOpDecorate = 71, kDecorationBinding = 33;
+            const std::size_t words = b.codeSize / 4;
+            const auto word = [&b](std::size_t i) {
+                const uint8_t* p = b.code + i * 4;   // little-endian, as Reader
+                return static_cast<uint32_t>(p[0]) | static_cast<uint32_t>(p[1]) << 8
+                       | static_cast<uint32_t>(p[2]) << 16 | static_cast<uint32_t>(p[3]) << 24;
+            };
+            if (words < 5 || word(0) != kMagic)
+                return false;
+            std::vector<uint32_t> bound;                                  // ids decorated with the binding
+            std::vector<std::pair<uint32_t, uint32_t>> pointers;          // pointer type -> its pointee
+            std::vector<std::pair<uint32_t, SpirvImage>> images;          // image type -> its operands
+            for (std::size_t i = 5; i < words;)
+            {
+                const uint32_t op = word(i) & 0xFFFF, count = word(i) >> 16;
+                if (count == 0 || count > words - i)
+                    return false;
+                if (op == kOpDecorate && count >= 4 && word(i + 2) == kDecorationBinding && word(i + 3) == binding)
+                    bound.push_back(word(i + 1));
+                else if (op == kOpTypePointer && count >= 4)
+                    pointers.emplace_back(word(i + 1), word(i + 3));
+                else if (op == kOpTypeImage && count >= 9)
+                    images.emplace_back(word(i + 1),
+                                        SpirvImage{ word(i + 3), word(i + 5), word(i + 6), word(i + 7), word(i + 8) });
+                else if (op == kOpVariable && count >= 4
+                         && std::find(bound.begin(), bound.end(), word(i + 2)) != bound.end())
+                {
+                    const auto p = std::find_if(pointers.begin(), pointers.end(),
+                                                [t = word(i + 1)](const auto& x) { return x.first == t; });
+                    if (p != pointers.end())
+                    {
+                        const auto img = std::find_if(images.begin(), images.end(),
+                                                      [t = p->second](const auto& x) { return x.first == t; });
+                        if (img != images.end())
+                        {
+                            out = img->second;
+                            return true;
+                        }
+                    }
+                }
+                i += count;
+            }
+            return false;
+        }
+
+        // SAMPLER2D's texture in SPIR-V: Dim 2D (1), not arrayed, single-sampled, sampled through a sampler (not a
+        // storage image: Sampled 2) and of no fixed format (an IMAGE2D_RO's is its declared one).
+        bool isSampler2D(const SpirvImage& t)
+        {
+            return t.dim == 1 && t.arrayed == 0 && t.ms == 0 && t.sampled != 2 && t.format == 0;
+        }
+
+        // The name of a Metal argument buffer other than the uniforms' (bgfx binds a fragment shader's uniforms at
+        // [[buffer(0)]]): SPIRV-Cross writes a BUFFER_RO or BUFFER_RW as `... name [[buffer(n)]]`, and shaderc's table
+        // lists none of it. Empty when the code has none.
+        std::string metalBuffer(std::string_view msl)
+        {
+            constexpr std::string_view key = " [[buffer(";
+            for (std::size_t at = msl.find(key); at != std::string_view::npos; at = msl.find(key, at + key.size()))
+            {
+                if (msl.substr(at + key.size(), 4) == "0)]]")
+                    continue;
+                const auto word = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_'; };
+                std::size_t from = at;
+                while (from > 0 && word(msl[from - 1]))
+                    --from;
+                return from < at ? std::string(msl.substr(from, at - from)) : std::string("a buffer");
+            }
+            return {};
+        }
+
         // The stage of Metal's `texture2d<float> <name> [[texture(<n>)]]`, the argument SPIRV-Cross writes for a
         // SAMPLER2D(name, n); -1 when the code has none (another kind of texture: texture3d, texturecube,
         // texture2d_array, depth2d, texture2d<int>, ...).
@@ -398,9 +511,12 @@ namespace funkgui::shaders
             return i > first && msl.substr(i, 3) == ")]]" ? stage : -1;
         }
 
-        // The binary's samplers (0.25.0; the file comment): each uniform of type Sampler with its stage, by `code`'s
-        // rules, and the uniforms of type End (no value: shaderc lists a Metal sampler's texture and sampler state, and
-        // a SPIR-V storage image or buffer, so) allowed only as a sampler's own <name>Texture and <name>Sampler.
+        // The binary's samplers (0.25.0; the file comment): each texture of type Sampler with its stage, by `code`'s
+        // rules (an int uniform, which shaderc also types Sampler, is a uniform FunkGui never sets), and the entries of
+        // type End (no value) allowed only as a Metal sampler's own <name>Texture and <name>Sampler. Any other End is,
+        // on Metal, a plain uniform of a type shaderc does not map (float, vec2, vec3, bool, an int vector) when it has
+        // a uniform-buffer offset, and else an image; on SPIR-V a storage image or buffer. A Metal argument buffer is
+        // not in the table at all: the code says.
         bool samplersOf(const Binary& b, Code code, std::vector<Sampler>& out, std::string& why)
         {
             out.clear();
@@ -409,6 +525,13 @@ namespace funkgui::shaders
             {
                 if (u.type != kSamplerType)
                     continue;
+                if (!isTexture(u, code))
+                {
+                    if (isPredefined(u.name))
+                        continue;
+                    why = neverSet(u.name);
+                    return false;
+                }
                 if (isFunkGuis(u.name) || isPredefined(u.name))
                 {
                     why = "the shader's sampler " + u.name + " has the name of a uniform FunkGui or bgfx sets: give it "
@@ -456,6 +579,23 @@ namespace funkgui::shaders
                               + std::to_string(stage) + ": give each its own";
                         return false;
                     }
+                if (code == Code::spirv)
+                {
+                    // The tex info says 2D for a multisampled texture and an image too: the code's own type says.
+                    SpirvImage t;
+                    if (!spirvImage(b, u.reg, t))
+                    {
+                        why = "a bgfx shader binary cut short or corrupted (its code has no texture for the sampler "
+                              + u.name + ")";
+                        return false;
+                    }
+                    if (!isSampler2D(t))
+                    {
+                        why = "the shader's sampler " + u.name + " is not a 2D sampler of floats: declare it with "
+                              "SAMPLER2D(" + u.name + ", stage)";
+                        return false;
+                    }
+                }
                 out.push_back({ u.name, static_cast<uint8_t>(stage) });
             }
             for (const Binary::Uniform& u : b.uniforms)
@@ -469,10 +609,24 @@ namespace funkgui::shaders
                 const bool own = std::any_of(out.begin(), out.end(), [&part](const Sampler& s) {
                     return part(s, "Texture") || part(s, "Sampler");
                 });
-                if (!own)
+                if (own)
+                    continue;
+                if (code == Code::metal && u.reg != kNoOffset)
                 {
-                    why = "the shader uses " + u.name + ", a buffer, image or texture FunkGui never binds: custom "
-                          "shaders read 2D textures through SAMPLER2D only";
+                    if (isPredefined(u.name))
+                        continue;
+                    why = neverSet(u.name);
+                    return false;
+                }
+                why = neverBound(u.name);
+                return false;
+            }
+            if (code == Code::metal)
+            {
+                const std::string buffer = metalBuffer(text);
+                if (!buffer.empty())
+                {
+                    why = neverBound(buffer);
                     return false;
                 }
             }
@@ -579,20 +733,21 @@ namespace funkgui::shaders
                     continue;                        // samplersOf's (0.25.0)
                 if (!isPredefined(u.name))
                 {
-                    why = "the shader reads the uniform " + u.name
-                          + ", which FunkGui never sets: use u_params (16 floats), u_rect and u_viewSize";
+                    why = neverSet(u.name);
                     return false;
                 }
             }
+            // The code's format first: a binary for another renderer is said to be one, whatever its samplers are, and
+            // the samplers (read by this renderer's rules) before Metal compiles anything.
             std::vector<Sampler> found;
-            if (!samplersOf(b, kCode, found, why))
-                return false;
 #if defined(__APPLE__)
             if (b.codeSize >= 4 && b.code[0] == 0x03 && b.code[1] == 0x02 && b.code[2] == 0x23 && b.code[3] == 0x07)
             {
                 why = "the shader holds SPIR-V, not Metal: compile with --platform osx -p metal";
                 return false;
             }
+            if (!samplersOf(b, kCode, found, why))
+                return false;
             if (!metalTakes(std::string(reinterpret_cast<const char*>(b.code), b.codeSize), why))
                 return false;
 #elif defined(_WIN32)
@@ -604,6 +759,8 @@ namespace funkgui::shaders
                 why = "the shader holds no Direct3D 11 bytecode: compile with --platform windows -p s_5_0";
                 return false;
             }
+            if (!samplersOf(b, kCode, found, why))
+                return false;
 #else
             const bool spirv = b.codeSize >= 20 && b.codeSize % 4 == 0 && b.code[0] == 0x03 && b.code[1] == 0x02
                                && b.code[2] == 0x23 && b.code[3] == 0x07;     // 0x07230203, little-endian
@@ -612,6 +769,8 @@ namespace funkgui::shaders
                 why = "the shader holds no SPIR-V: compile with --platform linux -p spirv";
                 return false;
             }
+            if (!samplersOf(b, kCode, found, why))
+                return false;
 #endif
             if (samplers != nullptr)
                 *samplers = std::move(found);

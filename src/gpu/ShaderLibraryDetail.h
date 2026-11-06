@@ -64,7 +64,10 @@ namespace funkgui::shaders::detail
 
     // The samplers of a fragment-shader binary by the rules of `code` (whatever the platform: every rule builds and is
     // tested on every host), with set()'s reasons: false when the binary does not parse, or a sampler is not a 2D
-    // sampler of floats at a stage 0 to 3 of its own, is named after a uniform FunkGui or bgfx sets, or a buffer or
-    // image other than a sampler's own parts is declared. Any thread.
+    // sampler of floats at a stage 0 to 3 of its own (on SPIR-V, by the code's image type too: not multisampled, not
+    // a storage image), is named after a uniform FunkGui or bgfx sets, or a buffer or image other than a sampler's own
+    // parts is declared; and when the table holds a uniform FunkGui never sets that shaderc types as a sampler (an
+    // int) or as nothing (Metal's float, vec2, vec3, bool and int vectors). The code's format is not checked here
+    // (checkBinary does that first). Any thread.
     bool samplers(const void* binary, uint32_t size, Code code, std::vector<Sampler>& out, std::string& why);
 }

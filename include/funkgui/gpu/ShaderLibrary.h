@@ -72,10 +72,11 @@
 //   - The GPU textures are process-wide, one per texture id for every editor, made at their first draw after
 //     setTexture() (and after every bgfx start) and destroyed by removeTexture(), a replacement or bgfx's shutdown; the
 //     texels stay in the registry, as the shaders' binaries do.
-//   - set() and check() take a sampler that is a 2D sampler of floats (SAMPLER2D: not 3D, cube, array, shadow or
-//     integer) at a stage 0 to 3, one a stage, named otherwise than FunkGui's and bgfx's uniforms. The stage is the
-//     Metal code's [[texture(n)]] on macOS, the SPIR-V binding less bgfx's shift of 2 on Linux, and the sampler's
-//     register on Windows. Direct3D's reflection does not say a sampler's kind, so Windows checks the stage only; and
+//   - set() and check() take a sampler that is a 2D sampler of floats (SAMPLER2D: not 3D, cube, array, shadow,
+//     multisampled or integer, nor an image) at a stage 0 to 3, one a stage, named otherwise than FunkGui's and bgfx's
+//     uniforms. The stage is the Metal code's [[texture(n)]] on macOS, the SPIR-V binding less bgfx's shift of 2 on
+//     Linux, and the sampler's register on Windows. Direct3D's reflection does not say a sampler's kind, so Windows
+//     checks the stage only; and
 //     it lists sampler states, not textures, so there a texture read with texelFetch alone is not in the binary and
 //     reads zeros: read it with texture2D or texture2DLod at least once (the stated fallback).
 //   - Where shaders are not drawn (SoftRaster's placeholder, the web) textures change nothing.
