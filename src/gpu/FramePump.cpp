@@ -232,7 +232,9 @@ namespace funkgui
         // bgfx presents only the windows whose views drew this frame (Metal
         // takes a drawable, Direct3D 11 and Vulkan flag a present, only for a
         // framebuffer a submitted view renders into), so an editor that
-        // skipped keeps its picture while another draws. A frame also runs
+        // skipped keeps its picture while another draws (on macOS and
+        // Windows: Linux draws every frame, NativeSurface.h
+        // renderViewKeepsFrame). A frame also runs
         // when bgfx has work waiting for one (BgfxContext::framePending): with
         // nothing submitted it draws and presents nothing, and lets go of a
         // closed editor's view.

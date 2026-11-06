@@ -579,8 +579,8 @@ namespace funkgui
 
         // 7. Whether to draw (0.25.0, "Unchanged frames"): the Panel's answer, or a reason of the editor's own. The
         //    first frame, a capture (CANVAS_DUMP, UI_SCALE, UI_FIXED_DT: their frame counts and clock stand), a window
-        //    that keeps no frame (Linux without a compositing manager) and one that waits for its framebuffer draw
-        //    every frame, as before; the gate draws for a new state and to put a lost picture back on screen.
+        //    that keeps no frame (Linux: NativeSurface.h renderViewKeepsFrame) and one that waits for its framebuffer
+        //    draw every frame, as before; the gate draws for a new state and to put a lost picture back on screen.
         const bool panelWants = panel_->needsDraw();
         const bool canSubmit = ctx.drawable(renderView_);
         const bool capturing = captureMode_ || capture_.uiScale > 0.0f || capture_.fixedDt > 0.0f;

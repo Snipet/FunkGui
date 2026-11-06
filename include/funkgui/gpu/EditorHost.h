@@ -54,12 +54,13 @@
 //   - it has a reason of its own: the first frame; a capture (CANVAS_DUMP, UI_SCALE or UI_FIXED_DT draw every frame,
 //     as before, so their frame counts stand); a size, backing scale, zoom or theme other than the last frame's; a
 //     surface made again since (BgfxContext::surfaceRevision: attached, re-attached, resized, rebuilt); a picture or
-//     custom shader replaced or removed since (canvas/Images.h, gpu/ShaderLibrary.h); a last frame that is not on
-//     screen (the window was hidden, minimised or detached, the sink dropped it, or it was drawn while macOS reported
-//     the window occluded, when bgfx presents nothing) once a frame would reach the screen again (NativeSurface.h
-//     renderViewOccluded); a window that does not keep its last frame (renderViewKeepsFrame: Linux without a
-//     compositing manager draws every frame); a window waiting for its framebuffer (BgfxContext::drawable(), which
-//     records and counts the frame as before).
+//     custom shader replaced or removed since (canvas/Images.h, gpu/ShaderLibrary.h); a last frame that may not be
+//     on screen (a frame found the window hidden, minimised or detached, the sink dropped it, or it was drawn while
+//     macOS reported the window occluded, when bgfx presents nothing) once a frame would reach the screen again
+//     (NativeSurface.h renderViewOccluded); a window that does not keep its last frame (renderViewKeepsFrame: on
+//     Linux every frame is drawn, as before); a window waiting for its framebuffer (BgfxContext::drawable(), which
+//     records and counts the frame as before). On macOS no frame may come while the window is off screen (the
+//     display link stops): shown again, it is not drawn for that, since its CAMetalLayer kept the picture.
 // A frame the Panel asked for and the editor had no reason of its own to draw is still recorded, then compared with
 // the last frame drawn (canvas/FrameCompare.h sameDrawing): equal, it is not submitted (the safety net, which every
 // Panel gets, needsDraw() or not). A frame that draws nothing leaves FrameClient::Result::submitted false, and when no

@@ -48,14 +48,16 @@ namespace funkgui
     // must know about the screen.
     // - renderViewOccluded: whether a frame drawn into <view> now would not reach the screen. macOS: its window's
     //   occlusion state lacks NSWindowOcclusionStateVisible, exactly the test bgfx's Metal renderer makes before it
-    //   takes a drawable (it draws such a frame offscreen and presents nothing). Linux and Windows: false (bgfx's
-    //   Vulkan and Direct3D 11 present whatever covers the window). nullptr: false.
+    //   takes a drawable (it draws such a frame offscreen and presents nothing). Windows: false (bgfx's Direct3D 11
+    //   presents whatever covers the window). Linux: false, and moot (every frame is drawn). nullptr: false.
     // - renderViewKeepsFrame: whether <view> goes on showing the last frame presented into it, through being covered
     //   and uncovered, until the next. macOS: true (a CAMetalLayer keeps its contents). Windows: true (the desktop
-    //   window manager composes every window). Linux: true while a compositing manager runs (one owns the
-    //   _NET_WM_CM_S<screen> selection on JUCE's display; asked at most twice a second), false without one, where the
-    //   X server hands an uncovered part of the window back to be drawn and the render view, which selects no events,
-    //   hears nothing of it: the editor then draws every frame, as before (the stated fallback). nullptr: false.
+    //   window manager composes every window). Linux: false, so the editor draws every frame, as before (the stated
+    //   fallback), because nothing tells FunkGui there when the picture is lost: a remapped window (the host minimised
+    //   and restored, a workspace switched, a floating plug-in window hidden and shown) comes back without its
+    //   contents, a compositing manager or not, while the render view selects no events and JUCE's peer, an embedded
+    //   child window, never reads as hidden; and bgfx's Vulkan takes a second window's image without waiting and skips
+    //   that window's frame, untold, when none is ready. nullptr: false.
     bool   renderViewOccluded(void* view);
     bool   renderViewKeepsFrame(void* view);
 
