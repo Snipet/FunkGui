@@ -227,13 +227,21 @@ namespace funkgui
         inTick_ = false;
 
         // Exactly one present per frame for every editor in the process.
-        // Skipped entirely when nothing drew, so a minimised host window costs
-        // nothing; bgfx defers its destroy queue until the next frame, which
-        // is harmless.
-        if (submitted && BgfxContext::get().valid())
+        // Skipped entirely when nothing drew, so a minimised host window, or
+        // every editor leaving its last picture up (0.25.0), costs nothing.
+        // bgfx presents only the windows whose views drew this frame (Metal
+        // takes a drawable, Direct3D 11 and Vulkan flag a present, only for a
+        // framebuffer a submitted view renders into), so an editor that
+        // skipped keeps its picture while another draws. A frame also runs
+        // when bgfx has work waiting for one (BgfxContext::framePending): with
+        // nothing submitted it draws and presents nothing, and lets go of a
+        // closed editor's view.
+        auto& ctx = BgfxContext::get();
+        if ((submitted || ctx.framePending()) && ctx.valid())
         {
             bgfx::frame();
-            BgfxContext::get().afterFrame(); // views closed two frames ago are let go (BgfxContext.h, v0.21.0)
+            ++framesRun_;
+            ctx.afterFrame();                // views closed two frames ago are let go (BgfxContext.h, v0.21.0)
         }
 
         if (link_ == nullptr) updateClock();   // a view may have appeared

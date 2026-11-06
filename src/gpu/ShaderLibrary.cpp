@@ -188,6 +188,7 @@ namespace funkgui::shaders
         struct Registry
         {
             std::vector<Entry>  entries;
+            uint64_t            generation = 1;      // detail::generation() (0.25.0)
             bgfx::ShaderHandle  vs = BGFX_INVALID_HANDLE;
             bgfx::UniformHandle uRect = BGFX_INVALID_HANDLE;
             bgfx::UniformHandle uParams = BGFX_INVALID_HANDLE;
@@ -381,6 +382,7 @@ namespace funkgui::shaders
         e->fs = fs;
         e->program = program;
         e->refused = false;
+        ++registry().generation;
         why.clear();
         return true;
     }
@@ -397,6 +399,7 @@ namespace funkgui::shaders
                     drop(it->fs);
                 }
                 entries.erase(it);
+                ++registry().generation;
                 return;
             }
     }
@@ -423,6 +426,8 @@ namespace funkgui::shaders
             }
             return e->program;
         }
+
+        uint64_t generation() { return registry().generation; }
 
         bgfx::UniformHandle uRect() { return registry().uRect; }
 

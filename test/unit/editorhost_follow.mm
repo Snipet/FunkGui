@@ -15,7 +15,8 @@
 //   grandparent_move.*  the same, two levels up
 //   own_move.*          the editor itself moves: moved() runs, the view follows (unchanged v0.7.0 behaviour)
 //   window_move.*       the whole window moves on the screen: nothing inside the peer changes
-//   frame.*             a frame is still drawn and submitted after the moves
+//   frame.*             frames are still drawn after the moves (0.25.0: submitted, or recorded and found equal to
+//                       the last one drawn)
 //   theme.*             a preference write (a theme cell's click) is read back at once through themeIndex(), and the
 //                       first frame after it ticks with that index and draws with that theme
 // Frames are pumped by calling FramePump::tick() directly, with the run loop turned between them so Core Animation
@@ -243,10 +244,13 @@ int main(int argc, char** argv)
             framesAgree(P, "window_move", editor);
 
             // ---- frames still draw ---------------------------------------------------------------------------------
-            const uint32_t framesBefore = editor.diagnostics().frames;
+            // 0.25.0: the Panel draws the same picture every frame, so a frame equal to the last one drawn is recorded
+            // and not submitted (EditorHost.h "Unchanged frames"): both count as drawn here.
+            const auto recorded = [&editor] { return editor.diagnostics().frames + editor.diagnostics().unchanged; };
+            const uint32_t framesBefore = recorded();
             pumpFrame();
             pumpFrame();
-            P.ge("frame.submitted_after_moves", editor.diagnostics().frames - framesBefore, 2);
+            P.ge("frame.submitted_after_moves", recorded() - framesBefore, 2);
             P.eq("frame.surface_still_attached", editor.surfaceAttached(), 1);
             P.eq("frame.overflows", editor.diagnostics().overflows, 0);
 

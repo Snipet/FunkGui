@@ -61,9 +61,10 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
   and `FUNKGUI_HAS_JUCE` (`core/HasJuce.h`): 1 when JUCE is under the build, 0 without.
 - **canvas**: the recorder. Rounded rectangles (per-corner radii, borders, soft edges), hairlines snapped to device
   pixels, segments, polylines, filled areas and strips, discs, dotted rules and text. Each primitive carries a semantic
-  tag and a live flag for tests. Nested clipping, a text dump format, fingerprints, and `SoftRaster`, a CPU rasteriser
-  that mirrors the fragment shader. `shader()` (v0.19.0) records a rectangle that a host's own fragment shader fills,
-  in order with the primitives and under the clip in force; `SoftRaster` draws it as a striped placeholder.
+  tag and a live flag for tests. Nested clipping, a text dump format, fingerprints, `sameDrawing()` (0.25.0: whether two
+  recorded frames draw the same picture), and `SoftRaster`, a CPU rasteriser that mirrors the fragment shader.
+  `shader()` (v0.19.0) records a rectangle that a host's own fragment shader fills, in order with the primitives and
+  under the clip in force; `SoftRaster` draws it as a striped placeholder.
   `image(id, dst, radius, opacity, uv)` (v0.20.0) draws a picture from `Images.h`, a process-wide registry of decoded
   RGBA8 pictures by id (`images::set`, `remove`, `has`; any thread may read it while one sets): stretched over `dst`,
   sampling the sub-rectangle `uv` (crop it for "cover"), with corners rounded and antialiased as an rrect's, faded by
@@ -107,10 +108,14 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
   11 on a click-through child window of JUCE's peer on Windows (v0.24.0). It handles the surface lifecycle with a
   no-GPU fallback screen, converts JUCE input, mirrors the accessibility items for the screen reader, offers UI zoom
   steps, resizes the window for a resizable Panel, serves the menu, the file chooser and the clipboard of
-  `HostServices` through JUCE, and can capture frames. `FramePump` gives every editor in the process one clock (a
-  display link on macOS, a timer on Linux and Windows) and one `bgfx::frame()` per tick; the link stays on an editor
-  whose window is shown, moved by a watchdog when it goes quiet (v0.21.0: a host that hides one plug-in window to show
-  the next froze every editor), and `BgfxContext` holds each editor's view until bgfx has run the last command that
+  `HostServices` through JUCE, and can capture frames. An editor whose picture has not changed draws nothing and
+  leaves its last picture up (0.25.0): when the Panel's `needsDraw()` says nothing it draws has changed, the frame is
+  neither recorded nor submitted, and a frame recorded equal to the last one drawn is not submitted either, so an idle
+  editor costs no GPU time; a new size, scale, zoom or theme, a surface made again and a window shown again or
+  uncovered still draw. `FramePump` gives every editor in the process one clock (a display link on macOS, a timer on
+  Linux and Windows) and one `bgfx::frame()` per tick (none while no editor draws); the link stays on an editor whose
+  window is shown, moved by a watchdog when it goes quiet (v0.21.0: a host that hides one plug-in window to show the
+  next froze every editor), and `BgfxContext` holds each editor's view until bgfx has run the last command that
   names it (an editor closed before its first frame crashed the host). On macOS the Objective-C classes, and on
   Windows the render view's window class, are registered at run time under randomised names, so two products using
   FunkGui in one host never collide. `ShaderLibrary.h` (`funkgui::shaders`, v0.19.0) registers custom fragment shaders by id: a host
@@ -262,6 +267,8 @@ public:
     int  height() const override { return 120; }
     void tick(float /*dt*/) override {}                         // advance eases here
     bool wantsFullRate() const override { return false; }       // true while anything moves
+    bool needsDraw() const override { return false; }           // true when what draw() records changed (default
+                                                                // true: EditorHost draws every frame)
     void draw(funkgui::Canvas& c, const funkgui::Theme& th) override
     {
         c.rrect(16, 16, 288, 88, 4, th.ink16);

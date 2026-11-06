@@ -20,6 +20,11 @@ namespace funkgui::shaders::detail
     bgfx::UniformHandle uRect();
     bgfx::UniformHandle uParams();
 
+    // A counter that changes with every set() that registered a program and every remove() that dropped one (0.25.0):
+    // EditorHost draws again when it moved, since a recording that names an id draws whatever is registered under it
+    // now (gpu/EditorHost.h "Unchanged frames"). Never 0.
+    uint64_t generation();
+
     // Destroys every bgfx object the registry holds (the programs, their fragment shaders, the vertex shader and the
     // two uniforms) and keeps the binaries. Called by BgfxContext::destroyResources() while bgfx is still up.
     void releaseGpu();

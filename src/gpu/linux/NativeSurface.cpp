@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <vector>
 
 namespace funkgui
@@ -137,6 +138,21 @@ namespace funkgui
             return r;
         }
 
+        // renderViewKeepsFrame's last answer, for JUCE's display connection. Never destroyed (views()' reasoning).
+        struct Compositor
+        {
+            ::Display* display = nullptr;
+            Atom       atom = None;                  // _NET_WM_CM_S<screen>, interned once per display
+            double     checkedAt = -1.0;             // seconds (JUCE's hi-res counter); < 0: never asked
+            bool       running = false;
+        };
+
+        Compositor& compositor()
+        {
+            static auto* c = new Compositor();
+            return *c;
+        }
+
         void place(::Display* d, const RenderView& rv)
         {
             const DeviceRect r = toDevice(rv.x, rv.y, rv.w, rv.h, scaleOf(rv));
@@ -223,6 +239,40 @@ namespace funkgui
         if (const RenderView* rv = findView(w))
             return scaleOfPeerWindow(rv->parent);
         return scaleOfPeerWindow(w);
+    }
+
+    bool renderViewOccluded(void*)
+    {
+        return false;                                // bgfx's Vulkan presents whatever covers the window (0.25.0)
+    }
+
+    // Whether a compositing manager runs (0.25.0): one owns the _NET_WM_CM_S<screen> selection (EWMH). Asked at most
+    // twice a second: it is a round trip to the server, and the answer changes only when one starts or stops.
+    bool renderViewKeepsFrame(void* view)
+    {
+        ::Display* d = xDisplay();
+        auto* xs = juce::X11Symbols::getInstance();
+        if (windowOf(view) == 0 || d == nullptr || xs == nullptr)
+            return false;
+        Compositor& c = compositor();
+        const double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
+        if (c.display != d)
+        {
+            c = Compositor{};                        // another display connection: nothing known about it
+            c.display = d;
+        }
+        if (c.checkedAt < 0.0 || now - c.checkedAt >= 0.5)
+        {
+            if (c.atom == None)
+            {
+                char name[32];
+                std::snprintf(name, sizeof name, "_NET_WM_CM_S%d", xs->xDefaultScreen(d));
+                c.atom = xs->xInternAtom(d, name, False);
+            }
+            c.running = c.atom != None && xs->xGetSelectionOwner(d, c.atom) != None;
+            c.checkedAt = now;
+        }
+        return c.running;
     }
 
     void* nativeDisplay()

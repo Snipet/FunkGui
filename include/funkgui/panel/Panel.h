@@ -69,5 +69,20 @@ namespace funkgui
         virtual int   minWidth() const { return width(); }
         virtual int   minHeight() const { return height(); }
         virtual void  resize(int /*w*/, int /*h*/) {}
+
+        // Unchanged frames (0.25.0; the default draws every frame, as before). EditorHost asks needsDraw() after each
+        // tick(): false says that draw() would record what it recorded the last time it was called, because nothing
+        // it draws has changed since, and the host then neither records, nor uploads, nor submits that frame, so the
+        // last picture stays up and an idle editor costs no GPU time. The answer covers the Panel's own state only:
+        // the host still draws when it has a reason of its own (the first frame, a new size, backing scale, zoom or
+        // theme, a surface made again, a window shown again or uncovered, a picture or shader replaced in its
+        // registry, a capture; gpu/EditorHost.h "Unchanged frames"), and may call draw() whatever the answer, so
+        // draw() stays correct at any time. A Panel typically sets a flag wherever its picture changes (input, a
+        // value, an ease still moving, data from the processor) and clears it in draw(); a custom shader that
+        // animates with u_viewSize.w (time) needs true while it should move. EditorHost also skips the submit of a
+        // frame whose recording equals the last one drawn (canvas/FrameCompare.h), whatever needsDraw() answered.
+        // HeadlessHost and WebHost draw whenever they are asked to, as before. Called on the host's thread, after
+        // tick() and never during draw().
+        virtual bool  needsDraw() const { return true; }
     };
 }

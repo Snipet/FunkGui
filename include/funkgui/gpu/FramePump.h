@@ -35,7 +35,7 @@ namespace funkgui
 
         struct Result
         {
-            bool submitted = false;      // drew anything this frame
+            bool submitted = false;      // drew anything this frame (0.25.0: false when it left its last picture up)
             bool wantsFullRate = false;  // something is moving or being touched
         };
 
@@ -93,6 +93,13 @@ namespace funkgui
         // screen (v0.21.0). Diagnostics and fg.editorhost.multi.
         int   linkRebinds() const { return rebinds_; }
 
+        // 0.25.0: the bgfx::frame() calls the pump has made. A tick runs one
+        // when any client submitted, or when bgfx has work waiting for a frame
+        // (BgfxContext::framePending: a closed editor's view to let go); none
+        // while every editor leaves its last picture up, so nothing is drawn
+        // or presented. Diagnostics and fg.editorhost.skip.
+        uint64_t framesRun() const { return framesRun_; }
+
     private:
         FramePump() = default;
 
@@ -111,6 +118,7 @@ namespace funkgui
         Watchdog watchdog_{ *this };
         double lastTickWall_ = 0.0;      // when tick() last ran, wall clock (seconds)
         int    rebinds_ = 0;
+        uint64_t framesRun_ = 0;         // 0.25.0: bgfx::frame() calls (framesRun)
 
         std::vector<FrameClient*> clients_;
         void*  link_ = nullptr;

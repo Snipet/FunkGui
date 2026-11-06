@@ -89,6 +89,17 @@ namespace funkgui
 
         bgfx::ViewId viewIdFor(void* nwh);
 
+        // 0.25.0 (gpu/EditorHost.h "Unchanged frames"): a number that changes whenever <nwh>'s drawable is made again,
+        // so that nothing presented there before is known to be on screen: its registration (acquire(), including the
+        // re-registrations of a primary's rebuild and of a restart off a headless primary), a resize to another size,
+        // and on Windows the framebuffer made after one. Never 0 for a registered window; 0 for one that is not.
+        uint32_t surfaceRevision(void* nwh) const;
+
+        // 0.25.0: whether bgfx has work that waits for a frame although no editor submits one: views released and not
+        // yet let go (afterFrame), or on Windows a framebuffer to make. The FramePump then runs a bgfx::frame() that
+        // draws and presents nothing, so a closed editor's view is let go while the others leave their pictures up.
+        bool framePending() const noexcept;
+
         bool valid() const { return initialised_; }
 
         // Whether acquire() can take another window at all. Distinct from a
@@ -141,6 +152,7 @@ namespace funkgui
             int w = 0, h = 0;
             bool primary = false;
             int rebuild = 0;                         // Windows: frames until its framebuffer is made again; 0: none due
+            uint32_t revision = 0;                   // 0.25.0: surfaceRevision(); stamped by stamp()
         };
 
         // v0.23.1: the null window's registrations have room of their own beside the windows' slots (the header): as
@@ -149,6 +161,8 @@ namespace funkgui
         static constexpr int kMaxRegistrations = kMaxWindows + kMaxHeadless;
 
         Window windows_[kMaxRegistrations];          // windows and headless registrations, in registration order
+        uint32_t revisions_ = 0;                     // 0.25.0: the last revision handed out
+        uint32_t stamp() noexcept;                   // the next revision (never 0)
         int windowCount_ = 0;                        // registrations of both kinds
         Config config_{};
         uint32_t activeTransientVbBytes_ = 0;        // what the running bgfx was initialised with
