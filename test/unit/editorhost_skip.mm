@@ -8,20 +8,36 @@
 // The Panel draws one rounded rectangle and answers needsDraw() from flags the rows set. Frames come from the pump's
 // own clock while the run loop turns, except in mixed.*, where the rows call FramePump::tick by hand (the run loop does
 // not turn, so no other frame runs) and read bgfx's statistics of each frame.
-//   open.*      the first frame draws
+//
+// Occlusion is steered: macOS 27 reports this process's shown windows occluded (fg.gpu.picture.live's note), and bgfx
+// presents nothing to such a window. So the test swaps NSWindow's occlusionState for its own, which every window of the
+// process then reports, EditorHost (NativeSurface.h renderViewOccluded) and bgfx's Metal renderer alike: visible,
+// except where uncover.* reports occluded. What macOS itself reports is printed. Presenting is counted: each editor's
+// CAMetalLayer (bgfx's, on the render view) counts the drawables bgfx takes from it, its class swapped for a counting
+// subclass with no state of its own (fg.gpu.picture.live's way). bgfx takes a drawable from a window's layer only for a
+// frame in which a view draws into that window, and presents every drawable it takes at that frame's end
+// (renderer_mtl.cpp), so a window whose layer gave none had nothing presented.
+//   open.*      the first frame draws; its layer counted, reported visible
 //   idle.*      needsDraw() false: asked every frame, nothing recorded or submitted, and the pump runs no
-//               bgfx::frame() at all (nothing is drawn or presented)
+//               bgfx::frame() at all: nothing is drawn, no drawable taken
 //   change.*    needsDraw() true once with the same picture: recorded, found unchanged, not submitted; with a new
-//               colour: drawn and submitted, then idle again
+//               colour: drawn, submitted and presented, then idle again
 //   safety.*    needsDraw() true every frame, the same drawing: recorded every frame, found unchanged, never submitted
 //   theme.*     the theme preference changed (the Panel not dirty): drawn, then idle; and back
 //   resize.*    the window resized (the Panel not dirty): drawn at the new size
-//   shown.*     the window hidden, then shown: nothing while hidden; shown, it draws again once a frame reaches the
-//               screen (at once when macOS reports the window visible; while it reports it occluded, bgfx presents
-//               nothing and the editor waits; macOS 27 reports this process's shown windows so, fg.gpu.picture.live)
-//   mixed.*     a second editor that changes every frame beside an idle one: each frame holds the busy editor's draw
-//               calls only, so the idle window's view is not drawn and its swap chain not presented; one frame of the
-//               idle editor adds its calls once; both idle, no bgfx::frame()
+//   shown.*     the window hidden, then shown: nothing while hidden. With only the pump's clock, nothing ticks the
+//               editor while its window is off screen (the display link stops), and it is not drawn again when shown:
+//               its CAMetalLayer kept the picture (printed, not a row). With a frame while hidden (by hand, as a timer
+//               clock gives one): nothing drawn then; shown, it draws and presents again, the Panel idle
+//   uncover.*   reported occluded: a change is drawn (offscreen, bgfx takes no drawable), then nothing while it stays
+//               occluded; reported visible again, the picture is drawn and presented once more (the Panel idle), then
+//               nothing
+//   mixed.*     a second editor (its layer counted) that changes every frame beside an idle one: each frame holds the
+//               busy editor's draw calls only (the idle editor's view gets no draw call or clear) and only the busy
+//               window's layer gives up a drawable, one a frame, so nothing is presented to the idle window; one frame
+//               of the idle editor adds its calls once and takes one drawable from its layer; the same with the
+//               editors' roles swapped (the busy one now the primary, bgfx's default swapchain); both idle, no
+//               bgfx::frame()
 //   closed.*    an editor closed while the others are idle: the pump still runs the frames that let its view go
 //               (BgfxContext::framePending), and the idle editors draw nothing
 //   rebuilt.*   the primary editor closed: bgfx starts again on the survivor's view, which draws although idle
@@ -29,7 +45,8 @@
 // Spec rows only.
 
 #import <Cocoa/Cocoa.h>
-#import <objc/runtime.h>                             // class_getName
+#import <QuartzCore/CAMetalLayer.h>
+#import <objc/runtime.h>                             // class_getName, method_setImplementation, object_setClass
 
 #include <funkgui/a11y/A11yItem.h>
 #include <funkgui/canvas/Canvas.h>
@@ -53,6 +70,38 @@
 #include <cstring>
 #include <memory>
 #include <string>
+
+// The drawables bgfx took from each counted layer (see the header): gTaken[i] for the layer gLayers[i]. Message thread.
+static constexpr int kCounted = 2;
+static void* gLayers[kCounted] = {};
+static int   gTaken[kCounted] = {};
+
+@interface FgSkipCountingLayer : CAMetalLayer
+@end
+
+@implementation FgSkipCountingLayer
+- (id<CAMetalDrawable>)nextDrawable
+{
+    id<CAMetalDrawable> drawable = [super nextDrawable];
+    for (int i = 0; i < kCounted; ++i)
+        if (drawable != nil && gLayers[i] == (void*) self)
+            ++gTaken[i];
+    return drawable;
+}
+@end
+
+// What every NSWindow reports as its occlusion state (see the header): 1 visible, 0 occluded, -1 macOS's own answer.
+static int gSteer = 1;
+static IMP gOcclusionState = nullptr;               // NSWindow's own
+
+static NSWindowOcclusionState steeredOcclusionState(id self, SEL sel)
+{
+    if (gSteer == 1)
+        return NSWindowOcclusionStateVisible;
+    if (gSteer == 0)
+        return static_cast<NSWindowOcclusionState>(0);
+    return reinterpret_cast<NSWindowOcclusionState (*)(id, SEL)>(gOcclusionState)(self, sel);
+}
 
 namespace T = funkgui::test;
 
@@ -137,11 +186,25 @@ namespace
         uint8_t shade_ = 40;
     };
 
+    void* renderViewOf(funkgui::EditorHost& e)
+    {
+        auto* peer = e.getPeer();
+        if (peer == nullptr)
+            return nullptr;
+        NSView* parent = (NSView*) peer->getNativeHandle();
+        const char* cls = funkgui::renderViewClassName();
+        for (NSView* v in [parent subviews])
+            if (std::strcmp(class_getName([v class]), cls) == 0)
+                return (void*) v;
+        return nullptr;
+    }
+
     struct Window
     {
         juce::Component top;
         std::unique_ptr<funkgui::EditorHost> editor;
         StillPanel* panel = nullptr;
+        int slot = -1;                               // gLayers' slot once counted
 
         Window(juce::AudioProcessor& p, int x, int y)
         {
@@ -158,6 +221,9 @@ namespace
 
         void close()
         {
+            if (slot >= 0)
+                gLayers[slot] = nullptr;
+            slot = -1;
             if (editor != nullptr)
             {
                 top.removeChildComponent(editor.get());
@@ -167,20 +233,24 @@ namespace
         }
 
         ~Window() { close(); }
-    };
 
-    void* renderViewOf(funkgui::EditorHost& e)
-    {
-        auto* peer = e.getPeer();
-        if (peer == nullptr)
-            return nullptr;
-        NSView* parent = (NSView*) peer->getNativeHandle();
-        const char* cls = funkgui::renderViewClassName();
-        for (NSView* v in [parent subviews])
-            if (std::strcmp(class_getName([v class]), cls) == 0)
-                return (void*) v;
-        return nullptr;
-    }
+        // From now on, counts the drawables bgfx takes from this window's layer in gLayers[`i`]. False when the render
+        // view has no CAMetalLayer of bgfx's.
+        bool countDrawables(int i)
+        {
+            void* view = editor != nullptr ? renderViewOf(*editor) : nullptr;
+            CALayer* layer = view != nullptr ? [(NSView*) view layer] : nil;
+            if (layer == nil || ([layer class] != [CAMetalLayer class] && [layer class] != [FgSkipCountingLayer class]))
+                return false;
+            object_setClass(layer, [FgSkipCountingLayer class]);
+            gLayers[i] = (void*) layer;
+            gTaken[i] = 0;
+            slot = i;
+            return true;
+        }
+
+        int taken() const { return slot >= 0 ? gTaken[slot] : 0; }
+    };
 
     void spin(double seconds)
     {
@@ -190,7 +260,7 @@ namespace
     // What a window's editor and the pump did between two snapshots.
     struct Snap
     {
-        int draws = 0, asked = 0;
+        int draws = 0, asked = 0, taken = 0;          // taken: drawables bgfx took from the window's layer
         uint32_t frames = 0, skipped = 0, unchanged = 0;
         uint64_t pumpFrames = 0;
     };
@@ -200,6 +270,7 @@ namespace
         Snap s;
         s.draws = w.panel->draws;
         s.asked = w.panel->asked;
+        s.taken = w.taken();
         const auto d = w.editor->diagnostics();
         s.frames = d.frames;
         s.skipped = d.skipped;
@@ -214,11 +285,22 @@ namespace
         Snap d;
         d.draws = now.draws - before.draws;
         d.asked = now.asked - before.asked;
+        d.taken = now.taken - before.taken;
         d.frames = now.frames - before.frames;
         d.skipped = now.skipped - before.skipped;
         d.unchanged = now.unchanged - before.unchanged;
         d.pumpFrames = now.pumpFrames - before.pumpFrames;
         return d;
+    }
+
+    // What macOS itself reports for the window of <view>, past the steer (see the header).
+    const char* macOSReport(void* view)
+    {
+        const int was = gSteer;
+        gSteer = -1;
+        const bool occluded = funkgui::renderViewOccluded(view);
+        gSteer = was;
+        return occluded ? "occluded" : "visible";
     }
 
     double stamp = 0.0;
@@ -240,6 +322,15 @@ int main(int argc, char** argv)
     const juce::ScopedJuceInitialiser_GUI juceInit;
     [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
     T::Probe P("fg.editorhost.skip", "", argc, argv);
+    {
+        Method m = class_getInstanceMethod([NSWindow class], @selector(occlusionState));
+        if (m == nullptr)
+        {
+            P.harnessError("NSWindow has no occlusionState");
+            return P.finish();
+        }
+        gOcclusionState = method_setImplementation(m, reinterpret_cast<IMP>(steeredOcclusionState));
+    }
     auto& ctx = funkgui::BgfxContext::get();
     auto& prefs = funkgui::UiPreferences::get();
     stamp = juce::Time::getMillisecondCounterHiRes() * 0.001;
@@ -252,8 +343,9 @@ int main(int argc, char** argv)
         P.eq("open.attached", a.editor->surfaceAttached() ? 1 : 0, 1);
         P.ge("open.drew", a.panel->draws, 1);
         P.ge("open.submitted", a.editor->diagnostics().frames, 1);
-        const bool occluded = funkgui::renderViewOccluded(renderViewOf(*a.editor));
-        std::printf("INFO     open: macOS reports the window %s\n", occluded ? "occluded" : "visible");
+        P.eq("open.counted", a.countDrawables(0) ? 1 : 0, 1);
+        P.eq("open.reported_visible", funkgui::renderViewOccluded(renderViewOf(*a.editor)) ? 0 : 1, 1);
+        std::printf("INFO     open: macOS itself reports the window %s\n", macOSReport(renderViewOf(*a.editor)));
 
         // ---- idle ----------------------------------------------------------------------------------------------------
         {
@@ -266,6 +358,7 @@ int main(int argc, char** argv)
             P.eq("idle.no_frames", d.frames, 0);
             P.eq("idle.skipped_every_ask", d.skipped, d.asked);
             P.eq("idle.no_bgfx_frames", static_cast<int64_t>(d.pumpFrames), 0);
+            P.eq("idle.nothing_presented", d.taken, 0);
         }
 
         // ---- change --------------------------------------------------------------------------------------------------
@@ -277,6 +370,7 @@ int main(int argc, char** argv)
             P.ge("change.same_picture_recorded", same.draws, 1);
             P.eq("change.same_picture_unchanged", same.unchanged, same.draws);
             P.eq("change.same_picture_not_submitted", same.frames, 0);
+            P.eq("change.same_picture_not_presented", same.taken, 0);
         }
         {
             const Snap s0 = snap(a);
@@ -286,11 +380,13 @@ int main(int argc, char** argv)
             P.ge("change.drew", d.draws, 1);
             P.ge("change.submitted", d.frames, 1);
             P.ge("change.bgfx_frame", static_cast<int64_t>(d.pumpFrames), 1);
+            P.ge("change.presented", d.taken, 1);
             const Snap s1 = snap(a);
             spin(0.5);
             const Snap after = since(a, s1);
             P.eq("change.then_idle", after.draws, 0);
             P.eq("change.then_no_bgfx_frames", static_cast<int64_t>(after.pumpFrames), 0);
+            P.eq("change.then_nothing_presented", after.taken, 0);
         }
 
         // ---- safety --------------------------------------------------------------------------------------------------
@@ -304,6 +400,7 @@ int main(int argc, char** argv)
             P.eq("safety.all_unchanged", d.unchanged, d.draws);
             P.eq("safety.no_frames", d.frames, 0);
             P.eq("safety.no_bgfx_frames", static_cast<int64_t>(d.pumpFrames), 0);
+            P.eq("safety.nothing_presented", d.taken, 0);
         }
 
         // ---- theme ---------------------------------------------------------------------------------------------------
@@ -340,28 +437,74 @@ int main(int argc, char** argv)
 
         // ---- shown ---------------------------------------------------------------------------------------------------
         {
+            // Hidden and shown with only the pump's own clock: the display link stops while the window is off screen.
             a.top.setVisible(false);
             spin(0.1);
             const Snap s0 = snap(a);
             spin(0.4);
-            P.eq("shown.nothing_while_hidden", since(a, s0).draws, 0);
+            const Snap h = since(a, s0);
+            P.eq("shown.nothing_while_hidden", h.draws, 0);
+            a.top.setVisible(true);
+            spin(0.5);
+            const Snap u = since(a, s0);
+            std::printf("INFO     shown, no frame while hidden: %d asks while hidden, then %d draws, %d drawables "
+                        "taken\n", h.asked, u.draws, u.taken);
+
+            // A frame while hidden (the pump's tick by hand, as a timer clock gives one): the editor learns that the
+            // picture may be gone, and draws it again once shown.
+            a.top.setVisible(false);
+            spin(0.1);
             const Snap s1 = snap(a);
+            stamp = juce::Time::getMillisecondCounterHiRes() * 0.001;
+            tickByHand();
+            P.eq("shown.hidden_tick_draws_nothing", since(a, s1).draws, 0);
             a.top.setVisible(true);
             spin(0.5);
             const Snap d = since(a, s1);
-            const bool nowOccluded = funkgui::renderViewOccluded(renderViewOf(*a.editor));
-            std::printf("INFO     shown: %d draws; macOS reports the window %s\n", d.draws,
-                        nowOccluded ? "occluded" : "visible");
-            if (nowOccluded)
-                P.eq("shown.waits_while_occluded", d.draws, 0);
-            else
-                P.ge("shown.drew", d.draws, 1);
+            std::printf("INFO     shown: %d draws, %d drawables taken; macOS itself reports the window %s\n", d.draws,
+                        d.taken, macOSReport(renderViewOf(*a.editor)));
+            P.ge("shown.drew", d.draws, 1);
+            P.ge("shown.presented", d.taken, 1);
+            const Snap s2 = snap(a);
+            spin(0.4);
+            P.eq("shown.then_idle", since(a, s2).draws, 0);
+        }
+
+        // ---- uncover: occluded, then visible again ------------------------------------------------------------------
+        {
+            gSteer = 0;
+            const Snap s0 = snap(a);
+            a.panel->recolour();
+            spin(0.4);
+            const Snap d = since(a, s0);
+            P.ge("uncover.drew_while_occluded", d.draws, 1);
+            P.ge("uncover.submitted_while_occluded", d.frames, 1);
+            P.eq("uncover.not_presented_while_occluded", d.taken, 0);
+            const Snap s1 = snap(a);
+            spin(0.4);
+            const Snap wait = since(a, s1);
+            P.eq("uncover.waits_while_occluded", wait.draws, 0);
+            P.eq("uncover.no_bgfx_frames_while_occluded", static_cast<int64_t>(wait.pumpFrames), 0);
+            gSteer = 1;
+            const Snap s2 = snap(a);
+            spin(0.4);
+            const Snap back = since(a, s2);
+            std::printf("INFO     uncover: %d draws, %d drawables taken once reported visible\n", back.draws,
+                        back.taken);
+            P.ge("uncover.drew", back.draws, 1);
+            P.ge("uncover.presented", back.taken, 1);
+            const Snap s3 = snap(a);
+            spin(0.4);
+            const Snap after = since(a, s3);
+            P.eq("uncover.then_idle", after.draws, 0);
+            P.eq("uncover.then_nothing_presented", after.taken, 0);
         }
 
         // ---- mixed: frames by hand -------------------------------------------------------------------------------------
         Window b(processor, 520, 140);
         spin(0.5);
         P.eq("mixed.second_attached", b.editor->surfaceAttached() ? 1 : 0, 1);
+        P.eq("mixed.second_counted", b.countDrawables(1) ? 1 : 0, 1);
         {
             b.panel->animate = true;
             const Snap sa = snap(a), sb = snap(b);
@@ -372,10 +515,13 @@ int main(int argc, char** argv)
             P.eq("mixed.idle_drew_none", since(a, sa).draws, 0);
             P.eq("mixed.bgfx_frames", static_cast<int64_t>(since(b, sb).pumpFrames), 3);
             P.ge("mixed.busy_calls", busy, 1);
+            P.eq("mixed.busy_presented_each", since(b, sb).taken, 3);
+            P.eq("mixed.idle_not_presented", since(a, sa).taken, 0);
 
             a.panel->recolour();
             tickByHand();                            // frame 4: A and B
             P.eq("mixed.idle_drew_once", since(a, sa).draws, 1);
+            P.eq("mixed.idle_presented_once", since(a, sa).taken, 1);
             const uint32_t both = tickByHand();      // frame 5: B alone; reports frame 4
             const uint32_t again = tickByHand();     // frame 6: B alone; reports frame 5
             std::printf("INFO     mixed: %u draw calls a frame with one editor drawing, %u with both, then %u\n", busy,
@@ -383,9 +529,22 @@ int main(int argc, char** argv)
             P.ge("mixed.both_more_calls", both, busy + 1);
             P.eq("mixed.idle_view_not_drawn", again, busy);
             P.eq("mixed.idle_drew_once_only", since(a, sa).draws, 1);
+            P.eq("mixed.idle_presented_once_only", since(a, sa).taken, 1);
 
             b.panel->animate = false;
             tickByHand();                            // B's last frame at rest (not dirty: nothing drawn)
+
+            // The roles swapped: A (the primary, bgfx's default swapchain) busy, B idle.
+            a.panel->animate = true;
+            const Snap ta = snap(a), tb = snap(b);
+            for (int i = 0; i < 3; ++i)
+                tickByHand();
+            P.eq("mixed.primary_busy_presented_each", since(a, ta).taken, 3);
+            P.eq("mixed.secondary_idle_drew_none", since(b, tb).draws, 0);
+            P.eq("mixed.secondary_idle_not_presented", since(b, tb).taken, 0);
+            a.panel->animate = false;
+            tickByHand();                            // A's last frame at rest
+
             const Snap s1 = snap(b);
             for (int i = 0; i < 3; ++i)
                 tickByHand();
