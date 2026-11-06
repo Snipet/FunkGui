@@ -8,7 +8,9 @@
 // A highlighter sees one line at a time and carries a state across lines, so a construct that spans lines (a block
 // comment, a here-document) costs no re-tokenising of the whole document: the editor keeps the state every line starts
 // in and, after an edit, re-runs the highlighter from the first changed line only until a line's start state comes out
-// as it was. Drawing tokenises only the rows on screen. Core, JUCE-free, platform-neutral (also wasm32).
+// as it was. It keeps every line's spans as well, so drawing never re-tokenises (0.25.0); a highlighter that reads
+// anything besides the line and its state has the product call TextEditor::rehighlight() when that changes. Core,
+// JUCE-free, platform-neutral (also wasm32).
 
 #include <funkgui/core/Col.h>
 #include <funkgui/core/Theme.h>
@@ -38,7 +40,8 @@ namespace funkgui::text
         // `stateIn` is the state the line starts in: 0 for a document's first line, and for every other line what the
         // previous line returned. Appends spans to `out`, in order and without overlap, each within [0, line.size());
         // a gap between spans is style 0. Returns the state the next line starts in. Pure: the same line and state
-        // give the same spans and state, every time, on every platform (the editor relies on it to stop early).
+        // give the same spans and state, every time, on every platform (the editor relies on it to stop early, and to
+        // keep a line's spans until the line or its state changes; between rehighlight() calls, at least).
         virtual uint32_t line(std::string_view line, uint32_t stateIn, std::vector<Span>& out) const = 0;
     };
 

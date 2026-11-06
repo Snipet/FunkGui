@@ -96,8 +96,12 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
   text as it is edited; indent guides, trailing blanks, a bracket pair matched at the caret, auto-closed pairs,
   brace indent and a minimap; geometry for the product's overlays (`pointOf`, `posAt`, `visibleLineRange`,
   `wordRangeAt`); and one-step undoable edits for language services (`replaceRange`, `applyEdits` for a formatter,
-  `replaceText`). The completion list, hover cards and find bar stay the product's. Controls render models the
-  product implements and write only through `GestureController`.
+  `replaceText`). The completion list, hover cards and find bar stay the product's. From 0.25.0 the editor keeps every
+  line's highlight spans: an edit runs the highlighter over the lines it changed (and on while a line's start state
+  moves), and drawing (the rows, the minimap, the bracket pair) never runs it, so a frame no longer re-tokenises every
+  row it shows; a highlighter that reads more than its line and state (a list of names the product updates) is re-run
+  over the whole text by `rehighlight()`. Controls render models the product implements and write only through
+  `GestureController`.
 - **a11y**: the accessibility items a Panel lists, and their one-line text form for tests.
 - **prefs**, **live**, **juce**: UI preferences (theme, zoom, integer keys) behind a storage backend: with JUCE a
   machine-wide file in `~/Library/Application Support/<product>/` (Linux: `~/.config/<product>/`), without JUCE memory

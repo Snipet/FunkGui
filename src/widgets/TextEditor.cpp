@@ -18,12 +18,12 @@
 #include <utility>
 
 // TextEditor (widgets/TextEditor.h): the rules are in the header; fg.texteditor pins them. The text is a vector of
-// lines; every change goes through spliceText(), which splices the lines, lays the changed ones out again (their
-// width, and their wrap breaks when word wrap is on), re-runs the highlighter from the first changed line until a
-// start state comes out unchanged and moves the decorations, the line marks and the auto-inserted closers with the
-// text; change() records it as one undo step (or extends the last one), and applyEdits() records several splices as
-// one step of several pieces, undone in reverse. Layout is in px from the
-// font's advances at options().style, one table for the 95 printable characters, so hit tests and the caret agree
+// lines; every change goes through spliceText(), which splices the lines, lays the changed ones out again (their width,
+// and their wrap breaks when word wrap is on), re-runs the highlighter from the first changed line until a start state
+// comes out unchanged (keeping the spans of each line it reaches: drawing reads them) and moves the decorations, the
+// line marks and the auto-inserted closers with the text; change() records it as one undo step (or extends the last
+// one), and applyEdits() records several splices as one step of several pieces, undone in reverse. Layout is in px from
+// the font's advances at options().style, one table for the 95 printable characters, so hit tests and the caret agree
 // with what Canvas::text draws: a run's glyphs sit at pen += advance + tracking, and the x of column k is the sum of
 // the advances before it, tabs jumping to the next stop. A visual row is a line, or one piece of a wrapped line; rows
 // are indexed through rowOfLine_, the prefix sum of each line's row count.
@@ -125,6 +125,23 @@ namespace funkgui
             v.insert(v.begin() + static_cast<typename V::difference_type>(at), static_cast<size_t>(newCount), fill);
         }
 
+        // The style at the columns of one line, asked in increasing order: a walk along its spans (in order, without
+        // overlap), where styleIn() searches them.
+        struct StyleWalk
+        {
+            explicit StyleWalk(const std::vector<text::Span>& s) noexcept : spans(s) {}
+
+            const std::vector<text::Span>& spans;
+            size_t i = 0;
+
+            uint16_t operator()(int col) noexcept
+            {
+                while (i < spans.size() && spans[i].end <= col)
+                    ++i;
+                return i < spans.size() && spans[i].start <= col ? spans[i].style : uint16_t{ 0 };
+            }
+        };
+
         // ---- v0.22.0: the code-editor hooks -------------------------------------------------------------------------
 
         constexpr float kSquiggleHalf = 2.0f;            // half a period of the wavy underline
@@ -213,6 +230,7 @@ namespace funkgui
         breaks_.emplace_back();
         lineW_.push_back(0.0f);
         lineState_.push_back(0);
+        lineSpans_.emplace_back();
         rowOfLine_ = { 0, 1 };
         rebuildMetrics();
     }
@@ -259,8 +277,14 @@ namespace funkgui
     void TextEditor::setHighlighter(std::unique_ptr<text::Highlighter> h)
     {
         highlighter_ = std::move(h);
+        if (!highlighter_)
+            lineSpans_.assign(lines_.size(), {});        // plain text: no spans, and their memory back
+        rehighlight();
+    }
+
+    void TextEditor::rehighlight()
+    {
         std::fill(lineState_.begin(), lineState_.end(), 0u);
-        spansLine_ = -1;
         ++styleGen_;
         rehighlightFrom(0, lineCount() - 1);
     }
@@ -701,6 +725,7 @@ namespace funkgui
         breaks_.assign(n, {});
         lineW_.assign(n, 0.0f);
         lineState_.assign(n, 0u);
+        lineSpans_.assign(n, {});
         relayoutAll();
         rehighlightFrom(0, static_cast<int>(n) - 1);
         caret_ = anchor_ = {};
@@ -716,7 +741,6 @@ namespace funkgui
         drag_ = Drag::none;
         ++revision_;
         modified_ = false;
-        spansLine_ = -1;
     }
 
     std::string TextEditor::text() const { return rangeText({}, endPos()); }
@@ -851,6 +875,7 @@ namespace funkgui
             splice(breaks_, a.line, oldCount, newCount, std::vector<int>());
             splice(lineW_, a.line, oldCount, newCount, 0.0f);
             splice(lineState_, a.line, oldCount, newCount, 0u);
+            splice(lineSpans_, a.line, oldCount, newCount, std::vector<text::Span>());
         }
         for (int i = 0; i < newCount; ++i)
             lines_[static_cast<size_t>(a.line + i)] = std::move(fresh[static_cast<size_t>(i)]);
@@ -866,7 +891,6 @@ namespace funkgui
             reindexRows();
         }
         rehighlightFrom(a.line, lastChanged);
-        spansLine_ = -1;
         ++revision_;
         modified_ = true;
 
@@ -875,6 +899,9 @@ namespace funkgui
         return end;
     }
 
+    // The lines from firstLine on get their start state and their spans, through lastChanged at least and then until a
+    // line's start state comes out as it was. The lines after it keep both: their text and their start state are as
+    // they were, and a highlighter is pure, so their spans are too. Drawing reads lineSpans_ and never tokenises.
     void TextEditor::rehighlightFrom(int firstLine, int lastChanged)
     {
         if (!highlighter_)
@@ -884,23 +911,12 @@ namespace funkgui
         for (int i = std::max(firstLine, 0); i < n; ++i)
         {
             lineState_[static_cast<size_t>(i)] = st;
-            spans_.clear();
-            st = highlighter_->line(lines_[static_cast<size_t>(i)], st, spans_);
+            std::vector<text::Span>& spans = lineSpans_[static_cast<size_t>(i)];
+            spans.clear();
+            st = highlighter_->line(lines_[static_cast<size_t>(i)], st, spans);
             if (i + 1 < n && i >= lastChanged && lineState_[static_cast<size_t>(i + 1)] == st)
                 break;                                   // the lines after start as they did: nothing moves
         }
-        spansLine_ = -1;
-    }
-
-    void TextEditor::tokenise(int ln) const
-    {
-        if (spansLine_ == ln && spansRev_ == revision_)
-            return;
-        spans_.clear();
-        if (highlighter_)
-            highlighter_->line(lines_[static_cast<size_t>(ln)], lineState_[static_cast<size_t>(ln)], spans_);
-        spansLine_ = ln;
-        spansRev_ = revision_;
     }
 
     uint16_t TextEditor::styleIn(const std::vector<text::Span>& spans, int col) const noexcept
@@ -993,11 +1009,6 @@ namespace funkgui
         {
             const std::string& s = lines_[static_cast<size_t>(ln)];
             const int len = static_cast<int>(s.size());
-            if (styled)
-            {
-                scanSpans_.clear();
-                highlighter_->line(s, lineState_[static_cast<size_t>(ln)], scanSpans_);
-            }
             int k = ln == at.line ? at.col + step : (forward ? 0 : len - 1);
             for (; k >= 0 && k < len; k += step)
             {
@@ -1006,7 +1017,7 @@ namespace funkgui
                 const char c = s[static_cast<size_t>(k)];
                 if (c != open && c != close)
                     continue;
-                if (styled && styleIn(scanSpans_, k) != style)
+                if (styled && styleIn(spansOf(ln), k) != style)
                     continue;
                 if (c == (forward ? open : close))
                     ++depth;
@@ -1036,10 +1047,7 @@ namespace funkgui
                 continue;
             int style = -1;
             if (highlighter_ != nullptr)
-            {
-                tokenise(at.line);
-                style = styleIn(spans_, k);
-            }
+                style = styleIn(spansOf(at.line), k);
             TextPos m;
             if (isOpenBracket(c) && scanBracket({ at.line, k }, c, closerOf(c), true, style, m))
             {
@@ -2302,16 +2310,10 @@ namespace funkgui
 
         if (cnt > 0)
         {
-            tokenise(ln);
             const Canvas::Scope sc(c, tags::editText, false);
-            size_t si = 0;
+            StyleWalk styleAt{ spansOf(ln) };
             int runStart = -1;
             uint16_t runStyle = 0;
-            const auto styleAt = [this, &si](int col) noexcept -> uint16_t {
-                while (si < spans_.size() && spans_[si].end <= col)
-                    ++si;
-                return si < spans_.size() && spans_[si].start <= col ? spans_[si].style : uint16_t{ 0 };
-            };
             const auto flush = [&](int endCol) {
                 if (runStart < 0)
                     return;
@@ -2443,7 +2445,7 @@ namespace funkgui
             rowRange(row, ln, from, to);
             const std::string& s = lines_[static_cast<size_t>(ln)];
             const float y = m.y + static_cast<float>(row) * kMapRowH - offset + (kMapRowH - kMapBarH) * 0.5f;
-            tokenise(ln);
+            StyleWalk styleAt{ spansOf(ln) };
             int col = 0, runCol = -1;
             uint16_t runStyle = 0;
             const auto flush = [&](int endCol) {
@@ -2464,7 +2466,7 @@ namespace funkgui
                     col = ch == '\t' ? (col / tw + 1) * tw : col + 1;
                     continue;
                 }
-                const uint16_t st = styleIn(spans_, k);
+                const uint16_t st = styleAt(k);
                 if (runCol >= 0 && st != runStyle)
                     flush(col);
                 if (runCol < 0)
