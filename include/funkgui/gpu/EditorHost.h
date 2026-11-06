@@ -65,9 +65,10 @@
 // the last frame drawn (canvas/FrameCompare.h sameDrawing): equal, it is not submitted (the safety net, which every
 // Panel gets, needsDraw() or not). A frame that draws nothing leaves FrameClient::Result::submitted false, and when no
 // editor submitted the FramePump calls no bgfx::frame(), so nothing is presented; when another editor draws, bgfx
-// presents only the windows whose views drew (FramePump.cpp). Accessibility is synced and wantsFullRate() asked every
-// frame, drawn or not. Diagnostics: `frames` counts the frames submitted, `skipped` the frames nothing was recorded
-// for, `unchanged` the frames recorded and found equal.
+// presents only the windows whose views drew (FramePump.cpp). A frame drawn is presented by the bgfx::frame() that
+// renders it (v0.25.1; before, at the next one, which unchanged frames could put off indefinitely). Accessibility is
+// synced and wantsFullRate() asked every frame, drawn or not. Diagnostics: `frames` counts the frames submitted,
+// `skipped` the frames nothing was recorded for, `unchanged` the frames recorded and found equal.
 //
 // Cadence (0.25.0; FramePump.h "Each editor its own cadence"): the FramePump runs this editor's frame at every tick
 // while its Panel wants full rate or input arrived since (every input event, a resize and the Panel's

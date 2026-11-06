@@ -284,6 +284,9 @@ namespace funkgui
         // Exactly one present per frame for every editor in the process.
         // Skipped entirely when nothing drew, so a minimised host window, or
         // every editor leaving its last picture up (0.25.0), costs nothing.
+        // A frame is presented before bgfx::frame() returns (v0.25.1,
+        // BgfxReset.h), so the last one drawn is on screen however long the
+        // next waits; before, bgfx presented it at the start of the next.
         // bgfx presents only the windows whose views drew this frame (Metal
         // takes a drawable, Direct3D 11 and Vulkan flag a present, only for a
         // framebuffer a submitted view renders into), so an editor that
