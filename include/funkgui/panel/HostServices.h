@@ -35,6 +35,13 @@ namespace funkgui
 
     // One row of a menu: an item, or with `separator` a dividing line (its other fields are not read). Every member
     // of these structs has an initialiser, so `{ 1, "Save" }` and `{ .separator = true }` are both complete.
+    //
+    // 0.25.0 additions (after the first five members, so the initialisers above still mean what they did):
+    // - `header`: a section's title (only `label` is read). It is shown and never chosen.
+    // - `radio`: a checked item is one choice of a set and shows a dot, not a tick.
+    // - `shortcut`: a key's name shown at the row's right ("Cmd+S"), as a hint only: the menu does not act on it.
+    // - `submenu`: not empty, the row opens these rows beside it, and its own `id` and `checked` are not read; the
+    //   callback receives the id of the item chosen in it. `enabled = false` shows the row and opens nothing.
     struct MenuItem
     {
         int         id = 0;                          // > 0: what the callback receives when the user chooses this item
@@ -42,16 +49,32 @@ namespace funkgui
         bool        enabled = true;                  // false: shown, and cannot be chosen
         bool        checked = false;                 // ticked
         bool        separator = false;
+        bool        header = false;                  // 0.25.0
+        bool        radio = false;                   // 0.25.0
+        std::string shortcut{};                      // 0.25.0
+        std::vector<MenuItem> submenu{};             // 0.25.0
     };
 
-    // A flat menu (no submenus, no icons, no shortcut column).
+    // A menu: rows, sections and submenus (MenuItem). No icons.
     struct MenuRequest
     {
         std::vector<MenuItem> items{};               // top to bottom
         Rect  anchor{};                              // the menu opens beside this rectangle, in the Panel's own px
         Theme theme = Theme::graphite();             // the palette the menu borrows. The caller passes it: a product's
                                                      // Theme is not always Theme::byIndex(themeIndex())
+        // 0.25.0 additions:
+        int   selectedId = 0;                        // > 0: the top-level item highlighted, and scrolled into view,
+                                                     // when the menu opens (a dropdown's current choice)
+        float minWidth = 0.0f;                       // the menu is at least this wide, in the Panel's own px (a
+                                                     // dropdown's width); 0: as wide as its widest row
     };
+
+    // The rule HostServices::showMenu applies to a request (0.25.0; every host of this library uses it): at least one
+    // item that can be chosen, and an id > 0 on every item that could be. A separator and a header are never chosen
+    // and their id is not read; a row with a submenu is not chosen either, and its submenu is held to the same rule. A
+    // disabled item still needs its id (it is a choice the menu shows). So a request with no items, with separators or
+    // headers alone, or with a submenu that has nothing to choose in it, is refused.
+    bool validMenu(const MenuRequest&);
 
     // The chosen item's id, or 0 when the user dismissed the menu without choosing.
     using MenuCallback = std::function<void(int id)>;
@@ -165,13 +188,16 @@ namespace funkgui
 
         // Opens the menu beside request.anchor in request.theme's colours and returns true; `done` then runs once
         // with the chosen id, or with 0 when the user dismisses the menu. Returns false, and drops `done` unrun, when
-        // the host shows no menus, the request has no item that is not a separator (no items at all, or separators
-        // alone: nothing could be chosen, and no host opens such a menu), or an item that is not a separator has an
-        // id <= 0.
-        // EditorHost: a juce::PopupMenu with a funkgui::MenuLook of the theme, anchored to the rectangle on screen
-        // under the UI zoom (the rectangle times the editor's width over the Panel's, to the nearest editor px).
+        // the host shows no menus or the request fails validMenu() (nothing could be chosen, or an item that could be
+        // has an id <= 0: no host opens such a menu).
+        // EditorHost: a juce::PopupMenu drawn by a funkgui::MenuLook of the theme (juce/MenuLook.h: a rounded panel
+        // with a soft shadow, one column that scrolls when the display is too short for it, keys and type-ahead),
+        // anchored to the rectangle on screen under the UI zoom (the rectangle times the editor's width over the
+        // Panel's, to the nearest editor px): the panel's left edge on the rectangle's, MenuLook::kGapPx under it, or
+        // over it when there is more room there (JUCE's choice). Every 0.25.0 field is shown.
         // HeadlessHost: nothing is shown; the request is logged and stays pending until the test answers it
         // (chooseMenuItem, cancelMenu), which is when `done` runs. Default: false.
+        // A web host (web/WebHost.h) shows the 0.25.0 fields as its menu can: see WebServices.
         virtual bool showMenu(const MenuRequest& /*request*/, MenuCallback /*done*/) { return false; }
 
         // Closes the menu this host is showing, if any; its callback does not run. For a Panel whose menu no longer

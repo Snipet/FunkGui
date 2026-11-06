@@ -515,16 +515,7 @@ namespace funkgui
         log.lastMenu = request;
         menuPending_ = false;                            // the menu still pending is replaced, its callback unrun,
         menuDone_ = nullptr;                             // even when this request is refused
-        bool anyItem = false;                            // refused: an item with no id, or nothing but separators
-        for (const MenuItem& it : request.items)
-        {
-            if (it.separator)
-                continue;
-            if (it.id <= 0)
-                return false;
-            anyItem = true;
-        }
-        if (!anyItem)
+        if (!validMenu(request))                         // an item with no id, nothing to choose (0.25.0: the shared rule)
             return false;
         menuDone_ = std::move(done);
         menuPending_ = true;
@@ -581,14 +572,46 @@ namespace funkgui
 
     bool HeadlessHost::commandKeyIsMeta() const { return commandKeyIsMeta_; }
 
+    namespace
+    {
+        // The first item of `items`, depth first through submenus, that `match` accepts and a user could reach and
+        // choose: not a separator, a header or a submenu's row, and enabled along with every submenu row above it.
+        // nullptr when the first item it accepts cannot be chosen, or there is none (0.25.0: submenus and headers).
+        template <class Match>
+        const MenuItem* reachable(const std::vector<MenuItem>& items, const Match& match, bool& seen)
+        {
+            for (const MenuItem& m : items)
+            {
+                if (m.separator || m.header)
+                    continue;
+                if (!m.submenu.empty())
+                {
+                    bool inner = false;
+                    const MenuItem* found = reachable(m.submenu, match, inner);
+                    if (inner)
+                    {
+                        seen = true;
+                        return m.enabled ? found : nullptr;
+                    }
+                    continue;
+                }
+                if (match(m))
+                {
+                    seen = true;
+                    return m.enabled ? &m : nullptr;
+                }
+            }
+            return nullptr;
+        }
+    }
+
     bool HeadlessHost::chooseMenuItem(int id)
     {
         if (!menuPending_ || id <= 0)
             return false;
-        const auto& items = log.lastMenu.items;
-        const auto it = std::find_if(items.begin(), items.end(),
-                                     [id](const MenuItem& m) { return !m.separator && m.id == id; });
-        if (it == items.end() || !it->enabled)
+        bool seen = false;
+        const MenuItem* it = reachable(log.lastMenu.items, [id](const MenuItem& m) { return m.id == id; }, seen);
+        if (it == nullptr)
             return false;
         menuPending_ = false;
         const MenuCallback done = std::exchange(menuDone_, nullptr);
@@ -601,10 +624,10 @@ namespace funkgui
     {
         if (!menuPending_)
             return false;
-        for (const MenuItem& m : log.lastMenu.items)
-            if (!m.separator && m.label == label)
-                return chooseMenuItem(m.id);
-        return false;
+        bool seen = false;
+        const MenuItem* it = reachable(log.lastMenu.items, [label](const MenuItem& m) { return m.label == label; },
+                                       seen);
+        return it != nullptr && chooseMenuItem(it->id);
     }
 
     bool HeadlessHost::cancelMenu()
