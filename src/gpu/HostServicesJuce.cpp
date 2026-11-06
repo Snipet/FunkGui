@@ -10,6 +10,11 @@
 // and Settings did with JUCE at v1.2, behind HostServices' rules. Choices where the card is silent:
 //
 // - One MenuLook, made with the first menu and re-themed for each (the views each kept one the same way).
+// - 0.25.0: every field of the request reaches JUCE. The rows through MenuLook::popupMenuFor (headers, submenus, whose
+//   chosen id JUCE returns from any level, radio items, shortcuts); selectedId as JUCE's initially selected item that
+//   must be visible (a top-level one: JUCE looks no deeper); minWidth as JUCE's minimum width, the Panel's px under
+//   the zoom over JUCE's scale for the menu, plus the look's margins; the anchor through MenuLook::targetAreaFor. The
+//   menu has one column, so a long one scrolls (MenuLook).
 // - JUCE has no handle on one popup menu, only PopupMenu::dismissAllActiveMenus(), which closes every menu of the
 //   process and takes this look off them. It is called only while a menu of this host is showing: for dismissMenus(),
 //   for a second showMenu and for letGo(). The dismissed menu's own JUCE callback arrives later with 0 and finds its
@@ -44,23 +49,6 @@ namespace funkgui
             const std::string_view ext = pattern.substr(1);
             return ext.find_first_of("*?;, ") == std::string_view::npos ? fromUtf8(ext) : juce::String();
         }
-
-        // HostServices' rule: an item that is not a separator, and an id > 0 on each. JUCE opens no window for a menu
-        // of separators alone (PopupMenu drops them, and deletes the callback of an empty menu unrun), so taking one
-        // would leave Pending waiting for a callback that never comes.
-        bool menuIsValid(const MenuRequest& request)
-        {
-            bool anyItem = false;
-            for (const MenuItem& it : request.items)
-            {
-                if (it.separator)
-                    continue;
-                if (it.id <= 0)
-                    return false;
-                anyItem = true;
-            }
-            return anyItem;
-        }
     }
 
     HostServicesJuce::HostServicesJuce(juce::Component& owner) : owner_(owner), pending_(std::make_shared<Pending>()) {}
@@ -73,25 +61,36 @@ namespace funkgui
     bool HostServicesJuce::showMenu(const MenuRequest& request, MenuCallback done, float scale)
     {
         dismissMenus();                              // a second menu replaces the first, even when it is refused
-        if (!menuIsValid(request))
+        // HostServices' rule (validMenu). JUCE opens no window for a menu with nothing to choose (PopupMenu drops
+        // leading and repeated separators, and deletes the callback of an empty menu unrun), so taking one would leave
+        // Pending waiting for a callback that never comes.
+        if (!validMenu(request))
             return false;
         if (look_ == nullptr)
             look_ = std::make_unique<MenuLook>(request.theme);
         look_->setTheme(request.theme);
 
-        juce::PopupMenu m;
+        juce::PopupMenu m = MenuLook::popupMenuFor(request);
         m.setLookAndFeel(look_.get());
-        for (const MenuItem& it : request.items)
-        {
-            if (it.separator)
-                m.addSeparator();
-            else
-                m.addItem(it.id, fromUtf8(it.label), it.enabled, it.checked);
-        }
-        // The Panel's logical px to the editor's (the UI zoom), then to the screen.
+        // The Panel's logical px to the editor's (the UI zoom), then to the screen; then the target that puts the
+        // look's panel, not its shadow's margin, against it (JUCE scales the menu by `menuScale`).
         const Rect& r = request.anchor;
-        const juce::Rectangle<int> area = owner_.localAreaToGlobal(
+        const juce::Rectangle<int> anchor = owner_.localAreaToGlobal(
             juce::Rectangle<float>(r.x * scale, r.y * scale, r.w * scale, r.h * scale).toNearestInt());
+        const float menuScale = juce::Component::getApproximateScaleFactorForComponent(&owner_);
+        const juce::Rectangle<int> area = look_->targetAreaFor(anchor, menuScale);
+        // One column, which scrolls (MenuLook); a dropdown's width and current choice.
+        juce::PopupMenu::Options options = juce::PopupMenu::Options()
+                                               .withTargetComponent(&owner_)
+                                               .withTargetScreenArea(area)
+                                               .withMaximumNumColumns(1);
+        if (request.minWidth > 0.0f)
+        {
+            const float panelPx = request.minWidth * scale / (menuScale > 0.0f ? menuScale : 1.0f);
+            options = options.withMinimumWidth(juce::roundToInt(panelPx) + 2 * look_->shadowPx());
+        }
+        if (request.selectedId > 0)
+            options = options.withInitiallySelectedItem(request.selectedId).withItemThatMustBeVisible(request.selectedId);
 
         Pending& p = *pending_;
         const uint32_t serial = ++p.menuSerial;
@@ -106,7 +105,7 @@ namespace funkgui
                 callback(id > 0 ? id : 0);
         };
         p.asking = true;
-        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&owner_).withTargetScreenArea(area),
+        m.showMenuAsync(options,
                         [pending = pending_, finish](int id) {
                             if (pending->asking)
                                 juce::MessageManager::callAsync([finish, id] { finish(id); });

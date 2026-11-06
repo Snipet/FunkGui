@@ -2,7 +2,7 @@
 //
 // fg.lineedit: typed text and discrete input (02 §5.5, §5.8, §5.9, §8.9). Spec rows only.
 // - lineedit.*, printable.*: text::LineEdit (HR PresetPanel.cpp editKey and the selected pre-fill) and text::printable.
-// - menulook.*: MenuLook's popup-menu colours from the theme tokens, setTheme(), and the bundled face at 14 px.
+// (MenuLook's rows moved to fg.menulook in 0.25.0, with its redesign.)
 // - cells.*, prefcells.*, themecells.*: SegmentedSelector over ParamCells / PrefCells / ThemeCells, and latch.*:
 //   LatchToggle over ParamToggle — the input contracts behind the gallery pictures (select on down, tap semantics, the
 //   host menu never writing, disabled cells and latches refusing, keys, a11y items and actions, hover settling), against
@@ -13,7 +13,6 @@
 #include <funkgui/core/Config.h>
 #include <funkgui/core/Env.h>
 #include <funkgui/core/Theme.h>
-#include <funkgui/juce/MenuLook.h>
 #include <funkgui/panel/HostServices.h>
 #include <funkgui/params/GestureController.h>
 #include <funkgui/params/ParamPort.h>
@@ -27,7 +26,6 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <cstdint>
-#include <cstdio>
 #include <limits>
 #include <string>
 #include <utility>
@@ -156,14 +154,11 @@ namespace
                 return &i;
         return nullptr;
     }
-
-    int64_t rgb(juce::Colour c) { return static_cast<int64_t>(c.getARGB()); }
-    int64_t rgb(funkgui::Col c) { return static_cast<int64_t>(juce::Colour(c.r, c.g, c.b, c.a).getARGB()); }
 }
 
 int main(int argc, char** argv)
 {
-    const juce::ScopedJuceInitialiser_GUI juceInit;      // MenuLook's typeface, UiPreferences' PropertiesFile
+    const juce::ScopedJuceInitialiser_GUI juceInit;      // UiPreferences' PropertiesFile
     T::Probe P("fg.lineedit", "", argc, argv);
 
     // ---- LineEdit: the selected pre-fill (HR: Save As on "Keep" then "Temp" saved "KeepTemp") -------------------------
@@ -282,31 +277,6 @@ int main(int argc, char** argv)
     P.eq("printable.std_string", funkgui::text::printable(std::string("a\xC3\xA9")) == "a?", 1);
     P.eq("printable.juce_string", funkgui::text::printable(juce::String(juce::CharPointer_UTF8("Caf\xC3\xA9\t.")))
                                       == juce::String("Caf?" "?."), 1);
-
-    // ---- MenuLook ---------------------------------------------------------------------------------------------------------
-    {
-        const funkgui::Theme g = funkgui::Theme::graphite(), p = funkgui::Theme::paper();
-        funkgui::MenuLook look(g);
-        P.eq("menulook.background_ground", rgb(look.findColour(juce::PopupMenu::backgroundColourId)), rgb(g.ground));
-        P.eq("menulook.text_ink100", rgb(look.findColour(juce::PopupMenu::textColourId)), rgb(g.ink100));
-        P.eq("menulook.header_ink52", rgb(look.findColour(juce::PopupMenu::headerTextColourId)), rgb(g.ink52));
-        P.eq("menulook.highlight_ink16", rgb(look.findColour(juce::PopupMenu::highlightedBackgroundColourId)),
-             rgb(g.ink16));
-        P.eq("menulook.highlight_text_ink100", rgb(look.findColour(juce::PopupMenu::highlightedTextColourId)),
-             rgb(g.ink100));
-        look.setTheme(p);
-        P.eq("menulook.set_theme", rgb(look.findColour(juce::PopupMenu::backgroundColourId)) == rgb(p.ground)
-                                       && rgb(look.findColour(juce::PopupMenu::textColourId)) == rgb(p.ink100), 1);
-        const juce::Font f = look.getPopupMenuFont();
-        std::printf("menulook.font  '%s' '%s' %.1f\n", f.getTypefaceName().toRawUTF8(), f.getTypefaceStyle().toRawUTF8(),
-                    static_cast<double>(f.getHeight()));
-        P.eq("menulook.font_14px", f.getHeight() == funkgui::MenuLook::kMenuPx && funkgui::MenuLook::kMenuPx == 14.0f, 1);
-        // The embedded face: a typeface made from the bundled bytes (its name table is subset away, so the name is
-        // empty), and monospaced, which the system fallback face is not.
-        const float narrow = juce::GlyphArrangement::getStringWidth(f, "iiii");
-        const float wide = juce::GlyphArrangement::getStringWidth(f, "MMMM");
-        P.eq("menulook.font_bundled_face", f.getTypefacePtr() != nullptr && narrow > 0.0f && narrow == wide, 1);
-    }
 
     // ---- SegmentedSelector over ParamCells ------------------------------------------------------------------------------
     {

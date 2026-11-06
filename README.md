@@ -80,8 +80,10 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
   bake, bit for bit).
 - **panel**: the `Panel` interface; `HostServices`, what a Panel may ask of its host, including (from v0.12.0) a popup
   menu, a file chooser and the clipboard as plain calls that need no JUCE in the Panel, with `services()` saying which
-  the host serves; `HeadlessHost`, which serves all three to a test (every call logged, a menu or a chooser pending
-  until the test answers it); `HeadlessGuiScope`, what a headless program holds before it draws (JUCE's GUI
+  the host serves; from 0.25.0 a menu's rows may be section headers, radio items, items with a shortcut shown and
+  submenus, a request may name the item highlighted as it opens and a minimum width, and `validMenu()` is the one
+  rule every host applies to a request; `HeadlessHost`, which serves all three to a test (every call logged, a menu
+  or a chooser pending until the test answers it, items chosen through submenus as a user would); `HeadlessGuiScope`, what a headless program holds before it draws (JUCE's GUI
   initialiser with JUCE, nothing without); and the capture settings read from the environment.
 - **params**: `ParamPort` (a host parameter as 0..1), `JuceParamPort` over a `juce::RangedAudioParameter`, and
   `GestureController`, which wraps every write in a begin/end gesture: drags, clicks, wheel bursts and batches of
@@ -106,7 +108,12 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
 - **prefs**, **live**, **juce**: UI preferences (theme, zoom, integer keys) behind a storage backend: with JUCE a
   machine-wide file in `~/Library/Application Support/<product>/` (Linux: `~/.config/<product>/`), without JUCE memory
   for the life of the process unless the host installs another backend; `LiveFeed`, which tells a live telemetry
-  stream from a stale one; `MenuLook`, the theme applied to JUCE popup menus.
+  stream from a stale one; `MenuLook`, the theme applied to JUCE popup menus. From 0.25.0 `MenuLook` draws the whole
+  menu in the canvas's style: a rounded panel of the theme's surface with a hairline edge and a soft shadow (in a
+  window that is not opaque, where the platform has them), a hover pill, ticks and radio dots, section headers,
+  separators, dimmed disabled rows, submenu chevrons and a shortcut column, one column that scrolls under its own
+  strips, Up/Down/Home/End/Page keys that scroll the row into view, and type-ahead; `fg.menulook` writes a picture of
+  every kind of row in both themes (`menulook-*.png` in its sandbox).
 - **gpu**: `EditorHost`, a `juce::AudioProcessorEditor` that runs one Panel on bgfx: Metal on a click-through NSView
   on macOS, Vulkan on an X11 child window of JUCE's peer on Linux (which is XWayland on a Wayland desktop), Direct3D
   11 on a click-through child window of JUCE's peer on Windows (v0.24.0). It handles the surface lifecycle with a
@@ -150,7 +157,9 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
 - **web** (`FunkGui::web`; Emscripten only, no JUCE): `WebHost`, `EditorHost`'s counterpart on a `<canvas>`. It runs the
   frame clock on `requestAnimationFrame` (about 60 Hz while anything moves, 12 Hz idle, nothing while the document is
   hidden), sizes the canvas for the UI zoom and the device pixel ratio, converts the browser's pointer, wheel and key
-  events by JUCE's rules, and serves menus (DOM elements in the request's theme) and the clipboard write (`copyText`;
+  events by JUCE's rules, and serves menus (DOM elements in the request's theme, with the look `MenuLook` had before
+  0.25.0; a header or a submenu shows as a disabled row of its label with the submenu's rows after it, a radio item as
+  a tick, no shortcut) and the clipboard write (`copyText`;
   `clipboardText` reads empty there); it has no file chooser, no IME, no file drops and no accessibility mirror.
   `WebHostConfig::beforeTick` (v0.14.0) is a product's function called just before each tick of the Panel. `WebGlSink`
   draws a recorded frame with WebGL2 in one draw call, from shader text generated out of the same `shaders/*.sc`, and
