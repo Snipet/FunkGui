@@ -58,8 +58,9 @@
 // comes out unchanged, so it sees each changed line once and drawing (the rows, the minimap, a bracket match) never
 // calls it (0.25.0; before, every drawn row was tokenised again each frame). A highlighter whose output depends on
 // more than the line and its state (a list of names the product updates) is re-run over every line by rehighlight()
-// when that changes. setPalette() maps style indices to inks of the theme, weights and underlines (defaultPalette()
-// fits KeywordHighlighter's indices); index 0 and any index past the palette are plain ink100.
+// when that changes; it leaves the text and revision() as they were, so a Panel whose needsDraw() follows revision()
+// marks itself changed too. setPalette() maps style indices to inks of the theme, weights and underlines
+// (defaultPalette() fits KeywordHighlighter's indices); index 0 and any index past the palette are plain ink100.
 //
 // Drawing (tags EDIT_FRAME, EDIT_GUTTER, EDIT_TEXT, EDIT_SELECT, EDIT_CARET): a 1 px ink16 frame with 2 px corners;
 // line numbers right-aligned in ink32 (the caret's line ink70) on the first row of each line, with an ink16 rule; the

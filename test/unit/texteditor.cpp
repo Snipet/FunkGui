@@ -1754,6 +1754,46 @@ namespace
         return out;
     }
 
+    // The editor's text from `a` to `b` (a before b; a column past its line's end counts as the end).
+    std::string rangeOf(const TextEditor& e, TextPos a, TextPos b)
+    {
+        const auto part = [&e](int ln, int from, int to) {
+            const std::string& l = e.line(ln);
+            const size_t f = std::min(static_cast<size_t>(std::max(from, 0)), l.size());
+            const size_t t = std::max(f, std::min(static_cast<size_t>(std::max(to, 0)), l.size()));
+            return l.substr(f, t - f);
+        };
+        if (a.line == b.line)
+            return part(a.line, a.col, std::max(a.col, b.col));
+        std::string out = part(a.line, a.col, std::numeric_limits<int>::max());
+        for (int ln = a.line + 1; ln < b.line; ++ln)
+            out += "\n" + e.line(ln);
+        return out + "\n" + part(b.line, 0, b.col);
+    }
+
+    // Where `inserted`, put in at `at`, ends.
+    TextPos endAfter(TextPos at, const std::string& inserted)
+    {
+        const size_t nl = inserted.rfind('\n');
+        if (nl == std::string::npos)
+            return { at.line, at.col + static_cast<int>(inserted.size()) };
+        return { at.line + static_cast<int>(std::count(inserted.begin(), inserted.end(), '\n')),
+                 static_cast<int>(inserted.size() - nl - 1) };
+    }
+
+    // The last line the editor should ask for when the lines from `first`, `oldCount` of them, became `newCount`
+    // lines: the new ones, then the lines after while their start state moved (start states before and after).
+    int lastAsked(const std::vector<uint32_t>& before, const std::vector<uint32_t>& after, int first, int oldCount,
+                  int newCount)
+    {
+        const int n = static_cast<int>(after.size());
+        int last = first + newCount - 1;
+        while (last + 1 < n
+               && after[static_cast<size_t>(last + 1)] != before[static_cast<size_t>(last + 1 - newCount + oldCount)])
+            ++last;
+        return last;
+    }
+
     // Whether `drawn` is what an editor given the same text from scratch draws, with the same caret, selection, focus
     // and scroll (`fresh` has the same options, highlighter and palette).
     bool sameAsFresh(Fixture& fresh, const TextEditor& e, const PrimList& drawn)
@@ -1834,6 +1874,19 @@ namespace
                                                   && std::count(log.lines.begin(), log.lines.end(), "int w;") == 1,
              1);
         log.lines.clear();
+        e.undo();                                               // a step of two pieces: each piece's line, once
+        const std::string ninth = e.line(8);
+        P.eq("cache.undo_pieces_their_lines", log.lines.size() == 2 && e.line(0) == "int a;" && ninth != "int w;"
+                                                  && std::count(log.lines.begin(), log.lines.end(), "int a;") == 1
+                                                  && std::count(log.lines.begin(), log.lines.end(), ninth) == 1,
+             1);
+        log.lines.clear();
+        e.redo();
+        P.eq("cache.redo_pieces_their_lines", log.lines.size() == 2 && e.line(0) == "int b;" && e.line(8) == "int w;"
+                                                  && std::count(log.lines.begin(), log.lines.end(), "int b;") == 1
+                                                  && std::count(log.lines.begin(), log.lines.end(), "int w;") == 1,
+             1);
+        log.lines.clear();
         e.replaceText(e.text() + "\nend");
         P.eq("cache.replace_text_changed_only", log.lines == linesOf(e, 8, 9) && e.line(9) == "end", 1);
         log.lines.clear();
@@ -1870,8 +1923,8 @@ namespace
         P.eq("cache.none_plain", countGlyphs(plain, tags::editText, th.ink100) == countTag(plain, tags::editText), 1);
 
         // Random edits, undos and redos: after each, the editor draws what one given its text from scratch draws (the
-        // rows, the minimap, the bracket pair), drawing asks for nothing, and an edit asks for its own lines and then
-        // only for the lines whose start state it moved. Once on rows, once with word wrap.
+        // rows, the minimap, the bracket pair), drawing asks for nothing, and an edit, an undo or a redo asks for its
+        // own lines and then only for the lines whose start state it moved. Once on rows, once with word wrap.
         constexpr const char* kPieces[] = { "", "x", "if ", "int ", "/*", "*/", "\n", "\"", "'", "{", "}", "(", ")",
                                             "// c", "\t", "return 1;", "a\nb", "*/\n/*", "\n\n",
                                             "int x;\n\tif (y) {\n\t}" };
@@ -1898,14 +1951,47 @@ namespace
             x.setText("int a; /* b */\nif (a) { \"s\" }\n// c\nreturn (a);\n/* d\n e */ int f;\n#define g 1\n"
                       "float h = 2.5;\nwhile (i) {\n\tj('k');\n}\nreturn;");
             x.setFocused(!wrap);                                // with wrap, no caret: where one at a break is drawn
-            int differ = 0, drawAsks = 0, wrongAsks = 0, edits = 0;
+            // The steps as the test made them (replaceRange makes each one step of one piece, never merged), to know
+            // the lines an undo or a redo splices: it puts `removed` back where `inserted` stood, or the other way.
+            struct Step
+            {
+                TextPos     from;
+                std::string removed, inserted;
+            };
+            std::vector<Step> undos, redos;
+            int differ = 0, drawAsks = 0, wrongAsks = 0, edits = 0, wrongUndoAsks = 0, undone = 0, redone = 0;
             for (int step = 0; step < 300; ++step)
             {
                 const int kind = rnd(10);
-                if (kind == 0)
-                    x.undo();
-                else if (kind == 1)
-                    x.redo();
+                if (kind <= 2)                                  // an undo (0, 1) or a redo (2)
+                {
+                    const bool isUndo = kind <= 1;
+                    std::vector<Step>& from = isUndo ? undos : redos;
+                    std::vector<Step>& to = isUndo ? redos : undos;
+                    const std::vector<uint32_t> before = startStates(x);
+                    hl.lines.clear();
+                    const bool did = isUndo ? x.undo() : x.redo();
+                    if (did != !from.empty())
+                        ++wrongUndoAsks;                        // the test's record and the editor's disagree
+                    else if (!did)
+                        wrongUndoAsks += hl.lines.empty() ? 0 : 1;
+                    else
+                    {
+                        ++(isUndo ? undone : redone);
+                        const Step s = from.back();
+                        from.pop_back();
+                        const std::string& out = isUndo ? s.inserted : s.removed;   // the text taken out
+                        const std::string& in = isUndo ? s.removed : s.inserted;    // and the text put in
+                        const int oldCount = static_cast<int>(std::count(out.begin(), out.end(), '\n')) + 1;
+                        const int newCount = static_cast<int>(std::count(in.begin(), in.end(), '\n')) + 1;
+                        const int last = lastAsked(before, startStates(x), s.from.line, oldCount, newCount);
+                        wrongUndoAsks += hl.lines == linesOf(x, s.from.line, last)
+                                                 && rangeOf(x, s.from, endAfter(s.from, in)) == in
+                                             ? 0
+                                             : 1;
+                        to.push_back(s);
+                    }
+                }
                 else
                 {
                     // An insertion, a few characters replaced, or a span across a line break: small edits, so the
@@ -1926,20 +2012,17 @@ namespace
                         piece.clear();
                     }
                     const std::vector<uint32_t> before = startStates(x);
+                    std::string removed = rangeOf(x, a, b);
                     hl.lines.clear();
                     if (x.replaceRange(a, b, piece))
                     {
                         ++edits;
-                        const std::vector<uint32_t> after = startStates(x);
                         const int oldCount = b.line - a.line + 1;
                         const int newCount = static_cast<int>(std::count(piece.begin(), piece.end(), '\n')) + 1;
-                        const int n = x.lineCount();
-                        int last = a.line + newCount - 1;       // the editor's stop: a start state that did not move
-                        while (last + 1 < n
-                               && after[static_cast<size_t>(last + 1)]
-                                      != before[static_cast<size_t>(last + 1 - newCount + oldCount)])
-                            ++last;
+                        const int last = lastAsked(before, startStates(x), a.line, oldCount, newCount);
                         wrongAsks += hl.lines == linesOf(x, a.line, last) ? 0 : 1;
+                        undos.push_back({ a, std::move(removed), TextEditor::sanitise(piece) });
+                        redos.clear();
                     }
                 }
                 if (rnd(4) == 0)
@@ -1954,6 +2037,8 @@ namespace
             P.eq((tag + "same_as_fresh").c_str(), differ, 0);
             P.eq((tag + "draw_never_asks").c_str(), drawAsks, 0);
             P.eq((tag + "edit_asks_changed_only").c_str(), wrongAsks, 0);
+            P.eq((tag + "undos_and_redos").c_str(), undone > 40 && redone > 4, 1);
+            P.eq((tag + "undo_asks_changed_only").c_str(), wrongUndoAsks, 0);
         }
     }
 }
