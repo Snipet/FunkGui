@@ -16,6 +16,9 @@
 // - restart.*: releasing the last window shuts bgfx down (target() empty, the id still registered); acquiring again
 //   builds the program from the kept binary at its first draw, and it draws the same pixel.
 // - set.*: set() while bgfx runs: target() is Metal's, a refused binary leaves the program drawing.
+// - checked.* (0.25.0): a new code (fs_custom_test's Metal code with one more comment line) checked by
+//   shaders::check() on a worker thread while bgfx runs: set() of it on this thread runs no Metal compile, and it
+//   draws what fs_custom_test draws; an unchecked new code's set() runs one. Their times are INFO lines.
 // The draw.* frame as read back is written to shader-draw.png in the test's sandbox.
 
 #import <Metal/Metal.h>
@@ -30,14 +33,18 @@
 #include <funkgui/shaders/fs_custom_test.mtl.h>
 #include <funkgui/test/Harness.h>
 
+#include "../../src/gpu/ShaderLibraryDetail.h"
+
 #include <bgfx/bgfx.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace T = funkgui::test;
@@ -153,6 +160,32 @@ namespace
             out[i] = (src[i] * a + dst[i] * (1.0 - a)) * 255.0;
     }
 
+    // fs_custom_test with one more comment line at the end of its Metal code (the code's size rewritten; its NUL and
+    // what follows kept): a code no compile of this process has seen.
+    std::vector<uint8_t> variant(const std::string& tag)
+    {
+        const std::vector<uint8_t> b(fs_custom_test_mtl, fs_custom_test_mtl + sizeof fs_custom_test_mtl);
+        size_t at = 14;                              // magic, hash in, hash out, uniform count (shaderc v11)
+        for (unsigned i = 0, n = b[12] | b[13] << 8; i < n; ++i)
+            at += 1 + b[at] + 10;                    // name size, name, type, num, reg index and count, tex info, format
+        const uint32_t size = b[at] | b[at + 1] << 8 | b[at + 2] << 16 | static_cast<uint32_t>(b[at + 3]) << 24;
+        std::string code(reinterpret_cast<const char*>(&b[at + 4]), size);
+        code += "\n// fg.shader.draw " + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())
+                + " " + tag + "\n";
+        std::vector<uint8_t> out(b.begin(), b.begin() + static_cast<std::ptrdiff_t>(at));
+        const auto n = static_cast<uint32_t>(code.size());
+        for (int i = 0; i < 4; ++i)
+            out.push_back(static_cast<uint8_t>(n >> (8 * i)));
+        out.insert(out.end(), code.begin(), code.end());
+        out.insert(out.end(), b.begin() + static_cast<std::ptrdiff_t>(at + 4 + size), b.end());
+        return out;
+    }
+
+    double msSince(std::chrono::steady_clock::time_point t0)
+    {
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    }
+
     // The test frame: see the file comment.
     const funkgui::Rect kRect{ 10.0f, 15.0f, 40.0f, 30.0f };
     const funkgui::Rect kClip{ 20.0f, 10.0f, 50.0f, 40.0f };       // rect ∩ clip: x 20..50, y 15..45
@@ -259,6 +292,44 @@ int main(int argc, char** argv)
     expect(kRect, 25.25f, 20.25f, 0.25f, 1.0f, kUnder, want);
     P.eq("set.old_program_draws", sink.lastDrawCalls() == 4 && target.near(25.25f, 20.25f, want[0], want[1], want[2]),
          1);
+
+    // ---- checked: check() on a worker while bgfx runs, then set() -------------------------------------------------------
+    namespace D = funkgui::shaders::detail;
+    const std::vector<uint8_t> checkedBin = variant("checked"), uncheckedBin = variant("unchecked");
+    bool workerOk = false;
+    std::string workerWhy = "stale";
+    std::thread([&] {
+        workerOk = funkgui::shaders::check(checkedBin.data(), static_cast<uint32_t>(checkedBin.size()), workerWhy);
+    }).join();
+    P.eq("checked.worker_takes", workerOk && workerWhy.empty(), 1);
+    if (!workerWhy.empty())
+        std::printf("INFO     check on a worker: %s\n", workerWhy.c_str());
+    uint64_t before = D::metalCompileCount();
+    auto t0 = std::chrono::steady_clock::now();
+    const bool checkedSet = funkgui::shaders::set(kId, checkedBin.data(), static_cast<uint32_t>(checkedBin.size()), why);
+    const double checkedMs = msSince(t0);
+    P.eq("checked.set", checkedSet, 1);
+    P.eq("checked.set_compiles_none", static_cast<int64_t>(D::metalCompileCount() - before), 0);
+    t0 = std::chrono::steady_clock::now();
+    target.draw(sink, list);
+    const double checkedFrameMs = msSince(t0);
+    P.eq("checked.draws", sink.lastDrawCalls() == 4 && target.near(25.25f, 20.25f, want[0], want[1], want[2]), 1);
+    before = D::metalCompileCount();
+    t0 = std::chrono::steady_clock::now();
+    const bool uncheckedSet = funkgui::shaders::set(kId, uncheckedBin.data(), static_cast<uint32_t>(uncheckedBin.size()),
+                                                    why);
+    const double uncheckedMs = msSince(t0);
+    P.eq("checked.unchecked_set", uncheckedSet, 1);
+    P.eq("checked.unchecked_set_compiles", static_cast<int64_t>(D::metalCompileCount() - before), 1);
+    t0 = std::chrono::steady_clock::now();
+    target.draw(sink, list);
+    const double uncheckedFrameMs = msSince(t0);
+    P.eq("checked.unchecked_draws", sink.lastDrawCalls() == 4
+                                        && target.near(25.25f, 20.25f, want[0], want[1], want[2]), 1);
+    std::printf("INFO     time: set() of a checked code %.3f ms, its frame %.2f ms; set() of an unchecked code %.2f ms, "
+                "its frame %.2f ms (a frame: two bgfx::frame() and the read-back)\n", checkedMs, checkedFrameMs,
+                uncheckedMs, uncheckedFrameMs);
+    P.eq("checked.restored", funkgui::shaders::set(kId, fs_custom_test_mtl, sizeof fs_custom_test_mtl, why), 1);
 
     // ---- restart ----------------------------------------------------------------------------------------------------------
     target.drop();
