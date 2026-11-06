@@ -252,7 +252,8 @@ namespace funkgui
         // with the time since its last frame as its dt. While the pump idles
         // (its ticks are the idle cadence) or runs on its pinned clock (a
         // capture), every client runs at every tick, as before.
-        static_assert(detail::ClientCadence::kIdleHz == static_cast<double>(kIdleHz));
+        static_assert(!(detail::ClientCadence::kIdleHz < static_cast<double>(kIdleHz))
+                      && !(static_cast<double>(kIdleHz) < detail::ClientCadence::kIdleHz)); // equal, without -Wfloat-equal
         const bool everyTick = ratePref_ != 1 || forceTimer_;
 
         // Iterate a snapshot: a client destroyed from inside submitFrame would
