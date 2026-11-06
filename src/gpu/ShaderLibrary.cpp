@@ -8,10 +8,13 @@
 #include <bgfx/bgfx.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <iterator>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -34,6 +37,14 @@
 // The registry outlives bgfx: BgfxContext::destroyResources() calls releaseGpu() before every shutdown, and program()
 // builds a kept binary again on its first draw after bgfx starts. Never destroyed (HR idiom, as the tag registry): a
 // plug-in is unloaded while statics are torn down in an order nothing here controls, after bgfx is gone.
+//
+// check() (0.25.0) is all of the above that needs no bgfx, on any thread: it reads only its arguments, the embedded
+// vertex shader's front (parsed once, under the language's guard for a function-local static) and constants, and
+// Metal's compile goes through the record of accepted codes below, under its own mutex. The record holds the MSL
+// text itself, not a hash, so a code is taken unseen only when it is byte for byte one Metal compiled in this process;
+// Metal's answer for a text does not change while the process runs (the same compiler and the same default device).
+// The compile runs outside the lock, so two threads checking one new code at once may both compile it; it is recorded
+// once.
 
 #if defined(__APPLE__)
   #include <funkgui/shaders/vs_custom.mtl.h>
@@ -264,8 +275,61 @@ namespace funkgui::shaders
                                [name](const char* p) { return name == p; });
         }
 
-        // Everything set() can say about a binary without bgfx (the file comment).
-        bool check(const uint8_t* p, std::size_t n, std::string& why)
+#if defined(__APPLE__)
+        // The codes Metal's compiler accepted lately, oldest first (the file comment; gpu/ShaderLibrary.h "Checking it
+        // off the message thread"): at most kAcceptedCodes of them and kAcceptedBytes of text, the newest always kept.
+        constexpr std::size_t kAcceptedCodes = 32;
+        constexpr std::size_t kAcceptedBytes = std::size_t{ 2 } << 20;
+
+        struct Accepted
+        {
+            std::mutex              lock;
+            std::deque<std::string> codes;
+            std::size_t             bytes = 0;
+        };
+
+        Accepted& accepted()
+        {
+            static Accepted* const a = new Accepted();   // never destroyed (the file comment)
+            return *a;
+        }
+
+        std::atomic<uint64_t> compiles{ 0 };             // detail::metalCompileCount()
+
+        // Whether Metal takes this MSL text: from the record when it is there (and then the newest again), else by
+        // compiling it, outside the lock, and recording it when Metal took it.
+        bool metalTakes(std::string msl, std::string& why)
+        {
+            Accepted& a = accepted();
+            {
+                const std::lock_guard<std::mutex> hold(a.lock);
+                const auto it = std::find(a.codes.begin(), a.codes.end(), msl);
+                if (it != a.codes.end())
+                {
+                    std::rotate(it, it + 1, a.codes.end());
+                    return true;
+                }
+            }
+            compiles.fetch_add(1, std::memory_order_relaxed);
+            if (!detail::metalCompiles(msl, why))
+                return false;
+            const std::lock_guard<std::mutex> hold(a.lock);
+            if (std::find(a.codes.begin(), a.codes.end(), msl) == a.codes.end())
+            {
+                a.bytes += msl.size();
+                a.codes.push_back(std::move(msl));
+                while (a.codes.size() > 1 && (a.codes.size() > kAcceptedCodes || a.bytes > kAcceptedBytes))
+                {
+                    a.bytes -= a.codes.front().size();
+                    a.codes.pop_front();
+                }
+            }
+            return true;
+        }
+#endif
+
+        // Everything set() can say about a binary without bgfx (the file comment): shaders::check().
+        bool checkBinary(const uint8_t* p, std::size_t n, std::string& why)
         {
             Binary b;
             if (!parse(p, n, b, why))
@@ -312,13 +376,12 @@ namespace funkgui::shaders
                 }
             }
 #if defined(__APPLE__)
-            const std::string msl(reinterpret_cast<const char*>(b.code), b.codeSize);
             if (b.codeSize >= 4 && b.code[0] == 0x03 && b.code[1] == 0x02 && b.code[2] == 0x23 && b.code[3] == 0x07)
             {
                 why = "the shader holds SPIR-V, not Metal: compile with --platform osx -p metal";
                 return false;
             }
-            return detail::metalCompiles(msl, why);
+            return metalTakes(std::string(reinterpret_cast<const char*>(b.code), b.codeSize), why);
 #elif defined(_WIN32)
             // D3DCompile's output is a DXBC container: its four-byte magic first (the bytecode follows its checksum).
             const bool dxbc = b.codeSize >= 32 && b.code[0] == 'D' && b.code[1] == 'X' && b.code[2] == 'B'
@@ -349,6 +412,19 @@ namespace funkgui::shaders
 #endif
     }
 
+    bool check(const void* fragmentBinary, uint32_t size, std::string& why)
+    {
+        if (fragmentBinary == nullptr || size == 0)
+        {
+            why = "no shader binary";
+            return false;
+        }
+        if (!checkBinary(static_cast<const uint8_t*>(fragmentBinary), size, why))
+            return false;
+        why.clear();
+        return true;
+    }
+
     bool set(uint32_t id, const void* fragmentBinary, uint32_t size, std::string& why)
     {
         if (fragmentBinary == nullptr || size == 0)
@@ -357,7 +433,7 @@ namespace funkgui::shaders
             return false;
         }
         const auto* p = static_cast<const uint8_t*>(fragmentBinary);
-        if (!check(p, size, why))
+        if (!checkBinary(p, size, why))
             return false;
 
         std::vector<uint8_t> bin(p, p + size);
@@ -428,6 +504,15 @@ namespace funkgui::shaders
         }
 
         uint64_t generation() { return registry().generation; }
+
+        uint64_t metalCompileCount()
+        {
+#if defined(__APPLE__)
+            return compiles.load(std::memory_order_relaxed);
+#else
+            return 0;
+#endif
+        }
 
         bgfx::UniformHandle uRect() { return registry().uRect; }
 
