@@ -7,7 +7,10 @@
 // A product sets it on the menus it shows itself (juce::PopupMenu::Options or setLookAndFeel) and calls setTheme() when
 // UiPreferences::revision() moves. The host's own parameter menu (HostServices::showParamMenu) is the host's and keeps
 // the host's look. Message thread. A menu still open when the editor closes holds a pointer to its look, so the owner
-// calls juce::PopupMenu::dismissAllActiveMenus() before destroying one (HR ~PresetPanel).
+// calls juce::PopupMenu::dismissAllActiveMenus() before destroying one (HR ~PresetPanel): that closes the menu and
+// takes the look off its window. JUCE deletes a dismissed menu's window later (from the message loop, or at its
+// shutdown); the look's destructor takes its own listeners (the keys, the rows in the margin) off every one of its
+// windows that is still there, so a look may go before them.
 //
 // G6: HR's MenuLook, moved into FunkGui, constructed from a Theme; setTheme() is HR's (an addition to 02's one-line
 // declaration). The typeface is made once per MenuLook from the embedded face; when it cannot be made the menu falls
@@ -53,6 +56,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <memory>
+#include <vector>
 
 namespace funkgui
 {
@@ -167,5 +171,8 @@ namespace funkgui
         bool transparentWindows_ = false;                // Desktop::canUseSemiTransparentWindows(), at setTheme()
         std::unique_ptr<Keys> keys_;
         std::unique_ptr<Rows> rows_;
+        // Every menu window keys_ listens to and every row rows_ does, so the destructor can take them off the ones
+        // JUCE has not deleted yet; pruned of the deleted ones at each new window.
+        std::vector<juce::Component::SafePointer<juce::Component>> attached_;
     };
 }

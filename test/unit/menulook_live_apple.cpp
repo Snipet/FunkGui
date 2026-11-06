@@ -97,10 +97,9 @@ namespace
 
 int main(int argc, char** argv)
 {
-    std::unique_ptr<MenuLook> look;                  // outlives JUCE's shutdown, which deletes a menu still held
     const juce::ScopedJuceInitialiser_GUI juceInit;
     T::Probe P("fg.menulook.live", "", argc, argv);
-    look = std::make_unique<MenuLook>(funkgui::Theme::graphite());
+    const auto look = std::make_unique<MenuLook>(funkgui::Theme::graphite());
 
     int chosen = -1;
     {

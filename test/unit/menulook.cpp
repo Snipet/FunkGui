@@ -19,6 +19,9 @@
 //   padding the surface, the highlighted row the hover pill, a separator the rule, the radio dot and the tick the
 //   mark, a chevron and the scroll strips' chevrons the dim ink, a disabled row less contrast than an enabled one,
 //   and the shadow under the panel darker than the canvas.
+// - lifetime.*: a look destroyed after its menu was dismissed and before JUCE deletes the menu's window (as when an
+//   editor closes with a menu open): the window moves and is deleted with nothing of the look's left on it. The looks
+//   of the other rows go before JUCE's shutdown deletes their dismissed menus' windows, the same case again.
 // - png.*: each picture as menulook-<kind>-<theme>.png and all of them as menulook-sheet.png (graphite above, paper
 //   below), in the test's sandbox.
 // The keys on a real window, the scrolling with them, type-ahead through JUCE's handlers and the initially selected row
@@ -279,14 +282,13 @@ namespace
 
 int main(int argc, char** argv)
 {
-    // The looks outlive JUCE's shutdown, which deletes the dismissed menus' windows that still point at them.
-    std::unique_ptr<MenuLook> looks[2];
     const juce::ScopedJuceInitialiser_GUI juceInit;      // MenuLook's typeface; JUCE's displays for a menu's layout
     T::Probe P("fg.menulook", "", argc, argv);
     const funkgui::Theme themes[2] = { funkgui::Theme::graphite(), funkgui::Theme::paper() };
     const char* themeNames[2] = { "graphite", "paper" };
-    looks[0] = std::make_unique<MenuLook>(themes[0]);
-    looks[1] = std::make_unique<MenuLook>(themes[1]);
+    // The looks go before JUCE's shutdown deletes the dismissed menus' windows (lifetime.*).
+    const std::unique_ptr<MenuLook> looks[2] = { std::make_unique<MenuLook>(themes[0]),
+                                                 std::make_unique<MenuLook>(themes[1]) };
 
     // ---- palette, colour ids, font -----------------------------------------------------------------------------------
     for (int t = 0; t < 2; ++t)
@@ -459,6 +461,28 @@ int main(int argc, char** argv)
     const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay();
     if (!P.eq("menu.display_known", display != nullptr, 1))
         return P.finish();                               // JUCE places a menu on a display (a headless Linux has none)
+
+    // ---- lifetime -----------------------------------------------------------------------------------------------------
+    // JUCE deletes a dismissed menu's window after the dismissal: from the modal manager's update on the message loop,
+    // or with the manager at JUCE's shutdown. The run loop never turns here, so it is the second: the manager is
+    // deleted, and the window with it, after the look. The window and its rows tell their listeners as they move and
+    // as they go; the look's destructor has taken its own off them.
+    {
+        auto look = std::make_unique<MenuLook>(themes[0]);
+        const Kind* scroll = &kKinds[0];
+        for (const Kind& kind : kKinds)
+            if (std::string(kind.name) == "scroll")
+                scroll = &kind;                                         // rows in the margin: a listener on each
+        Shown s = show(*look, *scroll, themes[0]);
+        const juce::Component::SafePointer<juce::Component> window(s.window), row(rowAt(s.window, 0));
+        P.eq("lifetime.window_kept_after_dismissal", window != nullptr && row != nullptr, 1);
+        look.reset();
+        P.eq("lifetime.window_outlives_look", window != nullptr, 1);
+        if (window != nullptr)
+            window->setBounds(window->getBounds().translated(0, 1));     // the look's listeners are not told
+        juce::ModalComponentManager::deleteInstance();
+        P.eq("lifetime.window_deleted_after_look", window == nullptr && row == nullptr, 1);
+    }
 
     std::vector<Shown> shown;
     std::vector<juce::Image> sheetRow[2];

@@ -258,7 +258,17 @@ namespace funkgui
         setTheme(th);
     }
 
-    MenuLook::~MenuLook() = default;
+    // A dismissed menu's window and rows outlive the dismissal (JUCE deletes them from the message loop, or at its
+    // shutdown) and tell their listeners as they move and as they go: take this look's off them first.
+    MenuLook::~MenuLook()
+    {
+        for (const auto& c : attached_)
+            if (juce::Component* component = c.getComponent())
+            {
+                component->removeKeyListener(keys_.get());
+                component->removeComponentListener(rows_.get());
+            }
+    }
 
     MenuLook::Palette MenuLook::paletteFor(const Theme& th)
     {
@@ -442,14 +452,19 @@ namespace funkgui
 
     void MenuLook::preparePopupMenuWindow(juce::Component& window)
     {
+        std::erase_if(attached_, [](const auto& c) { return c.getComponent() == nullptr; });   // deleted by JUCE
         window.addKeyListener(keys_.get());
+        attached_.emplace_back(&window);
         const int m = shadowPx();
         if (m > 0)
         {
             window.getProperties().set(kMarginProperty, m);
             window.addComponentListener(rows_.get());
             for (juce::Component* row : window.getChildren())
+            {
                 row->addComponentListener(rows_.get());
+                attached_.emplace_back(row);
+            }
             Rows::check(window);
         }
         // The initially selected row (Options::withInitiallySelectedItem), which JUCE highlights, and so focuses, as it
