@@ -481,23 +481,27 @@ if(FUNKGUI_WITH_BGFX)
   # configure time, a fragment shader built exactly as a host builds one at run time. vs_ui and fs_ui are compiled as
   # they always were.
   # v0.20.0 added fs_image (Canvas::image's fragment shader, linked with vs_custom: canvas/PrimList.h ImageDraw).
+  # 0.25.0 added a second test program, fs_texture_test (test/shaders/fs_texture_test.main.sc: custom shaders'
+  # samplers, fg.shader.texture), built the same way.
   set(_fg_shader_list vs_ui=vertex=${PROJECT_SOURCE_DIR}/shaders/vs_ui.sc=varying.def
                       fs_ui=fragment=${PROJECT_SOURCE_DIR}/shaders/fs_ui.sc=varying.def
                       vs_custom=vertex=${PROJECT_SOURCE_DIR}/shaders/vs_custom.sc=varying_custom.def
                       fs_image=fragment=${PROJECT_SOURCE_DIR}/shaders/fs_image.sc=varying_custom.def)
   if(FUNKGUI_BUILD_TESTS)
-    set(_fg_test_sc ${FunkGui_BINARY_DIR}/funkgui-test-shaders/fs_custom_test.sc)
-    set(_fg_test_parts ${PROJECT_SOURCE_DIR}/shaders/fs_custom_prelude.sc
-                       ${PROJECT_SOURCE_DIR}/test/shaders/fs_custom_test.main.sc)
-    set(_fg_test_text "")
-    foreach(_part IN LISTS _fg_test_parts)
-      file(READ "${_part}" _fg_part_text)
-      string(APPEND _fg_test_text "${_fg_part_text}")
+    foreach(_fg_test_name IN ITEMS fs_custom_test fs_texture_test)
+      set(_fg_test_sc ${FunkGui_BINARY_DIR}/funkgui-test-shaders/${_fg_test_name}.sc)
+      set(_fg_test_parts ${PROJECT_SOURCE_DIR}/shaders/fs_custom_prelude.sc
+                         ${PROJECT_SOURCE_DIR}/test/shaders/${_fg_test_name}.main.sc)
+      set(_fg_test_text "")
+      foreach(_part IN LISTS _fg_test_parts)
+        file(READ "${_part}" _fg_part_text)
+        string(APPEND _fg_test_text "${_fg_part_text}")
+      endforeach()
+      file(WRITE "${_fg_test_sc}.new" "${_fg_test_text}")
+      configure_file("${_fg_test_sc}.new" "${_fg_test_sc}" COPYONLY)    # rewritten only when it changes
+      set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_fg_test_parts})
+      list(APPEND _fg_shader_list ${_fg_test_name}=fragment=${_fg_test_sc}=varying_custom.def)
     endforeach()
-    file(WRITE "${_fg_test_sc}.new" "${_fg_test_text}")
-    configure_file("${_fg_test_sc}.new" "${_fg_test_sc}" COPYONLY)    # rewritten only when it changes
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_fg_test_parts})
-    list(APPEND _fg_shader_list fs_custom_test=fragment=${_fg_test_sc}=varying_custom.def)
   endif()
   foreach(_shader IN LISTS _fg_shader_list)
     string(REPLACE "=" ";" _shader "${_shader}")
