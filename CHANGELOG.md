@@ -3,6 +3,51 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.25.0 — 2026-11-06 · MINOR: idle editors draw nothing, textures for custom shaders, menus in the canvas's style
+
+Golden impact: **none** (no golden file changed; nothing records, draws, dumps or hashes differently for a Panel that
+draws: a skipped frame is one that would have drawn the same picture). New tests: `fg.editorhost.skip`,
+`fg.framepump.cadence`, `fg.editorhost.cadence`, `fg.shader.check`, `fg.shader.texture`, `fg.shader.sampler`,
+`fg.menulook`, with new rows in `fg.texteditor`, `fg.gpu.picture` and `fg.host.services.live`. FCompressor green
+against it (agent and agent-gui). Linux: the changes there are plain C++ or a stated fallback (below). Windows: not
+compiled here.
+
+- **Unchanged frames are not drawn** (macOS, Windows): `Panel::needsDraw()` (new, default `true`) lets a Panel say
+  nothing it draws has changed; the editor then records, uploads and submits nothing and leaves its last picture up.
+  A frame recorded equal to the last one drawn (`sameDrawing()`, new in `canvas/FrameCompare.h`) is not submitted
+  either. A new size, scale, zoom or theme, a surface made again, and a window shown again or no longer occluded
+  always draw. `EditorHost::Diagnostics` counts `skipped` and `unchanged` frames. **Linux** draws every frame, as
+  before (`renderViewKeepsFrame()` is false there: a compositor or bgfx's Vulkan acquire may drop a frame without
+  telling FunkGui). A GPU picture now frees its render targets before it returns.
+- **Each editor its own cadence:** the FramePump still ticks at 60 Hz while any editor wants full rate and 12 Hz
+  otherwise, but a calm editor now runs only at the tick nearest 1/12 s after its own last frame, even while another
+  editor runs at full rate. Input, a resize and `HostServices::nudgeFullRate()` nudge only their own editor;
+  `nudgeFullRate()` with no argument nudges every editor. New: `FramePump::nudgeFullRate(const FrameClient*)`,
+  `measuredFps(const FrameClient*)`, `wantedFullRate(const FrameClient*)`; `Diagnostics::fps` and `FrameInfo`'s fps
+  and rate are the editor's own. One editor alone runs as before.
+- **TextEditor keeps each line's highlight spans**, refreshed where `rehighlightFrom` already tracks changes, so a
+  frame highlights only the lines an edit, undo or redo touched; drawing rows and the minimap reads the kept spans.
+  New: `TextEditor::rehighlight()`, for a highlighter whose output changed with no text change (for example new type
+  names): it re-runs every line and leaves the text and `revision()` unchanged.
+- **Shader checks off the message thread:** `shaders::check(binary, size, why)` runs `set()`'s checks (on Metal, the
+  library compile) on any thread; `set()` then does not compile a code that was checked lately. The record keeps the
+  last 256 codes, at most 2 MiB; past those the least recently used is compiled again, as without `check()`.
+- **Textures for custom shaders:** `shaders::setTexture(id, w, h, TextureFormat::rgba8 | r8, texels, stride,
+  TextureSampling)`, `removeTexture`, `hasTexture`, `bindTexture(shaderId, sampler, textureId)` and
+  `unbindTexture`, up to 4096 px a side and 4 sampler stages, on Metal, Vulkan and Direct3D 11; headless GPU pictures
+  sample them too. `SoftRaster` keeps its striped placeholder. A shader's samplers are read from each compiler's own
+  marks: a 2D float sampler is accepted, and multisampled, arrayed or storage images are refused with their reason.
+  The 16-float `u_params` is unchanged.
+- **Menus in the canvas's style** (`juce/MenuLook`): JUCE's popup menus are drawn as a rounded panel of the theme's
+  surface with a hairline edge and a soft shadow (a non-opaque window where the platform allows it), a hover pill,
+  ticks and radio dots, section headers, separators, dimmed disabled rows, submenu chevrons, a shortcut column, a
+  maximum height that scrolls, keyboard navigation and type-ahead, in both themes. `MenuItem` gains `header`,
+  `radio`, `shortcut` and `submenu`, and `MenuRequest` gains `selectedId` and `minWidth` (in the Panel's own px);
+  `validMenu()` checks a request. The look detaches itself from menu windows that outlive it. `setTheme` is
+  unchanged.
+- **API:** additive only. Private members changed in `FramePump`, `EditorHost`, `TextEditor` and `MenuLook`; a
+  consumer builds FunkGui from source at the tag.
+
 ## v0.24.0 — 2026-11-03 · MINOR: Windows (the GPU layer on Direct3D 11 into a child window)
 
 Golden impact: **none** (nothing records, draws, dumps or hashes differently on macOS or Linux: the new code is
