@@ -10,8 +10,12 @@
 //   does not move); each refusal of fg.shader.library's set.* rows is false with set()'s own reason, word for word.
 // - record.* (macOS; skipped and noted without a Metal device): a new code costs one Metal compile in check(); set()
 //   of it afterwards, set() again and check() again cost none; a one-line change costs one; a refused code is not
-//   remembered (set() of it compiles again and refuses it with check()'s reason); the record keeps the 32 codes used
-//   last (a code checked again stays, the oldest goes) and at most 2 MiB of text, always keeping the newest.
+//   remembered (set() of it compiles again and refuses it with check()'s reason).
+// - bound.* (macOS, likewise): the record's two bounds, exactly. Bytes: a code of 3 MiB alone stays (the newest is
+//   always kept) and drops every older one; two codes of exactly 2 MiB together both stay, and one more small code
+//   drops the older of them. Count: one code X alone in the record, then 255 new ones (256 in all), then X again
+//   and one more new code: X stays (first in, first out would drop it: X was checked first), the second of the 255
+//   stays (at least 256 kept) and the first goes (at most 256).
 // - thread.*: four worker threads check four new codes and one shared code at once, all true; each new code is
 //   compiled once and the shared one at most four times; set() of all five on this thread afterwards compiles none;
 //   a worker's refusal carries Metal's reason. On Linux the same rows run without a compile count.
@@ -172,7 +176,7 @@ int main(int argc, char** argv)
     const char* otherWhy = "no SPIR-V";
 #endif
 
-    // ---- check ---------------------------------------------------------------------------------------------------------
+    // ---- check ------------------------------------------------------------------------------------------------------
     std::string why = "stale";
     const uint64_t gen = D::generation();
     const bool first = checks(mine, why);
@@ -224,7 +228,7 @@ int main(int argc, char** argv)
     }
 #endif
 
-    // ---- record ----------------------------------------------------------------------------------------------------------
+    // ---- record -----------------------------------------------------------------------------------------------------
 #if defined(__APPLE__)
     if (!noMetal)
     {
@@ -257,40 +261,72 @@ int main(int argc, char** argv)
         P.eq("record.refusal_same_why", !checkWhy.empty() && checkWhy == setWhy, 1);
         P.eq("record.refusal_unregistered", S::has(11), 0);
 
-        // B, A, 16 new codes, A again, 15 more: 33 codes, so the oldest (B) goes and A, used since, stays.
-        const Bytes b = fresh(mine, "b"), lru = fresh(mine, "lru");
-        int64_t n = compiles([&] { checks(b, why); checks(lru, why); });
-        for (int i = 0; i < 16; ++i)
-            n += compiles([&] { checks(fresh(mine, "f" + std::to_string(i)), why); });
-        P.eq("record.lru_touch", compiles([&] { checks(lru, why); }), 0);
-        for (int i = 16; i < 31; ++i)
-            n += compiles([&] { checks(fresh(mine, "f" + std::to_string(i)), why); });
-        P.eq("record.lru_fill", n, 33);
-        P.eq("record.lru_kept", compiles([&] { sets(12, lru, why); }), 0);
-        P.eq("record.oldest_dropped", compiles([&] { checks(b, why); }), 1);
-
-        // A code of 3 MiB (its comment): above the bytes bound alone, kept as the newest, and every other one goes.
-        const std::string text = code(mine);
-        std::string big = text + "\n//";
-        big.append(std::size_t{ 3 } << 20, 'x');
-        big += "\n// fg.shader.check " + gRun + " big\n";
-        const Bytes huge = withCode(mine, big);
-        t0 = Clock::now();
-        P.eq("record.big_compiles", compiles([&] { ok = checks(huge, why); }), 1);
-        std::printf("INFO     time: check() of a 3 MiB code %.2f ms%s%s\n", msSince(t0), ok ? "" : ": ",
-                    why.c_str());
-        P.eq("record.big_takes", ok, 1);
-        P.eq("record.big_kept", compiles([&] { checks(huge, why); }), 0);
-        P.eq("record.big_evicts", compiles([&] { checks(lru, why); }), 1);
-        P.eq("record.small_after_big", compiles([&] { checks(lru, why); }), 0);
         S::remove(10);
-        S::remove(12);
     }
     else
         std::printf("INFO     no Metal device: record.* skipped\n");
+
+    // ---- bound ------------------------------------------------------------------------------------------------------
+    // The bounds as gpu/ShaderLibrary.h states them, written out here so that a change to either shows. What they
+    // count is the Metal code's text: the test shader's code, then one comment line.
+    if (!noMetal)
+    {
+        constexpr std::size_t kBytes = std::size_t{ 2 } << 20;
+        constexpr int kCodes = 256;
+        const std::string text = code(mine);
+        // A code of exactly `total` bytes: the test shader's, its comment line padded with x's.
+        auto sized = [&](std::size_t total, const std::string& tag) {
+            const std::string head = text + "\n// fg.shader.check " + gRun + " " + tag + " ";
+            return withCode(mine, head + std::string(total - head.size() - 1, 'x') + "\n");
+        };
+        bool ok = false;
+
+        // Bytes. `huge` (3 MiB) is above the bound alone: it stays as the newest and drops every older code (`a`,
+        // checked above, among them). `most` and s are exactly 2 MiB together: both stay. One more small code t drops
+        // the older of the two (`most`, 2 MiB less one small code): the bound is 2 MiB within one small code.
+        const Bytes a = fresh(mine, "a"), s = fresh(mine, "bytes-s"), t = fresh(mine, "bytes-t");
+        const Bytes huge = sized(std::size_t{ 3 } << 20, "huge"), most = sized(kBytes - code(s).size(), "most");
+        auto t0 = Clock::now();
+        P.eq("bound.huge_compiles", compiles([&] { ok = checks(huge, why); }), 1);
+        std::printf("INFO     time: check() of a 3 MiB code %.2f ms%s%s\n", msSince(t0), ok ? "" : ": ",
+                    why.c_str());
+        P.eq("bound.huge_takes", ok, 1);
+        P.eq("bound.huge_kept", compiles([&] { checks(huge, why); }), 0);
+        P.eq("bound.huge_drops_older", compiles([&] { checks(a, why); }), 1);
+        int64_t n = compiles([&] { ok = checks(most, why); });
+        n += compiles([&] { ok = checks(s, why) && ok; });
+        P.eq("bound.bytes_fill", n == 2 && ok, 1);
+        P.eq("bound.bytes_at_bound", compiles([&] { checks(most, why); checks(s, why); }), 0);
+        P.eq("bound.bytes_next", compiles([&] { checks(t, why); }), 1);
+        P.eq("bound.bytes_next_kept", compiles([&] { checks(s, why); checks(t, why); }), 0);
+        P.eq("bound.bytes_over", compiles([&] { checks(most, why); }), 1);
+
+        // Count. `huge` drops every other code, and x then drops `huge`: x alone. x and 255 new codes c0..c254 (256
+        // codes, well within the bytes bound), x again, then c255: the code used least lately (c0) goes, not x.
+        P.eq("bound.count_fits_bytes", static_cast<std::size_t>(kCodes) * (text.size() + 64) < kBytes, 1);
+        const Bytes x = fresh(mine, "count-x");
+        auto c = [&](int i) { return fresh(mine, "count" + std::to_string(i)); };
+        checks(huge, why);
+        P.eq("bound.count_x_new", compiles([&] { checks(x, why); }), 1);
+        t0 = Clock::now();
+        n = 0;
+        for (int i = 0; i < kCodes - 1; ++i)
+            n += compiles([&] { checks(c(i), why); });
+        std::printf("INFO     time: check() of %d new codes %.1f ms\n", kCodes - 1, msSince(t0));
+        P.eq("bound.count_fill", n, kCodes - 1);
+        P.eq("bound.count_touch", compiles([&] { checks(x, why); }), 0);
+        P.eq("bound.count_next", compiles([&] { checks(c(kCodes - 1), why); }), 1);
+        P.eq("bound.count_used_kept", compiles([&] { ok = sets(12, x, why); }), 0);
+        P.eq("bound.count_set", ok && S::has(12), 1);
+        P.eq("bound.count_second_kept", compiles([&] { checks(c(1), why); }), 0);
+        P.eq("bound.count_oldest_dropped", compiles([&] { checks(c(0), why); }), 1);
+        S::remove(12);
+    }
+    else
+        std::printf("INFO     no Metal device: bound.* skipped\n");
 #endif
 
-    // ---- thread ----------------------------------------------------------------------------------------------------------
+    // ---- thread -----------------------------------------------------------------------------------------------------
     if (!noMetal)
     {
         constexpr int kWorkers = 4;

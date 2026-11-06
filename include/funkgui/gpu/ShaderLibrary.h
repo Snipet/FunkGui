@@ -44,13 +44,16 @@
 // ---- Checking it off the message thread (0.25.0) --------------------------------------------------------------------
 // On macOS set() runs Metal's compiler on the code, milliseconds for a small shader and more for a large one, on the
 // message thread. A host that builds its shaders on a worker calls check() there after shaderc, and set() on the
-// message thread afterwards: check() and set() remember the codes Metal accepted (the exact text: the last 32 used, up
-// to 2 MiB of text, the newest always kept), and neither compiles a remembered code again. A refused code is not
-// remembered: set() of it compiles it again and refuses it with check()'s reason. bgfx compiles each new shader's code
-// itself too, when it creates it at the next frame; Metal keeps what it compiled in this process, so in practice that
-// compile is then quick (fg.shader.check and fg.shader.draw print the times), but it is Metal's cache, not FunkGui's.
-// target() stays message-thread only: a worker that needs it for shaderc's arguments gets it there first. On Linux and
-// Windows check() runs set()'s quick checks (no driver compile there, as above), on any thread too.
+// message thread afterwards: check() and set() remember the codes Metal accepted (the exact text: the last 256 used, up
+// to 2 MiB of text, the newest always kept), and neither compiles a remembered code again. Past those bounds the code
+// used least lately goes, and set() of it then compiles it again, as without check(); a host that checks many codes
+// long before it sets them can check() each again on a worker shortly before its set() (no compile while it is
+// remembered). A refused code is not remembered: set() of it compiles it again and refuses it with check()'s reason.
+// bgfx compiles each new shader's code itself too, when it creates it at the next frame; Metal keeps what it compiled
+// in this process, so in practice that compile is then quick (fg.shader.check and fg.shader.draw print the times), but
+// it is Metal's cache, not FunkGui's. target() stays message-thread only: a worker that needs it for shaderc's
+// arguments gets it there first. On Linux and Windows check() runs set()'s quick checks, on any thread too: no driver
+// compile there (the Linux and Windows paragraph below).
 //
 // ---- Lifetime -------------------------------------------------------------------------------------------------------
 // The registry keeps each id's binary. bgfx itself comes and goes with the editors (BgfxContext shuts it down when the
@@ -88,7 +91,7 @@ namespace funkgui::shaders
     // does not take `$input v_uv, v_px` with varyingDef()'s varyings, samples a texture, reads a uniform neither
     // FunkGui nor bgfx sets (or one of FunkGui's with another type or size), carries code for another renderer, does
     // not compile (macOS: Metal's own compiler, as bgfx will call it, unless check() or set() accepted the same code
-    // before: "Checking it off the message thread" above), or bgfx refuses to create the shader or link the
+    // lately: "Checking it off the message thread" above), or bgfx refuses to create the shader or link the
     // program (only checked while bgfx runs). On false the id keeps what it had (its previous program, or nothing). On
     // true, why is cleared and the next frame draws the new program.
     bool set(uint32_t id, const void* fragmentBinary, uint32_t size, std::string& why);
@@ -97,7 +100,8 @@ namespace funkgui::shaders
     // the frames included), with or without bgfx running. True, with why cleared, when set() would take the binary,
     // bgfx's own create and link aside (set() checks those while bgfx runs); else false with the reason set() would
     // give. On macOS this runs Metal's compiler, the slow part of set(), and remembers a code it accepted, so set() of
-    // that binary afterwards does not compile it again ("Checking it off the message thread" above).
+    // that binary afterwards does not compile it again while it is remembered ("Checking it off the message thread"
+    // above: the last 256 codes used).
     bool check(const void* fragmentBinary, uint32_t size, std::string& why);
 
     // Unregisters id and destroys its program; shader draws of it then draw nothing. An unknown id is ignored.

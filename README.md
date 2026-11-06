@@ -132,8 +132,9 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
   give it what to compile with), `set()` checks it (on macOS Metal compiles it too) and links it with FunkGui's own
   vertex shader, and `BgfxSink` draws it wherever a Canvas recorded `shader()`, with its rectangle, the frame's clock
   and 16 parameters as uniforms. `check()` (0.25.0) runs `set()`'s checks on any thread: a host that builds shaders on
-  a worker checks them there, and `set()` on the message thread then does not compile again a code Metal accepted. Pictures (`Canvas::image`, v0.20.0) draw with FunkGui's own image program; their
-  textures are shared by every editor in the process, uploaded at a picture's first draw and destroyed after
+  a worker checks them there, and `set()` on the message thread then does not compile again a code Metal accepted
+  (the last 256 used, up to 2 MiB of text). Pictures (`Canvas::image`, v0.20.0) draw with FunkGui's own image program;
+  their textures are shared by every editor in the process, uploaded at a picture's first draw and destroyed after
   `images::remove()` or a replacement, and when bgfx shuts down.
   `GpuPicture.h` (v0.23.0) draws a recorded frame offscreen with `BgfxSink` and reads it back as an RGBA `Image`
   (`renderGpuPicture`), so a picture of a Panel for a person or a model shows its custom shaders and pictures as the

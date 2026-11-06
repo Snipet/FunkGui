@@ -277,8 +277,11 @@ namespace funkgui::shaders
 
 #if defined(__APPLE__)
         // The codes Metal's compiler accepted lately, oldest first (the file comment; gpu/ShaderLibrary.h "Checking it
-        // off the message thread"): at most kAcceptedCodes of them and kAcceptedBytes of text, the newest always kept.
-        constexpr std::size_t kAcceptedCodes = 32;
+        // off the message thread"): at most kAcceptedCodes of them and kAcceptedBytes of text, the newest always kept;
+        // past either bound the code used least lately goes. The count is generous because a host may check a code long
+        // before it sets it (at an editor's first open, after many instances checked theirs); the bytes bound the
+        // memory (a small shader's code is a KB or so).
+        constexpr std::size_t kAcceptedCodes = 256;
         constexpr std::size_t kAcceptedBytes = std::size_t{ 2 } << 20;
 
         struct Accepted
