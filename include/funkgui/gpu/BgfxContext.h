@@ -28,6 +28,14 @@
 // G7: the font texture is FontService's CPU atlas uploaded once (the same bake every Canvas and HeadlessHost reads, so
 // a live frame and a headless frame share glyph metrics and UVs), and the transient vertex buffer is sized from
 // configure() (default FUNKGUI_TRANSIENT_VB_BYTES = 32 MiB, 02 §4.5) instead of bgfx's compiled 6 MiB.
+//
+// v0.26.0: the UI program's instanced twin. With the UI program it makes progUiInstanced() (shaders/vs_ui_inst.sc
+// with fs_ui.sc), the unit quad its instances share (quad(): the corners (0, 0), (1, 0), (1, 1), (0, 1) as Position,
+// two floats each; quadIndices(): 0, 1, 2, 0, 2, 3, so the triangles are expand()'s a, b, c and a, c, d) and the
+// uniform u_unorm8 (64 vec4, canvas/Expand.h unorm8Values). BgfxSink draws a frame's primitives with them, one 80-byte
+// instance each, while instancing() and Config::instancing are true; else as expand()'s six vertices each, as before
+// v0.26.0. The pixels are the same either way. instancing() is false when bgfx reports no BGFX_CAPS_INSTANCING or
+// refuses the program or its buffers: never a failed start, the UI then draws as vertices.
 
 #include <bgfx/bgfx.h>
 #include <funkgui/text/FontAtlasSdf.h>
@@ -46,12 +54,16 @@ namespace funkgui
         static constexpr int kMaxWindows = 16;       // editors per process (A §2.4); the 17th waits for a slot
 
         // Budgets (A §6.4.7). transientVbBytes is bgfx::Init::limits.maxTransientVbSize: shared by every editor in
-        // the process for one bgfx::frame(), 384 B per primitive (02 §4.5). maxWindows is clamped to 1..kMaxWindows;
-        // it counts windows, never the null window's registrations (v0.23.1).
+        // the process for one bgfx::frame(), 80 B per primitive drawn as an instance (v0.26.0) and 384 B per one drawn
+        // as vertices (02 §4.5), plus 384 B per shader or image draw. maxWindows is clamped to 1..kMaxWindows; it
+        // counts windows, never the null window's registrations (v0.23.1). instancing (v0.26.0): primitives as
+        // instances where bgfx can (instancing() above); false draws them as expand()'s vertices, as before v0.26.0
+        // (the same pixels, more bytes). It applies at once, from the next BgfxSink::submit().
         struct Config
         {
             uint32_t transientVbBytes = static_cast<uint32_t>(FUNKGUI_TRANSIENT_VB_BYTES);
             int      maxWindows = kMaxWindows;
+            bool     instancing = true;
         };
 
         static BgfxContext& get();
@@ -123,6 +135,18 @@ namespace funkgui
         bgfx::TextureHandle fontTex()   const { return fontTex_; }
         const bgfx::VertexLayout& layout() const { return layout_; }
 
+        // v0.26.0 (the header): the same program drawing primitives as instances, its quad and its colour table.
+        // Invalid while instancing() is false.
+        bgfx::ProgramHandle      progUiInstanced() const { return progUiInst_; }
+        bgfx::VertexBufferHandle quad()            const { return quad_; }
+        bgfx::IndexBufferHandle  quadIndices()     const { return quadIndices_; }
+        bgfx::UniformHandle      uUnorm8()         const { return uUnorm8_; }
+        bool instancing() const
+        {
+            return bgfx::isValid(progUiInst_) && bgfx::isValid(quad_) && bgfx::isValid(quadIndices_)
+                && bgfx::isValid(uUnorm8_);
+        }
+
         // FontService's atlas (text/FontService.h): the CPU bake the recorder lays text out against.
         const FontAtlasSdf& font() const;
 
@@ -192,6 +216,14 @@ namespace funkgui
         // then killed the GPU path for the rest of the host session.
         bgfx::ShaderHandle vsUi_ = BGFX_INVALID_HANDLE;
         bgfx::ShaderHandle fsUi_ = BGFX_INVALID_HANDLE;
+
+        // v0.26.0: the instanced twin (shares fsUi_), its quad and its table.
+        bgfx::ShaderHandle       vsUiInst_ = BGFX_INVALID_HANDLE;
+        bgfx::ProgramHandle      progUiInst_ = BGFX_INVALID_HANDLE;
+        bgfx::VertexLayout       quadLayout_{};
+        bgfx::VertexBufferHandle quad_ = BGFX_INVALID_HANDLE;
+        bgfx::IndexBufferHandle  quadIndices_ = BGFX_INVALID_HANDLE;
+        bgfx::UniformHandle      uUnorm8_ = BGFX_INVALID_HANDLE;
 
         bool fontBaked_ = false;                     // FontService's atlas was baked when the texture was made
 

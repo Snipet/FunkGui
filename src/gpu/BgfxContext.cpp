@@ -18,12 +18,15 @@
 #if defined(__APPLE__)
   #include <funkgui/shaders/vs_ui.mtl.h>
   #include <funkgui/shaders/fs_ui.mtl.h>
+  #include <funkgui/shaders/vs_ui_inst.mtl.h>
 #elif defined(_WIN32)
   #include <funkgui/shaders/vs_ui.dx11.h>
   #include <funkgui/shaders/fs_ui.dx11.h>
+  #include <funkgui/shaders/vs_ui_inst.dx11.h>
 #else
   #include <funkgui/shaders/vs_ui.spv.h>
   #include <funkgui/shaders/fs_ui.spv.h>
+  #include <funkgui/shaders/vs_ui_inst.spv.h>
 #endif
 
 namespace funkgui
@@ -36,23 +39,35 @@ namespace funkgui
             std::size_t    vsBytes;
             const uint8_t* fs;
             std::size_t    fsBytes;
+            const uint8_t* vsInst;                   // v0.26.0: shaders/vs_ui_inst.sc, linked with fs
+            std::size_t    vsInstBytes;
         };
 
 #if defined(__APPLE__)
         constexpr bgfx::RendererType::Enum kRenderer = bgfx::RendererType::Metal;
-        constexpr ShaderPair kShaders{ vs_ui_mtl, sizeof vs_ui_mtl, fs_ui_mtl, sizeof fs_ui_mtl };
+        constexpr ShaderPair kShaders{ vs_ui_mtl, sizeof vs_ui_mtl, fs_ui_mtl, sizeof fs_ui_mtl,
+                                       vs_ui_inst_mtl, sizeof vs_ui_inst_mtl };
 #elif defined(_WIN32)
         // Direct3D 11 (v0.24.0): every Windows 10 and 11 has it, where a Vulkan driver is not a given (a VM, an older
         // GPU, a remote session). Its shaders are compiled on a Windows host only (shaderc needs d3dcompiler there).
         constexpr bgfx::RendererType::Enum kRenderer = bgfx::RendererType::Direct3D11;
-        constexpr ShaderPair kShaders{ vs_ui_dx11, sizeof vs_ui_dx11, fs_ui_dx11, sizeof fs_ui_dx11 };
+        constexpr ShaderPair kShaders{ vs_ui_dx11, sizeof vs_ui_dx11, fs_ui_dx11, sizeof fs_ui_dx11,
+                                       vs_ui_inst_dx11, sizeof vs_ui_inst_dx11 };
 #else
         // Vulkan only. bgfx's OpenGL path on Linux (EGL) aborts the process on any initialisation failure
         // (BGFX_FATAL: no EGL, no config, no surface, no context), which in a host takes the whole session down; its
         // Vulkan path fails softly, so a machine without Vulkan gets EditorHost's fallback screen and nothing worse.
         constexpr bgfx::RendererType::Enum kRenderer = bgfx::RendererType::Vulkan;
-        constexpr ShaderPair kShaders{ vs_ui_spv, sizeof vs_ui_spv, fs_ui_spv, sizeof fs_ui_spv };
+        constexpr ShaderPair kShaders{ vs_ui_spv, sizeof vs_ui_spv, fs_ui_spv, sizeof fs_ui_spv,
+                                       vs_ui_inst_spv, sizeof vs_ui_inst_spv };
 #endif
+
+        // v0.26.0: the unit quad every instance draws (BgfxContext.h): its corners a, b, c, d, and the triangles a, b, c
+        // and a, c, d of expand(). Four vertices with indices rather than six: the vertex shader runs four times per
+        // primitive instead of six (on Apple silicon, the instanced frame's GPU time is then the vertex frame's).
+        constexpr float kQuad[8] = { 0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f };
+        constexpr uint16_t kQuadIndices[6] = { 0, 1, 2, 0, 2, 3 };
+        constexpr uint16_t kUnorm8Vec4s = 64;        // the 256 values of canvas/Expand.h unorm8Values, four a vec4
     }
 
     BgfxContext& BgfxContext::get()
@@ -171,6 +186,20 @@ namespace funkgui
         uViewSize_ = bgfx::createUniform("u_viewSize", bgfx::UniformType::Vec4);
         sTexColor_ = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
 
+        // v0.26.0: the instanced twin (the header). Optional: without it BgfxSink draws primitives as vertices, so a
+        // bgfx without instancing, or one that refuses the program, is never a failed start.
+        const bgfx::Caps* caps = bgfx::getCaps();
+        if (caps != nullptr && (caps->supported & BGFX_CAPS_INSTANCING) != 0 && bgfx::isValid(fsUi_))
+        {
+            vsUiInst_ = shader(kShaders.vsInst, kShaders.vsInstBytes);
+            if (bgfx::isValid(vsUiInst_))
+                progUiInst_ = bgfx::createProgram(vsUiInst_, fsUi_, false);
+            quadLayout_.begin().add(bgfx::Attrib::Position, 2, bgfx::AttribType::Float).end();
+            quad_ = bgfx::createVertexBuffer(bgfx::makeRef(kQuad, sizeof kQuad), quadLayout_);
+            quadIndices_ = bgfx::createIndexBuffer(bgfx::makeRef(kQuadIndices, sizeof kQuadIndices));
+            uUnorm8_ = bgfx::createUniform("u_unorm8", bgfx::UniformType::Vec4, kUnorm8Vec4s);
+        }
+
         // The atlas is FontService's CPU bake (02 §3.4), baked on first use
         // from the bundled face: the recorder laid this frame's text out
         // against exactly these pixels, headless or live. HR baked a private
@@ -218,6 +247,11 @@ namespace funkgui
         // v0.20.0: the image program and the picture textures likewise (src/gpu/ImageGpu.h); the pictures stay in the
         // registry and are uploaded again at their first draw after the next initialisation.
         images::gpu::releaseGpu();
+        drop(progUiInst_);                           // v0.26.0, before the fragment shader it shares
+        drop(vsUiInst_);
+        drop(quad_);
+        drop(quadIndices_);
+        drop(uUnorm8_);
         drop(progUi_);
         drop(fsUi_);
         drop(vsUi_);

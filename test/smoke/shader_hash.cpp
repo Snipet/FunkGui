@@ -15,6 +15,9 @@
 //
 // v0.20.0 adds fs_image (shaders/fs_image.sc with shaders/varying_custom.def.sc: the fragment half of the image
 // program, Canvas::image) in both profiles, as shader.fs_image.<ext>.*; fg.image.draw checks what it draws.
+//
+// v0.26.0 adds vs_ui_inst (shaders/vs_ui_inst.sc with shaders/varying_inst.def.sc: the UI program's instanced vertex
+// shader, gpu/BgfxContext.h) in both profiles, as shader.vs_ui_inst.<ext>.*; fg.gpu.instancing checks what it draws.
 
 #include <cstddef>
 #include <cstdint>
@@ -31,6 +34,8 @@
 #include <funkgui/shaders/vs_custom.spv.h>
 #include <funkgui/shaders/vs_ui.mtl.h>
 #include <funkgui/shaders/vs_ui.spv.h>
+#include <funkgui/shaders/vs_ui_inst.mtl.h>
+#include <funkgui/shaders/vs_ui_inst.spv.h>
 #include <funkgui/test/Harness.h>
 
 namespace T = funkgui::test;
@@ -78,5 +83,7 @@ int main(int argc, char** argv)
     one(P, "vs_custom", "spv", 'V', vs_custom_spv, sizeof vs_custom_spv);
     one(P, "fs_image", "mtl", 'F', fs_image_mtl, sizeof fs_image_mtl);
     one(P, "fs_image", "spv", 'F', fs_image_spv, sizeof fs_image_spv);
+    one(P, "vs_ui_inst", "mtl", 'V', vs_ui_inst_mtl, sizeof vs_ui_inst_mtl);
+    one(P, "vs_ui_inst", "spv", 'V', vs_ui_inst_spv, sizeof vs_ui_inst_spv);
     return P.finish();
 }
