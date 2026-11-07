@@ -120,9 +120,11 @@ int main(int argc, char** argv)
             nearest = nearest && std::bit_cast<uint32_t>(t[c]) == std::bit_cast<uint32_t>(want);
             // And the nearest float to c / 255 in double: the division above rounded once.
             const double exact = static_cast<double>(c) / 255.0;
-            const float lo = std::nextafter(t[c], 0.0f), hi = std::nextafter(t[c], 2.0f);
-            nearest = nearest && std::fabs(static_cast<double>(t[c]) - exact) <= std::fabs(static_cast<double>(lo) - exact)
-                      && std::fabs(static_cast<double>(t[c]) - exact) <= std::fabs(static_cast<double>(hi) - exact);
+            const double got = static_cast<double>(t[c]);
+            const double lo = static_cast<double>(std::nextafter(t[c], 0.0f));
+            const double hi = static_cast<double>(std::nextafter(t[c], 2.0f));
+            nearest = nearest && std::fabs(got - exact) <= std::fabs(lo - exact)
+                      && std::fabs(got - exact) <= std::fabs(hi - exact);
             rising = rising && (c == 0 || t[c] > t[c - 1]);
         }
         P.eq("unorm8.nearest", nearest, 1);

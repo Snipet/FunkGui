@@ -114,7 +114,8 @@ namespace
             bgfx::touch(kBlitView);
             bgfx::blit(kBlitView, readback, 0, 0, colour);
             const uint32_t ready = bgfx::readTexture(readback, pixels.data());
-            uint32_t now = bgfx::frame();
+            bgfx::frame();
+            uint32_t now = bgfx::frame();                // bgfx's stats are the frame before the last one run
             const int draws = static_cast<int>(bgfx::getStats()->numDraw);
             for (int i = 0; i < 16 && now < ready; ++i)
                 now = bgfx::frame();
@@ -212,9 +213,10 @@ namespace
                && (caps->supported & BGFX_CAPS_TEXTURE_READ_BACK) != 0;
     }
 
-    // Both paths over one list at one size: the rows above, under key.
+    // Both paths over one list at one size: the rows above, under key. drawn: at least a twentieth of the pixels are
+    // not the clear colour (a scene's frame), or at least one (a dump: a gallery state may draw little).
     void compare(T::Probe& P, BgfxSink& sink, const PrimList& list, int physW, int physH, const std::string& key,
-                 const char* pngName = nullptr)
+                 const char* pngName = nullptr, bool dump = false)
     {
         Target bgra, f32;
         const bool haveF32 = floatTargets() && f32.make(physW, physH, bgfx::TextureFormat::RGBA32F);
@@ -227,11 +229,14 @@ namespace
         P.eq(key + ".read", ref.read && inst.read, 1);
         P.eq(key + ".geometry", ref.geometry == BgfxSink::Geometry::vertices
                                     && inst.geometry == BgfxSink::Geometry::instances, 1);
-        P.eq(key + ".draws", ref.draws == inst.draws && ref.bgfxDraws == inst.bgfxDraws && inst.draws > 0, 1);
+        if (!P.eq(key + ".draws", ref.draws == inst.draws && ref.bgfxDraws == inst.bgfxDraws && inst.draws > 0, 1))
+            std::printf("INFO     %s: draw calls %d / %d, bgfx %d / %d (vertices / instances)\n", key.c_str(), ref.draws,
+                        inst.draws, ref.bgfxDraws, inst.bgfxDraws);
         P.eq(key + ".vertices", ref.vertices == inst.vertices && inst.vertices == 6u * (prims + quads), 1);
         P.eq(key + ".bytes", ref.bytes == 384u * (prims + quads) && inst.bytes == 80u * prims + 384u * quads, 1);
         bgra.pixels = inst.bgra;
-        P.eq(key + ".drawn", drawnPixels(bgra, list.info.clear) > static_cast<int64_t>(physW) * physH / 20, 1);
+        P.eq(key + ".drawn", drawnPixels(bgra, list.info.clear) > (dump ? 0 : static_cast<int64_t>(physW) * physH / 20),
+             1);
         P.eq(key + ".bgra8_identical", differing(bgra, ref.bgra, key + ".bgra8"), 0);
         if (haveF32)
         {
@@ -246,7 +251,7 @@ namespace
                 painted += (rgba[0] >= 0.0f && rgba[0] <= 1.0f && rgba[3] > 0.0f && rgba[0] + rgba[1] + rgba[2] > 0.0f)
                                ? 1 : 0;
             }
-            P.eq(key + ".float_drawn", painted > static_cast<int64_t>(physW) * physH / 2, 1);
+            P.eq(key + ".float_drawn", painted > (dump ? 0 : static_cast<int64_t>(physW) * physH / 2), 1);
         }
         std::printf("INFO     %s: %u primitives, %d draw calls, %u bytes as instances, %u as vertices\n", key.c_str(),
                     prims, inst.draws, inst.bytes, ref.bytes);
@@ -318,7 +323,8 @@ namespace
                     s.wall.push_back(us(w1 - w0));
                     s.bytes = sink.lastUploadBytes();
                     const bgfx::Stats* st = bgfx::getStats();
-                    if (st != nullptr && st->gpuTimerFreq > 0 && st->gpuTimeEnd > st->gpuTimeBegin)
+                    // bgfx reports a frame some frames after it ran: the first frames of a block are the other path's.
+                    if (i >= 4 && st != nullptr && st->gpuTimerFreq > 0 && st->gpuTimeEnd > st->gpuTimeBegin)
                         s.gpu.push_back(static_cast<double>(st->gpuTimeEnd - st->gpuTimeBegin) * 1e6
                                         / static_cast<double>(st->gpuTimerFreq));
                 }
@@ -441,10 +447,12 @@ int main(int argc, char** argv)
             canvas.begin(S::frame(sc.dpi));
             scene.record(canvas);
             const PrimList& list = canvas.end();
-            const int pw = static_cast<int>(std::lround(S::kW * sc.dpi)), ph = static_cast<int>(std::lround(S::kH * sc.dpi));
-            const std::string key = std::string(scene.name) + "." + sc.name;
-            const std::string png = "gpu-instancing-" + std::string(scene.name) + ".png";
-            const bool keep = sc.dpi == 2.0f && (std::string(scene.name) == "kinds" || std::string(scene.name) == "stress");
+            const int pw = static_cast<int>(std::lround(S::kW * sc.dpi));
+            const int ph = static_cast<int>(std::lround(S::kH * sc.dpi));
+            const std::string name = scene.name;
+            const std::string key = name + "." + sc.name;
+            const std::string png = "gpu-instancing-" + name + ".png";
+            const bool keep = sc.dpi == 2.0f && (name == "kinds" || name == "stress");
             compare(P, sink, list, pw, ph, key, keep ? png.c_str() : nullptr);
         }
 
@@ -496,11 +504,17 @@ int main(int argc, char** argv)
         bgra.drop();
     }
 
-    // The measurement of the stress frame (INFO lines only).
+    // The measurement of the stress frame, and of 5,000 primitives a device px or two across, whose pixels cost
+    // next to nothing, so that the time per primitive shows (INFO lines only).
     {
         canvas.begin(S::frame(2.0f));
         S::stress(canvas);
         measure(sink, canvas.end(), S::kW * 2, S::kH * 2, "stress.dpi2", frames);
+        canvas.begin(S::frame(2.0f));
+        S::Lcg g;
+        for (int i = 0; i < S::kStressPrims; ++i)
+            canvas.rrect(g.in(0.0f, S::kW), g.in(0.0f, S::kH), 0.5f, 0.5f, 0.0f, funkgui::Col{ g.byte(), 90, 200, 255 });
+        measure(sink, canvas.end(), S::kW * 2, S::kH * 2, "specks.dpi2", frames);
     }
 
     // Hand runs: every dump of a directory, compared and measured.
@@ -522,7 +536,7 @@ int main(int argc, char** argv)
                 continue;
             const int pw = static_cast<int>(std::lround(static_cast<float>(l.info.logicalW) * l.info.dpi));
             const int ph = static_cast<int>(std::lround(static_cast<float>(l.info.logicalH) * l.info.dpi));
-            compare(P, sink, l, pw, ph, key);
+            compare(P, sink, l, pw, ph, key, nullptr, true);
             measure(sink, l, pw, ph, key, frames);
         }
     }

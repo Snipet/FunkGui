@@ -257,7 +257,7 @@ namespace funkgui
     }
 }
 
-// ---- v0.26.0: primitives as instances (canvas/Expand.h) --------------------------------------------------------------
+// ---- v0.26.0: primitives as instances (canvas/Expand.h) -------------------------------------------------------------
 // The record BgfxSink uploads per primitive and, in instanceCorner(), shaders/vs_ui_inst.sc's own steps on the CPU. The
 // three packed fields are integers below 2^24, so every float below is exact: a product by a power of two, a floor, and
 // a difference of two such integers. The shader takes the same steps, so whatever a compiler reorders (fast math
@@ -301,7 +301,8 @@ namespace funkgui
             return { lo - mid * 256.0f, mid, hi };
         }
 
-        uint32_t byteOf(float b) noexcept { return static_cast<uint32_t>(b) & 0xffu; }
+        // A byte unpacked by bytes3() (0 for anything else: a record that instance() did not make).
+        uint32_t byteOf(float b) noexcept { return b >= 0.0f && b < 256.0f ? static_cast<uint32_t>(b) : 0u; }
 
         // The corners of expand()'s order a, b, c, a, c, d on the unit quad (BgfxSink's quad vertex buffer).
         constexpr float kCornerX[kVerticesPerPrim] = { 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 0.0f };

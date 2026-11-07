@@ -35,6 +35,9 @@ namespace funkgui
         }
 
         constexpr uint64_t kState = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA;
+
+        // v0.26.0: u_unorm8 holds canvas/Expand.h unorm8Values' 256 floats, four to a vec4 (BgfxContext's uniform).
+        constexpr uint16_t kUnorm8Vec4s = 256 / 4;
     }
 
     BgfxSink::Result BgfxSink::submit(const PrimList& list, bgfx::ViewId view, bgfx::FrameBufferHandle fb, int physW,
@@ -129,7 +132,7 @@ namespace funkgui
             {
                 // v0.26.0: the same draw call with one instance per primitive of the run.
                 bgfx::setUniform(ctx.uViewSize(), viewSize);
-                bgfx::setUniform(ctx.uUnorm8(), unorm8, 64);
+                bgfx::setUniform(ctx.uUnorm8(), unorm8, kUnorm8Vec4s);
                 bgfx::setTexture(0, ctx.sTexColor(), ctx.fontTex());
                 bgfx::setVertexBuffer(0, ctx.quad());
                 bgfx::setIndexBuffer(ctx.quadIndices());

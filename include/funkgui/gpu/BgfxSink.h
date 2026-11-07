@@ -30,13 +30,13 @@
 //
 // v0.26.0, primitives as instances: while BgfxContext::instancing() and its Config::instancing are true, a run of
 // primitives is one instanced draw call of BgfxContext::progUiInstanced() (shaders/vs_ui_inst.sc with fs_ui.sc) over
-// the context's unit quad and its indices, one 80-byte record per primitive (canvas/Expand.h Inst, funkgui::instances) in one transient
-// instance data buffer, with u_unorm8 set to canvas/Expand.h unorm8Values; the shader and image draws keep their six
-// vertices each in the transient vertex buffer. The draw calls, their order, state, textures and scissors are the ones
-// above, and the vertex shader makes the very vertices expand() writes, so the pixels are the same (fg.gpu.instancing).
-// A frame drawn otherwise: as vertices, exactly as before v0.26.0, when instancing is off or unavailable, or when one
-// of its primitives is not instanceable (canvas/Expand.h: a kind that is not an integer 0..255, which no Canvas
-// records). lastGeometry() says which, lastUploadBytes() what it copied.
+// the context's unit quad and its indices, one 80-byte record per primitive (canvas/Expand.h Inst,
+// funkgui::instances) in one transient instance data buffer, with u_unorm8 set to canvas/Expand.h unorm8Values; the
+// shader and image draws keep their six vertices each in the transient vertex buffer. The draw calls, their order,
+// state, textures and scissors are the ones above, and the vertex shader makes the very vertices expand() writes, so
+// the pixels are the same (fg.gpu.instancing). A frame is drawn otherwise, as vertices exactly as before v0.26.0, when
+// instancing is off or unavailable, or when one of its primitives is not instanceable (canvas/Expand.h: a kind that
+// is not an integer 0..255, which no Canvas records). lastGeometry() says which, lastUploadBytes() what it copied.
 //
 // The transient buffer is shared by every editor in the process for one bgfx::frame(). When this frame does not fit,
 // nothing is drawn and submit() returns droppedOverflow (HR dropped the frame silently, SdfCanvas.cpp:322-329); the

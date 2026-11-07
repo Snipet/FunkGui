@@ -84,7 +84,8 @@ namespace instance_scenes
         c.dotted(260.0f, 280.0f, 120.0f, 4.0f, ink);
         c.arc({ 340.0f, 215.0f }, 30.0f, -2.4f, 0.8f, 3.0f, warm);
         {
-            const funkgui::Point p[4] = { { 20.0f, 290.0f }, { 60.0f, 240.0f }, { 110.0f, 300.0f }, { 140.0f, 250.0f } };
+            const funkgui::Point p[4] = { { 20.0f, 290.0f }, { 60.0f, 240.0f }, { 110.0f, 300.0f },
+                                          { 140.0f, 250.0f } };
             c.cubic(p, 2.0f, ink);
         }
         {

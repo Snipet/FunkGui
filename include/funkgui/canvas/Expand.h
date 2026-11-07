@@ -117,7 +117,7 @@ namespace funkgui
     };
     ImageSampling imageSampling(const ImageDraw&, int level, int picW, int picH) noexcept;
 
-    // ---- v0.26.0 additions: primitives as instances (BgfxSink) -------------------------------------------------------
+    // ---- v0.26.0 additions: primitives as instances (BgfxSink) ------------------------------------------------------
     // BgfxSink draws a frame's primitives as instances of one quad: each primitive is one 80-byte record (five vec4 of
     // bgfx instance data, i_data0..i_data4), and the instanced UI vertex shader (shaders/vs_ui_inst.sc) makes from it
     // the vertices expand() writes, so 80 bytes per primitive reach the GPU where expand() writes 384. The vertices are
