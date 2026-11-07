@@ -3,6 +3,40 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.25.1 — 2026-11-06 · PATCH: the last frame drawn is shown at once, and input frames come at full rate
+
+Golden impact: **none** (no golden file changed; nothing records, draws, dumps or hashes differently: bgfx presents
+the same frames, earlier, and `FrameInfo`'s rate still reports each editor's own request, so a capture's frames are as
+before). New test `fg.gpu.flip` (28 spec rows on headless Metal, of which v0.25.0's flags fail 8); new and changed rows
+in `fg.framepump.cadence` (114 rows, was 77; the v0.25.0 rows that expected a nudged editor to go calm at once now
+expect the hold), `fg.editorhost.cadence` (82, was 64) and `fg.editorhost.skip` (78, was 77). GPU sources only
+(`src/gpu/`, `include/funkgui/gpu/` comments) and `fg.framepump.cadence`, which every preset builds: `agent-gui`
+89/89, `agent` 71/71 and `nojuce` 59/59 on macOS arm64, and the 9 live tests; `web` not run (of this it builds only
+`fg.framepump.cadence`, plain C++, and `FunkGui::web` uses none of it). FCompressor not run against it. Linux and Windows: compiled and run on neither here; the change there is the
+same bgfx flag and plain C++.
+
+- **Fix: the last frame drawn was not on screen.** bgfx runs single-threaded here and, without
+  `BGFX_RESET_FLIP_AFTER_RENDER`, presents each frame at the start of the next `bgfx::frame()`. Since v0.25.0 the
+  FramePump runs no `bgfx::frame()` while every editor leaves its picture up, so the last frame drawn stayed rendered
+  but unpresented until something drew again: a hover highlight a step behind the pointer, a view switch shown only at
+  the next pointer move or readout change. `BgfxContext` now gives bgfx `BGFX_RESET_FLIP_AFTER_RENDER` (still no
+  vsync) at `bgfx::init` and at every `bgfx::reset` (a reset replaces the flags; one constant,
+  `src/gpu/BgfxReset.h`), so each frame is presented before the `bgfx::frame()` that renders it returns. The flag moves
+  only bgfx's own call to the renderer's present: Metal commits the command buffer that presents the drawables
+  without waiting, Vulkan queues its swapchains' presents, Direct3D 11 presents with no sync interval; none waits for
+  the display. GPU pictures count their read in frames, not presents, and run the same frames as before.
+- **Fix: a button's release and the pointer leaving did not nudge.** `EditorHost::mouseUp` and `mouseExit` now nudge
+  their editor to full rate as the other input events do, so a calm editor draws them at the next tick rather than at
+  its own twelfth of a second.
+- **Input frames at full rate:** a nudge (input, a resize, `HostServices::nudgeFullRate()`) now holds its editor at
+  full rate for a quarter of a second of the pump's clock from the frame that takes it (`ClientCadence::kHoldSec`):
+  the editor runs at every tick and the pump stays at its full rate meanwhile, and each nudge starts the hold again.
+  Before, a hover (which changes at once and animates nothing) asked for full rate only until the frame that drew
+  it, so the display link fell back to the idle rate after each input frame and the next pointer event waited for an
+  idle tick. Every other cadence rule is unchanged; `FramePump::wantedFullRate(c)` and `FrameInfo`'s rate report the
+  editor's request, not the hold.
+- **No API change.** No declaration changed; `FramePump.h` and `EditorHost.h` changed in comments only.
+
 ## v0.25.0 — 2026-11-06 · MINOR: idle editors draw nothing, textures for custom shaders, menus in the canvas's style
 
 Golden impact: **none** (no golden file changed; nothing records, draws, dumps or hashes differently for a Panel that
