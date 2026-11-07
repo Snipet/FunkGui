@@ -277,13 +277,20 @@ namespace funkgui
         }
         inTick_ = false;
 
+        // A client's request, or the hold after its last nudge (v0.25.1,
+        // ClientCadence::kHoldSec): the clock stays at full rate between the
+        // events of an interaction, so the frame that answers the next event
+        // comes at the next display frame, not at the next idle tick.
         bool fullRate = false;
         for (const auto& s : clients_)
-            fullRate = fullRate || s.cadence->fullRate();
+            fullRate = fullRate || s.cadence->fullRate() || s.cadence->held();
 
         // Exactly one present per frame for every editor in the process.
         // Skipped entirely when nothing drew, so a minimised host window, or
         // every editor leaving its last picture up (0.25.0), costs nothing.
+        // A frame is presented before bgfx::frame() returns (v0.25.1,
+        // BgfxReset.h), so the last one drawn is on screen however long the
+        // next waits; before, bgfx presented it at the start of the next.
         // bgfx presents only the windows whose views drew this frame (Metal
         // takes a drawable, Direct3D 11 and Vulkan flag a present, only for a
         // framebuffer a submitted view renders into), so an editor that

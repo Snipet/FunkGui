@@ -1,5 +1,6 @@
 #include <funkgui/gpu/BgfxContext.h>
 
+#include "BgfxReset.h"
 #include "ImageGpu.h"
 #include "ShaderLibraryDetail.h"
 
@@ -120,9 +121,11 @@ namespace funkgui
 #endif
         init.resolution.width   = static_cast<uint32_t>(physW);
         init.resolution.height  = static_cast<uint32_t>(physH);
-        init.resolution.reset   = BGFX_RESET_NONE;   // no vsync: frame() must
-                                                     // never block the message
-                                                     // thread; a timer paces us
+        // No vsync: frame() must never block the message thread, the pump's
+        // clock paces us. Each frame presented by the frame() that renders it,
+        // not at the next one (v0.25.1, BgfxReset.h): the pump may run no next
+        // one for a while.
+        init.resolution.reset   = detail::kBgfxResetFlags;
         // One transient vertex buffer for every editor in the process per
         // frame (02 §4.5): 32 MiB by default against bgfx's compiled 6 MiB, so
         // a crossfading frame in each of 12 open editors still fits.
@@ -493,8 +496,9 @@ namespace funkgui
             if (w.primary)
             {
                 primaryW_ = physW; primaryH_ = physH;
+                // The init's flags again (v0.25.1): a reset replaces them all.
                 bgfx::reset(static_cast<uint32_t>(physW),
-                            static_cast<uint32_t>(physH), BGFX_RESET_NONE);
+                            static_cast<uint32_t>(physH), detail::kBgfxResetFlags);
             }
             else
             {

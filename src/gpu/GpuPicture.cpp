@@ -39,6 +39,10 @@
 //   FunkGui's GPU tests make too; a hold that something else released is noticed (owns(nullptr)) and forgotten.
 // - Linux: gpuPicturesSupported() is false and renderGpuPicture() returns unsupported before touching bgfx or JUCE; the
 //   code below compiles there all the same (it is plain bgfx and JUCE), so it cannot rot unseen.
+// - v0.25.1: bgfx presents each frame at the end of the bgfx::frame() that renders it (src/gpu/BgfxReset.h), not at the
+//   start of the next. The read is counted in frames, not presents (bgfx::readTexture names the frame it lands in, and
+//   bgfx::frame() returns each frame's number), and a headless bgfx has nothing to present, so the picture runs the
+//   same frames as before; with windows open, a frame of the picture's presents what editors drew into it, at its end.
 
 namespace funkgui
 {

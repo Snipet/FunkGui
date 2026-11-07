@@ -12,8 +12,16 @@
 //   calm120.*   at 120 Hz: every tenth tick; calm72.*: at 72 Hz, every sixth; timer16.*: a 16 ms timer, every fifth
 //   jitter.*    60 Hz ticks each up to 3 ms early or late: the tick nearest a twelfth of a second, about 12 Hz
 //   full.*      an editor that asks for full rate runs at every tick; calm again, it waits for its twelfth of a second
-//   nudge.*     a nudge runs it at the next tick and asks for full rate until that frame's own request; a nudge
-//               during its own frame holds for one more tick
+//   nudge.*     a nudge runs it at the next tick and asks for full rate until that frame's own request; then the
+//               hold runs it (hold.*), then its own cadence; two nudges are one; a nudge during its own frame holds
+//               for one more tick, and the hold follows
+//   hold.*      (v0.25.1) a nudge holds the editor at full rate for kHoldSec (0.25 s) of the pump's clock from the
+//               frame that takes it: it runs at every tick whose dts since that frame sum to less than a quarter of a
+//               second (at 60 Hz the nudged frame and the 14 ticks after it; 120 Hz: 29; 72 Hz: 17; a 16 ms timer: 15),
+//               then waits for its own twelfth of a second; held() says so, fullRate() (the request) does not; from
+//               the frame after an idle tick too; each nudge starts it again (nudges every fifth tick: every tick
+//               runs, and the hold ends a quarter of a second after the last); a nudge during its own frame holds
+//               from that frame; ticks a twelfth of a second apart end it after the same quarter of a second
 //   request.*   fullRate() during a frame: the request before it (a nudge between frames included), or a nudge since
 //   dt.*        clamped to 1 ms .. 100 ms
 //   fps.*       0 until its frames span a second; then its own rate
@@ -65,6 +73,23 @@ namespace
 
     bool never(int) { return false; }
 
+    // How many runs, from the first, are at consecutive ticks starting at tick 0.
+    int leadingRun(const Runs& r)
+    {
+        int n = 0;
+        while (n < static_cast<int>(r.ticks.size()) && r.ticks[static_cast<std::size_t>(n)] == n)
+            ++n;
+        return n;
+    }
+
+    // The gap between the run after the leading run and the leading run's last; -1 when there is none.
+    int gapAfter(const Runs& r, int lead)
+    {
+        if (lead < 1 || lead >= static_cast<int>(r.ticks.size()))
+            return -1;
+        return r.ticks[static_cast<std::size_t>(lead)] - r.ticks[static_cast<std::size_t>(lead - 1)];
+    }
+
     // Gaps between consecutive runs other than `gap`.
     int64_t otherGaps(const Runs& r, int gap)
     {
@@ -107,6 +132,40 @@ namespace
         P.le(prefix + ".dt_error", maxDtError(r, gap * pumpDt(tickSec)), 1e-6);
         P.near(prefix + ".fps", c.fps(), 1.0 / (gap * tickSec), 0.05);
         P.eq(prefix + ".calm", c.fullRate(), 0);
+    }
+
+    // v0.25.1: a calm editor nudged between frames, then ticks `tickSec` apart at full rate: the nudged frame at the
+    // first tick and `held` ticks after it (the ticks less than kHoldSec after the nudged frame), then its own cadence,
+    // `gap` ticks after its last held frame. The hold is held() and never fullRate().
+    void holdRows(T::Probe& P, const std::string& prefix, double tickSec, int held, int gap)
+    {
+        double now = 0.0;
+        ClientCadence c = calmCadence(now);
+        c.nudge();
+        const double dt = pumpDt(tickSec);
+        Runs r;
+        int lastHeld = -1, requests = 0;
+        for (int i = 0; i < 3 * (held + gap); ++i)
+        {
+            now += dt;
+            if (c.tick(dt, false))
+            {
+                r.ticks.push_back(i);
+                c.begin(now);
+                c.end(false);
+            }
+            lastHeld = c.held() ? i : lastHeld;
+            requests += i > 0 && c.fullRate() ? 1 : 0;
+        }
+        const int lead = leadingRun(r);
+        P.eq(prefix + ".held_frames", lead, held + 1);
+        P.eq(prefix + ".last_held_tick", lastHeld, held);
+        // The rule, not only the count: the last held frame is less than kHoldSec after the nudged one, the next tick
+        // would have been kHoldSec or more.
+        P.eq(prefix + ".span_under_hold", held * dt < ClientCadence::kHoldSec ? 1 : 0, 1);
+        P.ge(prefix + ".next_tick_past_hold", (held + 1) * dt, ClientCadence::kHoldSec);
+        P.eq(prefix + ".then_calm", gapAfter(r, lead), gap);
+        P.eq(prefix + ".not_a_request", requests, 0);
     }
 }
 
@@ -200,16 +259,28 @@ int main(int argc, char** argv)
         P.near("nudge.dt_since_last_frame", c.begin(now), 2.0 * t60, 1e-6);
         c.end(false);
         P.eq("nudge.ends_with_own_request", c.fullRate(), 0);
-        const Runs after = drive(c, 10, [&](int) { return t60; }, false, never, now);
-        P.eq("nudge.then_calm", after.ticks.empty() ? -1 : after.ticks.front(), 4);
-
-        c.nudge();
-        c.nudge();
-        const Runs twice = drive(c, 5, [&](int) { return t60; }, false, never, now);
-        P.eq("nudge.twice_runs_once", static_cast<int64_t>(twice.ticks.size()), 1);
-        P.eq("nudge.twice_at_next_tick", twice.ticks.empty() ? -1 : twice.ticks.front(), 0);
-
+        P.eq("nudge.then_held", c.held(), 1);                     // v0.25.1 (hold.*)
+        const Runs after = drive(c, 40, [&](int) { return t60; }, false, never, now);
+        const int lead = leadingRun(after);
+        P.eq("nudge.held_ticks", lead, 14);                      // before 0.25.1: none, calm at once
+        P.eq("nudge.then_calm", gapAfter(after, lead), 5);
+    }
+    {
+        // Two nudges before a tick are one: the same frames as one nudge.
+        double nowOnce = 0.0, nowTwice = 0.0;
+        ClientCadence once = calmCadence(nowOnce), twice = calmCadence(nowTwice);
+        once.nudge();
+        twice.nudge();
+        twice.nudge();
+        const Runs r1 = drive(once, 40, [&](int) { return t60; }, false, never, nowOnce);
+        const Runs r2 = drive(twice, 40, [&](int) { return t60; }, false, never, nowTwice);
+        P.eq("nudge.twice_at_next_tick", r2.ticks.empty() ? -1 : r2.ticks.front(), 0);
+        P.eq("nudge.twice_as_once", r1.ticks == r2.ticks ? 1 : 0, 1);
+    }
+    {
         // A nudge during its own frame (a Panel's tick asking for a frame soon) holds for one more tick.
+        double now = 0.0;
+        ClientCadence c = calmCadence(now);
         do
             now += t60;
         while (!c.tick(t60, false));                 // its next own frame
@@ -224,7 +295,90 @@ int main(int argc, char** argv)
         c.end(false);
         P.eq("nudge.in_frame_then_calm", c.fullRate(), 0);
         now += t60;
-        P.eq("nudge.in_frame_then_waits", c.tick(t60, false), 0);
+        P.eq("nudge.in_frame_then_held", c.tick(t60, false), 1);  // v0.25.1: the hold; before, it waited
+    }
+
+    // ---- hold (v0.25.1) ---------------------------------------------------------------------------------------------
+    P.near("hold.seconds", ClientCadence::kHoldSec, 0.25, 0.0);
+    holdRows(P, "hold.60hz", 1.0 / 60.0, 14, 5);
+    holdRows(P, "hold.120hz", 1.0 / 120.0, 29, 10);
+    holdRows(P, "hold.72hz", 1.0 / 72.0, 17, 6);
+    holdRows(P, "hold.timer16", 0.016, 15, 5);
+    {
+        // The nudge reaches an idling pump: its next tick comes a twelfth of a second later (and runs every editor),
+        // then the ticks come at 60 Hz. The hold runs from the nudged frame: it and 14 ticks after it.
+        double now = 0.0;
+        ClientCadence c = calmCadence(now);
+        c.nudge();
+        now += pumpDt(1.0 / 12.0);
+        P.eq("hold.after_idle_tick_runs", c.tick(pumpDt(1.0 / 12.0), true), 1);
+        c.begin(now);
+        c.end(false);
+        const Runs r = drive(c, 40, [&](int) { return t60; }, false, never, now);
+        const int lead = leadingRun(r);
+        P.eq("hold.after_idle_tick_held", lead, 14);
+        P.eq("hold.after_idle_tick_then_calm", gapAfter(r, lead), 5);
+    }
+    {
+        // Nudged before every fifth tick for a second, as pointer moves at 12 Hz: it runs at every tick, held, and
+        // the hold ends a quarter of a second after the frame of the last nudge (tick 55): ticks 0 .. 69.
+        double now = 0.0;
+        ClientCadence c = calmCadence(now);
+        Runs r;
+        int heldTicks = 0;
+        for (int i = 0; i < 100; ++i)
+        {
+            if (i < 60 && i % 5 == 0)
+                c.nudge();
+            now += t60;
+            if (c.tick(t60, false))
+            {
+                r.ticks.push_back(i);
+                c.begin(now);
+                c.end(false);
+            }
+            heldTicks += c.held() ? 1 : 0;
+        }
+        const int lead = leadingRun(r);
+        P.eq("hold.refreshed_every_tick", lead, 70);
+        P.eq("hold.refreshed_held_ticks", heldTicks, 70);
+        P.eq("hold.refreshed_then_calm", gapAfter(r, lead), 5);
+    }
+    {
+        // A nudge during its own frame: the hold runs from that frame.
+        double now = 0.0;
+        ClientCadence c = calmCadence(now);
+        do
+            now += t60;
+        while (!c.tick(t60, false));
+        c.begin(now);
+        c.nudge();
+        c.end(false);
+        P.eq("hold.in_frame_held", c.held(), 1);
+        const Runs r = drive(c, 40, [&](int) { return t60; }, false, never, now);
+        const int lead = leadingRun(r);
+        P.eq("hold.in_frame_ticks", lead, 14);
+        P.eq("hold.in_frame_then_calm", gapAfter(r, lead), 5);
+    }
+    {
+        // Ticks a twelfth of a second apart (at full rate, the first after a rate change): the hold ends after the
+        // same quarter of a second, two ticks after the nudged frame.
+        double now = 0.0;
+        ClientCadence c = calmCadence(now);
+        c.nudge();
+        const double slow = pumpDt(1.0 / 12.0);
+        int heldTicks = 0;
+        for (int i = 0; i < 6; ++i)
+        {
+            now += slow;
+            if (c.tick(slow, false))
+            {
+                c.begin(now);
+                c.end(false);
+            }
+            heldTicks += c.held() ? 1 : 0;
+        }
+        P.eq("hold.slow_ticks_held", heldTicks, 3);              // the nudged frame's tick and the two after it
     }
 
     // ---- request ----------------------------------------------------------------------------------------------------

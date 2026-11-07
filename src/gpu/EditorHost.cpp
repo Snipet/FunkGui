@@ -36,7 +36,9 @@
 //   depend on when the capture ran). Panel::idle(nowSeconds()) runs from a 10 Hz timer in both cases.
 // - Input: every event nudges the pump to full rate and is followed by a cursor update; an unconsumed wheel event goes
 //   to the parent component (the host scrolls), an unconsumed key returns false (the host gets it). Under CANVAS_DUMP
-//   the editor takes no mouse input at all (HR captureMode_); UI_KEYS still replays through keyPressed().
+//   the editor takes no mouse input at all (HR captureMode_); UI_KEYS still replays through keyPressed(). (v0.25.1: a
+//   button's release and the pointer leaving nudge too; they did not, so a calm editor drew them at its own twelfth of
+//   a second.)
 // - Accessibility: the bridge is synced before the first tick (after UI_KEYS) and again after the first frame, then on
 //   every a11yRevision() change and at most every 100 ms for values. A11Y_DUMP is written after the first frame (02
 //   §5.1's table), so it holds the replayed keys' state once ticked and drawn (widgets refresh their cached views in
@@ -136,6 +138,13 @@
 //   frame, which for a calm editor is its own idle tick, up to a twelfth of a second later.
 // - Diagnostics::fps and FrameInfo's fps and rate are this editor's own (FramePump::measuredFps(this),
 //   wantedFullRate(this)); with one editor open they count the same frames and requests as the pump's did.
+//
+// v0.25.1 (a PATCH): bgfx presents each frame before bgfx::frame() returns (src/gpu/BgfxReset.h), so the frame an
+// editor draws last before it leaves its picture up is on screen; before, bgfx presented it only at the next frame any
+// editor drew, and with unchanged frames skipped that could be much later (a hover a step behind the pointer, a view
+// switch shown at the next pointer move). A nudge holds this editor at full rate for a quarter of a second
+// (src/gpu/ClientCadence.h "The hold"), so the frames of an interaction come at the display's rate; FrameInfo's rate
+// still reports this editor's own request.
 
 namespace funkgui
 {
@@ -839,6 +848,7 @@ namespace funkgui
 
     void EditorHost::mouseExit(const juce::MouseEvent&)
     {
+        nudgeFullRate();                             // v0.25.1: the hover it ends is drawn away at the next tick
         panel_->pointerExit();
         updateCursor();
     }
@@ -862,6 +872,7 @@ namespace funkgui
 
     void EditorHost::mouseUp(const juce::MouseEvent& e)
     {
+        nudgeFullRate();                             // v0.25.1: the release is drawn at the next tick
         dragScreen_ = e.getScreenPosition().toFloat();
         panel_->pointerUp(pointer(e));
         if (unbounded_)

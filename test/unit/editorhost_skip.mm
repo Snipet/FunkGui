@@ -16,12 +16,16 @@
 // CAMetalLayer (bgfx's, on the render view) counts the drawables bgfx takes from it, its class swapped for a counting
 // subclass with no state of its own (fg.gpu.picture.live's way). bgfx takes a drawable from a window's layer only for a
 // frame in which a view draws into that window, and presents every drawable it takes at that frame's end
-// (renderer_mtl.cpp), so a window whose layer gave none had nothing presented.
+// (renderer_mtl.cpp; since v0.25.1, src/gpu/BgfxReset.h: before, at the start of the next frame), so a window whose
+// layer gave none had nothing presented. The layer also counts the drawables Metal reports presented (a presented
+// handler on each, called on a Metal thread), so a row can tell that the last frame drawn reached the screen with no
+// frame after it.
 //   open.*      the first frame draws; its layer counted, reported visible
 //   idle.*      needsDraw() false: asked every frame, nothing recorded or submitted, and the pump runs no
 //               bgfx::frame() at all: nothing is drawn, no drawable taken
 //   change.*    needsDraw() true once with the same picture: recorded, found unchanged, not submitted; with a new
-//               colour: drawn, submitted and presented, then idle again
+//               colour: drawn, submitted and presented, then idle again; every drawable it took is presented,
+//               although no frame ran after it (v0.25.1: the last one waited for the next frame before)
 //   safety.*    needsDraw() true every frame, the same drawing: recorded every frame, found unchanged, never submitted
 //   theme.*     the theme preference changed (the Panel not dirty): drawn, then idle; and back
 //   resize.*    the window resized (the Panel not dirty): drawn at the new size
@@ -66,6 +70,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -76,6 +81,7 @@
 static constexpr int kCounted = 2;
 static void* gLayers[kCounted] = {};
 static int   gTaken[kCounted] = {};
+static std::atomic<int> gPresented[kCounted];      // v0.25.1: of those, the ones Metal presented (a Metal thread)
 
 @interface FgSkipCountingLayer : CAMetalLayer
 @end
@@ -86,7 +92,10 @@ static int   gTaken[kCounted] = {};
     id<CAMetalDrawable> drawable = [super nextDrawable];
     for (int i = 0; i < kCounted; ++i)
         if (drawable != nil && gLayers[i] == (void*) self)
+        {
             ++gTaken[i];
+            [drawable addPresentedHandler:^(id<MTLDrawable>) { gPresented[i].fetch_add(1); }];
+        }
     return drawable;
 }
 @end
@@ -247,11 +256,13 @@ namespace
             object_setClass(layer, [FgSkipCountingLayer class]);
             gLayers[i] = (void*) layer;
             gTaken[i] = 0;
+            gPresented[i].store(0);
             slot = i;
             return true;
         }
 
         int taken() const { return slot >= 0 ? gTaken[slot] : 0; }
+        int presented() const { return slot >= 0 ? gPresented[slot].load() : 0; }
     };
 
     void spin(double seconds)
@@ -263,6 +274,7 @@ namespace
     struct Snap
     {
         int draws = 0, asked = 0, taken = 0;          // taken: drawables bgfx took from the window's layer
+        int presented = 0;                            // of those, the ones Metal presented (v0.25.1)
         uint32_t frames = 0, skipped = 0, unchanged = 0;
         uint64_t pumpFrames = 0;
     };
@@ -273,6 +285,7 @@ namespace
         s.draws = w.panel->draws;
         s.asked = w.panel->asked;
         s.taken = w.taken();
+        s.presented = w.presented();
         const auto d = w.editor->diagnostics();
         s.frames = d.frames;
         s.skipped = d.skipped;
@@ -288,6 +301,7 @@ namespace
         d.draws = now.draws - before.draws;
         d.asked = now.asked - before.asked;
         d.taken = now.taken - before.taken;
+        d.presented = now.presented - before.presented;
         d.frames = now.frames - before.frames;
         d.skipped = now.skipped - before.skipped;
         d.unchanged = now.unchanged - before.unchanged;
@@ -389,6 +403,10 @@ int main(int argc, char** argv)
             P.eq("change.then_idle", after.draws, 0);
             P.eq("change.then_no_bgfx_frames", static_cast<int64_t>(after.pumpFrames), 0);
             P.eq("change.then_nothing_presented", after.taken, 0);
+            // v0.25.1: the change's frames all reached the screen, the last too, though no frame ran after it.
+            const Snap whole = since(a, s0);
+            std::printf("INFO     change: %d drawables taken, %d presented\n", whole.taken, whole.presented);
+            P.eq("change.every_drawable_presented", whole.presented, whole.taken);
         }
 
         // ---- safety --------------------------------------------------------------------------------------------------
