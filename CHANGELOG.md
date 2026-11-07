@@ -3,6 +3,58 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.26.0 — 2026-11-07 · MINOR: primitives drawn as instances
+
+Golden impact: **none** on existing rows (nothing records, dumps, fingerprints or draws differently: the instanced
+frame is the vertex frame pixel for pixel, and `vs_ui.sc`, `fs_ui.sc`, the WebGL2 text and `SoftRaster` are byte for
+byte unchanged); `fg.shader.hash` gains four rows pinning the new vertex shader (`shader.vs_ui_inst.{mtl,spv}.{hash,
+bytes}`). New tests: `fg.canvas.instance` (every preset, wasm32 too) and `fg.gpu.instancing` (headless Metal
+read-back; skipped without a Metal device); `fg.gallery.live`'s overflow case now runs with a 4 KiB transient buffer
+(8 KiB holds its frame as instances). On macOS arm64: `agent-gui` 91/91 (`fg.shader.hash`'s four new rows its only
+candidates), `agent` 72/72, `nojuce` 60/60 and `web` 60/60, no warnings, and the 9 live tests. FCompressor and Linux
+not run here. Windows: not compiled here (shaderc compiles Direct3D 11 on a Windows host only).
+
+- **Primitives as instances** (`BgfxSink`): each primitive is uploaded as one 80-byte record (`canvas/Expand.h`
+  `Inst`: five vec4 of bgfx instance data) instead of six 64-byte vertices (384 bytes), and a run of primitives is one
+  instanced draw call over a shared unit quad (four corners and the indices 0 1 2 0 2 3, `expand()`'s triangles). The
+  new vertex shader `shaders/vs_ui_inst.sc` makes from the record the very vertex `expand()` writes for each corner:
+  positions and local coordinates are picked, never computed; the two colours and the kind travel as three integers
+  below 2^24, unpacked by steps that are exact in binary floating point whatever a compiler reorders, and each colour
+  byte becomes its entry in the uniform table `u_unorm8` (`unorm8Values()`: c / 255 rounded to the nearest float, the
+  value the vertex fetch makes of a normalised Uint8); `vs_ui.sc`'s transform is written as it is there. `fs_ui.sc`
+  serves both vertex shaders unchanged. The draw calls, their order, state, textures and scissors are as before;
+  shader and image draws keep their six vertices each.
+- **The same pixels:** `fg.canvas.instance` proves, for every primitive of its frames (every kind and variant, every
+  colour byte in every channel of both colours, 5,000 seeded primitives, a frame split by image draws) at dpi 1, 1.5
+  and 2, that the shader's steps on the CPU (`instanceCorner()`) give `expand()`'s vertices byte for byte.
+  `fg.gpu.instancing` draws the same frames both ways on Metal and compares them byte for byte in BGRA8 and bit for
+  bit in RGBA32F, a frame that sees a local coordinate moved by one unit in the last place where an 8-bit frame rounds
+  it away; every colour byte goes through the table there (computing c / 255 in the shader instead differs). By hand,
+  every gallery state (252 frames: 19 sections, every state at dpi 1 and 2) is equal both ways too. Vulkan and
+  Direct3D 11 run the same shader, compiled by shaderc from the same source: SPIR-V on every host (pinned by
+  `fg.shader.hash`); Direct3D 11's bytecode on a Windows host only, as every FunkGui shader (here, bgfx's HLSL of it
+  passes clang's HLSL front end with nothing reported in the shader's own code). Their vertex fetch defines the
+  UNORM8 conversion as c / 255 too; a driver that rounded a byte one unit in the last place otherwise could change a
+  pixel only where its 8-bit value lies on a rounding boundary. Not run on either here.
+- **Measured** (`fg_gpu_instancing --frames <n> [--dumps <dir>]`; Apple silicon, headless Metal, other builds running):
+  the thread CPU time of `BgfxSink::submit()` and of the `bgfx::frame()` that renders it, and the GPU time bgfx
+  reports, both paths alternating in blocks of 20 frames, medians. Every gallery state (176 primitives on average):
+  67,459 bytes uploaded a frame become 14,054, CPU 100.7 us becomes 74.6 us, GPU the same (92 and 91 us); the 30
+  states of 500 primitives or more: CPU 151 to 101 us, GPU 152 to 144 us. 5,000 primitives of a pixel or two: CPU
+  618 to 210 us, GPU 12 % less. 5,000 large overlapping primitives (the stress frame): 1,920,000 bytes become
+  400,000, CPU 650 to 250 us, but GPU 12 to 23 % more (1.6 to 1.8 ms became 2.0 to 2.1 ms): where blended pixels
+  dominate a frame, the instanced draw takes longer on this GPU, for a reason not found here.
+- **Fallback:** `BgfxContext` makes the instanced program, the quad and the table with the UI program when bgfx
+  reports `BGFX_CAPS_INSTANCING` (Metal, Vulkan and Direct3D 11 do); without them, with
+  `BgfxContext::Config::instancing = false` (new, default true), or for a frame holding a primitive whose kind is not
+  an integer 0..255 (no Canvas records one), the frame is drawn as `expand()`'s vertices exactly as before.
+- **Budgets:** the transient buffer (`FUNKGUI_TRANSIENT_VB_MIB`, 32 MiB) now holds about 400,000 primitives a frame
+  across every editor, where it held about 87,000.
+- **API:** additive only. `canvas/Expand.h`: `Inst`, `kInstanceBytes`, `instanceable()`, `instance()`, `instances()`,
+  `instanceCorner()`, `unorm8Values()`. `BgfxContext`: `Config::instancing`, `instancing()`, `progUiInstanced()`,
+  `quad()`, `quadIndices()`, `uUnorm8()`. `BgfxSink`: `Geometry`, `lastGeometry()`, `lastUploadBytes()`;
+  `lastVertexCount()` still counts six vertices per primitive. `WebGlSink` is unchanged (it draws vertices).
+
 ## v0.25.1 — 2026-11-06 · PATCH: the last frame drawn is shown at once, and input frames come at full rate
 
 Golden impact: **none** (no golden file changed; nothing records, draws, dumps or hashes differently: bgfx presents
