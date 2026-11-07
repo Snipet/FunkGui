@@ -16,3 +16,7 @@ shader.fs_image.mtl.hash	a45e36392ec050b8	exact
 shader.fs_image.mtl.bytes	1560	exact
 shader.fs_image.spv.hash	fd02966be798669b	exact
 shader.fs_image.spv.bytes	2872	exact
+shader.vs_ui_inst.mtl.hash	d1e8cad8a000b927	exact
+shader.vs_ui_inst.mtl.bytes	4179	exact
+shader.vs_ui_inst.spv.hash	fa79fb13b30dcc82	exact
+shader.vs_ui_inst.spv.bytes	6002	exact
