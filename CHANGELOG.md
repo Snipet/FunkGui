@@ -9,8 +9,9 @@ Golden impact: **none** on existing rows (nothing records, dumps, fingerprints o
 frame is the vertex frame pixel for pixel, and `vs_ui.sc`, `fs_ui.sc`, the WebGL2 text and `SoftRaster` are byte for
 byte unchanged); `fg.shader.hash` gains four rows pinning the new vertex shader (`shader.vs_ui_inst.{mtl,spv}.{hash,
 bytes}`). New tests: `fg.canvas.instance` (every preset, wasm32 too) and `fg.gpu.instancing` (headless Metal
-read-back; skipped without a Metal device); `fg.gallery.live`'s overflow case now runs with a 4 KiB transient buffer
-(8 KiB holds its frame as instances). On macOS arm64: `agent-gui` 91/91 (`fg.shader.hash`'s four new rows its only
+read-back and the overflow paths of both geometries; skipped without a Metal device); `fg.shader.sampler` refuses a
+sampler named `u_unorm8`; `fg.gallery.live`'s overflow case now runs with a 4 KiB transient buffer (8 KiB holds its
+frame as instances). On macOS arm64: `agent-gui` 91/91 (`fg.shader.hash`'s four new rows its only
 candidates), `agent` 72/72, `nojuce` 60/60 and `web` 60/60, no warnings, and the 9 live tests. FCompressor and Linux
 not run here. Windows: not compiled here (shaderc compiles Direct3D 11 on a Windows host only).
 
@@ -49,7 +50,13 @@ not run here. Windows: not compiled here (shaderc compiles Direct3D 11 on a Wind
   `BgfxContext::Config::instancing = false` (new, default true), or for a frame holding a primitive whose kind is not
   an integer 0..255 (no Canvas records one), the frame is drawn as `expand()`'s vertices exactly as before.
 - **Budgets:** the transient buffer (`FUNKGUI_TRANSIENT_VB_MIB`, 32 MiB) now holds about 400,000 primitives a frame
-  across every editor, where it held about 87,000.
+  across every editor, where it held about 87,000. The records and the vertices of a frame share it, so room for
+  both (with each allocation's alignment) is checked before either is allocated: a frame that does not fit takes
+  nothing, and a later editor's frame in the same `bgfx::frame()` may still fit, as before. Room is asked in 16-byte
+  units, because bgfx's count of 80-byte records wraps in a buffer that vertices filled to its last byte (it reported
+  room for millions of them). A frame of vertices alone is checked as before.
+- **Custom shaders:** a sampler may not be named `u_unorm8`, the instanced program's table, as for FunkGui's other
+  uniforms: `shaders::check()` and `set()` refuse it (bgfx would otherwise give one name two types).
 - **API:** additive only. `canvas/Expand.h`: `Inst`, `kInstanceBytes`, `instanceable()`, `instance()`, `instances()`,
   `instanceCorner()`, `unorm8Values()`. `BgfxContext`: `Config::instancing`, `instancing()`, `progUiInstanced()`,
   `quad()`, `quadIndices()`, `uUnorm8()`. `BgfxSink`: `Geometry`, `lastGeometry()`, `lastUploadBytes()`;
