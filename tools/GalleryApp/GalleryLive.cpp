@@ -24,7 +24,7 @@
 //   <case>.fingerprint_equal every fingerprint field (counts, extents, tag counts)
 //   <case>.static_bit_equal  the non-live primitives, in order, bit for bit (02 §3.9: "bit-equal PrimLists")
 //   <case>.a11y_equal        the A11Y_DUMP lines == HeadlessHost::accessibility() lines after the same first tick
-//   <case>.overflows         0; for the overflow case (an 8 KiB transient buffer) >= 1: BgfxSink's drop is counted and
+//   <case>.overflows         0; for the overflow case (a 4 KiB transient buffer) >= 1: BgfxSink's drop is counted and
 //                            reaches the dump ("overflow N", 02 §4.5) while the recorded frame is still equal
 // The spike fallback of the card (geometry-only parity, text excluded) is not used: text is compared.
 
@@ -85,7 +85,8 @@ namespace
         { "area", "area", "", 0 },
         { "ruleslider", "ruleslider", "", 0 },
         { "ruleslider_keys", "ruleslider", "tab,tab,right", 0 },
-        { "overflow", "primitives", "", 8192 },
+        // v0.26.0: 4 KiB, under the section's 98 primitives as instances (7,840 bytes; 8 KiB held them).
+        { "overflow", "primitives", "", 4096 },
         { "services", "services", "", 0 },
         { "curves", "curves", "", 0 },
         { "a11ytable_open", "a11ytable", "tab,tab,down,return", 0 },
