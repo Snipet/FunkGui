@@ -16,7 +16,11 @@
 //   (80 per primitive as instances, 384 as vertices, 384 per image draw).
 // Also: context.instancing (bgfx reports instancing and took the program), fallback.* (a frame holding a primitive
 // whose kind is not instanceable draws as vertices, the same pixels), restart.* (the program, quad and table are made
-// again when bgfx starts again, and draw the same pixels). Needs a Metal device, not a window server; without one (a
+// again when bgfx starts again, and draw the same pixels), overflow.* (bgfx started again with a 4,224-byte transient
+// buffer, frames submitted with no bgfx::frame() between them as editors share one: a frame that does not fit as
+// vertices drops and takes nothing, so one that fills the buffer to its last byte fits after it; records into that
+// full buffer drop; a frame whose records would fit but whose image draws' vertices would not drops and takes
+// nothing, so a smaller frame of records fits after it). Needs a Metal device, not a window server; without one (a
 // VM) every row is skipped and noted. The float rows are skipped and noted where bgfx offers no RGBA32F framebuffer.
 // Spec rows only. The instanced kinds and stress frames are written to gpu-instancing-<scene>.png in the sandbox.
 //
@@ -552,6 +556,74 @@ int main(int argc, char** argv)
         S::kinds(canvas);
         compare(P, sink, canvas.end(), S::kW * 2, S::kH * 2, "restart.kinds");
         ctx.release(nullptr);
+    }
+
+    // A small transient buffer (bgfx started again with it): the overflow paths, frames submitted with no bgfx::frame()
+    // between them, as editors share one. 4,224 bytes are 11 primitives as vertices exactly (11 x 384), a multiple of
+    // 64 and not of 80.
+    {
+        constexpr uint32_t kSmall = 11u * 384u;
+        funkgui::BgfxContext::Config c = ctx.config();
+        const uint32_t defaultBytes = c.transientVbBytes;
+        c.transientVbBytes = kSmall;
+        static_cast<void>(ctx.configure(c));
+        Target t;
+        const bool acquired = ctx.acquire(nullptr, 0, 0);
+        if (P.eq("overflow.acquired", acquired && ctx.transientVbBytes() == kSmall, 1)
+            && P.eq("overflow.target", t.make(S::kW, S::kH, bgfx::TextureFormat::BGRA8), 1))
+        {
+            const auto record = [&canvas](int prims, int imageDraws) {
+                canvas.begin(S::frame(1.0f));
+                for (int i = 0; i < prims; ++i)
+                    canvas.rrect(4.0f + 8.0f * static_cast<float>(i % 45), 4.0f + 8.0f * static_cast<float>(i / 45),
+                                 6.0f, 6.0f, 1.0f, funkgui::Col{ 200, 120, 40, 255 });
+                for (int i = 0; i < imageDraws; ++i)
+                    canvas.image(S::kSplitImageA, { 20.0f + 40.0f * static_cast<float>(i), 100.0f, 30.0f, 30.0f },
+                                 0.0f);
+                return PrimList(canvas.end());
+            };
+            const PrimList one = record(1, 0), eleven = record(11, 0), twelve = record(12, 0), forty = record(40, 0);
+            const PrimList quads = record(45, 2);
+            P.eq("overflow.lists", one.prims.size() == 1 && eleven.prims.size() == 11 && twelve.prims.size() == 12
+                                       && forty.prims.size() == 40 && quads.prims.size() == 45
+                                       && quads.images.size() == 2, 1);
+            using R = BgfxSink::Result;
+            const auto submit = [&](const PrimList& l) { return sink.submit(l, kDrawView, t.fb, S::kW, S::kH); };
+            const uint32_t before = sink.overflowCount();
+
+            // As vertices (Config::instancing off, the path before v0.26.0): 12 primitives (4,608 bytes) drop; 11 then
+            // fill the buffer to its last byte, so the dropped frame took nothing.
+            setInstancing(false);
+            P.eq("overflow.vertices_dropped",
+                 submit(twelve) == R::droppedOverflow && sink.overflowCount() == before + 1, 1);
+            P.eq("overflow.vertices_fill_after_drop",
+                 submit(eleven) == R::submitted && sink.lastGeometry() == BgfxSink::Geometry::vertices
+                     && sink.lastUploadBytes() == kSmall, 1);
+            // Records into that full buffer: none fits (bgfx's own count of 80-byte records wraps there).
+            setInstancing(true);
+            P.eq("overflow.full_buffer_records_dropped",
+                 submit(one) == R::droppedOverflow && sink.overflowCount() == before + 2, 1);
+            bgfx::frame();
+
+            // As instances: 45 records (3,600 bytes) would fit, but their two image draws' 768 bytes after them would
+            // not: dropped, taking nothing, so 40 records (3,200 bytes) fit after it.
+            P.eq("overflow.quads_dropped",
+                 submit(quads) == R::droppedOverflow && sink.overflowCount() == before + 3, 1);
+            P.eq("overflow.records_fit_after_drop",
+                 submit(forty) == R::submitted && sink.lastGeometry() == BgfxSink::Geometry::instances
+                     && sink.lastUploadBytes() == 40u * 80u, 1);
+            bgfx::frame();
+            P.eq("overflow.instances_fit",
+                 submit(twelve) == R::submitted && sink.lastUploadBytes() == 12u * 80u
+                     && sink.overflowCount() == before + 3, 1);
+            bgfx::frame();
+        }
+        t.drop();
+        if (acquired)
+            ctx.release(nullptr);
+        c.transientVbBytes = defaultBytes;
+        static_cast<void>(ctx.configure(c));
+        P.eq("overflow.restored", ctx.config().transientVbBytes == defaultBytes && ctx.config().instancing, 1);
     }
     images::remove(S::kSplitImageA);
     images::remove(S::kSplitImageB);

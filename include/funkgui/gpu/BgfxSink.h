@@ -39,9 +39,11 @@
 // is not an integer 0..255, which no Canvas records). lastGeometry() says which, lastUploadBytes() what it copied.
 //
 // The transient buffer is shared by every editor in the process for one bgfx::frame(). When this frame does not fit,
-// nothing is drawn and submit() returns droppedOverflow (HR dropped the frame silently, SdfCanvas.cpp:322-329); the
-// caller makes it visible (EditorHost: Diagnostics::overflows, a GPU_LOG line, a Debug assertion and the next dump's
-// "overflow N"). Message thread; bgfx must be initialised (BgfxContext::valid()).
+// nothing is drawn, nothing is taken from the buffer (v0.26.0: room for the records and the vertices together is
+// checked before either is allocated, so a later editor's frame may still fit) and submit() returns droppedOverflow
+// (HR dropped the frame silently, SdfCanvas.cpp:322-329); the caller makes it visible (EditorHost:
+// Diagnostics::overflows, a GPU_LOG line, a Debug assertion and the next dump's "overflow N"). Message thread; bgfx
+// must be initialised (BgfxContext::valid()).
 
 #include <funkgui/canvas/Expand.h>
 #include <funkgui/canvas/PrimList.h>

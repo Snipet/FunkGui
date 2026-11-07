@@ -38,6 +38,20 @@ namespace funkgui
 
         // v0.26.0: u_unorm8 holds canvas/Expand.h unorm8Values' 256 floats, four to a vec4 (BgfxContext's uniform).
         constexpr uint16_t kUnorm8Vec4s = 256 / 4;
+
+        // v0.26.0: whether the transient buffer has `bytes` left, asked in 16-byte units. Every allocation FunkGui
+        // makes there starts and ends on 16 bytes (64-byte vertices, 80-byte records), so bgfx rounds nothing here.
+        // Asked with a stride the buffer's offset is not a multiple of, bgfx first rounds the offset up, and past the
+        // buffer's end its count wraps: a 32 MiB buffer filled to its last byte by vertices, asked for 80-byte records,
+        // says that millions fit.
+        bool roomFor(uint64_t bytes) noexcept
+        {
+            constexpr uint64_t kMostUnits = uint64_t{ 1 } << 26;  // 1 GiB: more than any buffer, and no wrap in bgfx
+            const uint64_t units = (bytes + 15) / 16;
+            if (units == 0)
+                return true;
+            return units <= kMostUnits && bgfx::getAvailInstanceDataBuffer(static_cast<uint32_t>(units), 16) >= units;
+        }
     }
 
     BgfxSink::Result BgfxSink::submit(const PrimList& list, bgfx::ViewId view, bgfx::FrameBufferHandle fb, int physW,
@@ -92,21 +106,19 @@ namespace funkgui
             }
         }
         const auto n = static_cast<uint32_t>(scratch_.size());
-        // v0.26.0: the instance records and the vertices come out of the same transient memory, records first. Should
-        // the vertices not fit after them, the frame is dropped as one that does not fit at all; the records' room is
-        // taken for this frame only.
-        bgfx::InstanceDataBuffer idb{};
+        // v0.26.0: the instance records and the vertices come out of the same transient buffer, records first, each
+        // allocation starting at the next multiple of its stride (less than one stride on). Room for both, that
+        // padding included, is checked before either is allocated, so a frame that does not fit takes nothing from
+        // the buffer and a later editor's frame in the same bgfx::frame() may still fit, as before v0.26.0. Without
+        // records the check is the one before v0.26.0 (bgfx's count, exact for vertices alone), roomFor's first so
+        // that bgfx's count cannot wrap after another editor's records.
+        bool fits = true;
         if (nInstances > 0)
-        {
-            if (bgfx::getAvailInstanceDataBuffer(nInstances, static_cast<uint16_t>(kInstanceBytes)) < nInstances)
-            {
-                ++overflows_;
-                return Result::droppedOverflow;
-            }
-            bgfx::allocInstanceDataBuffer(&idb, nInstances, static_cast<uint16_t>(kInstanceBytes));
-            std::memcpy(idb.data, instances_.data(), static_cast<size_t>(nInstances) * sizeof(Inst));
-        }
-        if (n > 0 && bgfx::getAvailTransientVertexBuffer(n, ctx.layout()) < n)
+            fits = roomFor(uint64_t{ nInstances } * kInstanceBytes + (kInstanceBytes - 1)
+                           + (n > 0 ? uint64_t{ n } * sizeof(Vtx) + (sizeof(Vtx) - 1) : 0u));
+        else if (n > 0)
+            fits = roomFor(uint64_t{ n } * sizeof(Vtx)) && bgfx::getAvailTransientVertexBuffer(n, ctx.layout()) >= n;
+        if (!fits)
         {
             // The whole frame is one batch, so an exhausted buffer drops everything rather than one class of
             // widget. Counted, never silent (02 §4.5).
@@ -114,6 +126,12 @@ namespace funkgui
             return Result::droppedOverflow;
         }
 
+        bgfx::InstanceDataBuffer idb{};
+        if (nInstances > 0)
+        {
+            bgfx::allocInstanceDataBuffer(&idb, nInstances, static_cast<uint16_t>(kInstanceBytes));
+            std::memcpy(idb.data, instances_.data(), static_cast<size_t>(nInstances) * sizeof(Inst));
+        }
         bgfx::TransientVertexBuffer tvb{};
         if (n > 0)
         {
