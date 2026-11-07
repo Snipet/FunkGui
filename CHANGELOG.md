@@ -12,8 +12,9 @@ in `fg.framepump.cadence` (114 rows, was 77; the v0.25.0 rows that expected a nu
 expect the hold), `fg.editorhost.cadence` (82, was 64) and `fg.editorhost.skip` (78, was 77). GPU sources only
 (`src/gpu/`, `include/funkgui/gpu/` comments) and `fg.framepump.cadence`, which every preset builds: `agent-gui`
 89/89, `agent` 71/71 and `nojuce` 59/59 on macOS arm64, and the 9 live tests; `web` not run (of this it builds only
-`fg.framepump.cadence`, plain C++, and `FunkGui::web` uses none of it). FCompressor not run against it. Linux and Windows: compiled and run on neither here; the change there is the
-same bgfx flag and plain C++.
+`fg.framepump.cadence`, plain C++, and `FunkGui::web` uses none of it). FCompressor green against it (agent and
+agent-gui). Linux x86-64 (a container): `nojuce` 59/59 and `agent-gui` 81/81. Windows: not compiled here; the change
+there is the same bgfx flag and plain C++.
 
 - **Fix: the last frame drawn was not on screen.** bgfx runs single-threaded here and, without
   `BGFX_RESET_FLIP_AFTER_RENDER`, presents each frame at the start of the next `bgfx::frame()`. Since v0.25.0 the
