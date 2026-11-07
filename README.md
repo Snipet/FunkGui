@@ -34,8 +34,9 @@ Panel         your UI: one fixed logical size, tick(dt), draw(Canvas&, Theme&), 
   |
 Canvas        records primitives on the CPU into a PrimList; makes no GPU calls
   |
-  +-- EditorHost + BgfxSink   live: a juce::AudioProcessorEditor; bgfx on Metal or Vulkan, one draw call per frame
-                              (plus one per custom-shader rectangle or picture and one for the run after it)
+  +-- EditorHost + BgfxSink   live: a juce::AudioProcessorEditor; bgfx on Metal, Vulkan or Direct3D 11, one draw call
+                              per frame (plus one per custom-shader rectangle or picture and one for the run after
+                              it), every primitive one 80-byte instance of a shared quad (v0.26.0)
   +-- WebHost + WebGlSink     browser: a <canvas>, no JUCE; WebGL2, one draw call per frame (plus one per picture)
   +-- HeadlessHost            tests: fixed dt, synthetic input -> frame dump, fingerprint, PNG, accessibility list
   +-- renderGpuPicture        pictures (v0.23.0): any recorded frame drawn offscreen by bgfx and read back as RGBA
@@ -145,7 +146,10 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
   `bindTexture()`; bgfx binds it at the sampler's stage on Metal, Direct3D 11 and Vulkan, and an unbound sampler reads
   zeros. Pictures (`Canvas::image`, v0.20.0) draw with FunkGui's own image program;
   their textures are shared by every editor in the process, uploaded at a picture's first draw and destroyed after
-  `images::remove()` or a replacement, and when bgfx shuts down.
+  `images::remove()` or a replacement, and when bgfx shuts down. From v0.26.0 `BgfxSink` uploads each primitive as one
+  80-byte instance of a shared quad, and the vertex shader makes the six 64-byte vertices the CPU used to expand and
+  copy (384 bytes): the same pixels, a fifth of the bytes. `BgfxContext::Config::instancing = false` draws them as
+  vertices again.
   `GpuPicture.h` (v0.23.0) draws a recorded frame offscreen with `BgfxSink` and reads it back as an RGBA `Image`
   (`renderGpuPicture`), so a picture of a Panel for a person or a model shows its custom shaders and pictures as the
   screen does, where `SoftRaster` draws a shader as its placeholder: on the editors' bgfx while any is open, else on a
@@ -408,7 +412,8 @@ src/                 the implementations, same layout; only src/gpu/ touches bgf
 src/juce/, nojuce/   the core's sources that need JUCE, and their JUCE-free counterparts (FUNKGUI_WITH_JUCE=OFF)
 src/web/             FunkGui::web, the only library sources that include Emscripten's headers
 shaders/             the bgfx vertex and fragment shaders: one program, four primitive kinds; WebGL2 gets the same
-                     program as generated GLSL ES 3.00 text. vs_custom.sc, varying_custom.def.sc and
+                     program as generated GLSL ES 3.00 text. vs_ui_inst.sc and varying_inst.def.sc: its vertex
+                     shader for primitives drawn as instances (v0.26.0). vs_custom.sc, varying_custom.def.sc and
                      fs_custom_prelude.sc: the vertex half, varyings and head of a host's custom shaders.
                      fs_image.sc: the pictures' fragment shader (with vs_custom.sc; WebGL2 gets both as text too)
 fonts/               the JetBrains Mono subset, the upstream face it was cut from, their licence, and

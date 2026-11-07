@@ -56,6 +56,11 @@ only set of paths you may change.
   frozen headers (see the sprint plan's frozen sets) are proposed in the handoff, never edited.
 - FunkGui's own tests are named `fg.*`, self-register from their first line, and build with `-ffp-contract=off`
   and `-Wall -Wextra -Wshadow -Wpedantic -Werror`.
+- The UI program has two vertex shaders that make the same vertices (v0.26.0): `shaders/vs_ui.sc` over
+  `canvas/Expand.h`'s six vertices per primitive, and `shaders/vs_ui_inst.sc` over one 80-byte instance each, which
+  `BgfxSink` uses. A change to `Prim`, the vertex layout or `expand()` changes `instance()`, `instanceCorner()` and
+  `vs_ui_inst.sc` with it, and `fg.canvas.instance` (CPU) and `fg.gpu.instancing` (Metal, pixel for pixel) keep them
+  equal; `fs_ui.sc` serves both.
 
 ## Done means (03 §4.7)
 
