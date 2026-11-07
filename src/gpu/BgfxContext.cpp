@@ -198,6 +198,7 @@ namespace funkgui
             quadLayout_.begin().add(bgfx::Attrib::Position, 2, bgfx::AttribType::Float).end();
             quad_ = bgfx::createVertexBuffer(bgfx::makeRef(kQuad, sizeof kQuad), quadLayout_);
             quadIndices_ = bgfx::createIndexBuffer(bgfx::makeRef(kQuadIndices, sizeof kQuadIndices));
+            // Named in ShaderLibrary.cpp's kFunkGuiUniforms, so no custom shader's sampler takes the name.
             uUnorm8_ = bgfx::createUniform("u_unorm8", bgfx::UniformType::Vec4, kUnorm8Vec4s);
         }
 

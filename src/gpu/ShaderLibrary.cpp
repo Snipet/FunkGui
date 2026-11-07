@@ -107,10 +107,11 @@ namespace funkgui::shaders
         constexpr uint16_t kSpirvBindShift = 2;
         constexpr uint16_t kTexFloat2D = 0x0200;
 
-        // The uniforms FunkGui gives a vec4 (its custom programs' three, and the image program's), which no sampler may
-        // be named after (bgfx's createUniform would change the type of the uniform the other programs read).
+        // The uniforms FunkGui gives a vec4 (its custom programs' three, the image program's, and v0.26.0's table of
+        // the instanced UI program, BgfxContext's u_unorm8), which no sampler may be named after (bgfx's createUniform
+        // would change the type of the uniform the other programs read). Every vec4 uniform FunkGui creates is here.
         constexpr const char* kFunkGuiUniforms[] = {
-            "u_viewSize", "u_rect", "u_params", "u_imageRect", "u_imageUv", "u_imageClamp", "u_imageMask",
+            "u_viewSize", "u_rect", "u_params", "u_imageRect", "u_imageUv", "u_imageClamp", "u_imageMask", "u_unorm8",
         };
 
         // bgfx_shader.sh's predefined uniforms (bgfx.cpp s_predefinedName): bgfx sets them itself.

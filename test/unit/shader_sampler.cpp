@@ -12,14 +12,16 @@
 //              every change and only then.
 // - samplers.* the Metal and SPIR-V binaries give s_tex at 0 and s_mask at 2; the SPIR-V table read as Direct3D 11's
 //              (stage = register) after its registers are rewritten; each refusal with its reason: another kind of
-//              texture, a stage of 4, two samplers at one stage, a sampler named after a uniform FunkGui sets, a
-//              buffer or image that is no sampler's part; on Metal an argument buffer, a plain uniform shaderc gives
+//              texture, a stage of 4, two samplers at one stage, a sampler named after a uniform FunkGui sets (u_rect,
+//              and on Metal and SPIR-V the instanced UI program's u_unorm8), a buffer or image that is no sampler's
+//              part; on Metal an argument buffer, a plain uniform shaderc gives
 //              no type (a float: "never sets") and an int uniform (typed Sampler, num 1); on SPIR-V a shadow sampler,
 //              an integer one, a stage below the shift, a binary of version 10, an int uniform (no sampler bit), and
 //              by the code's own image type a multisampled texture, a 3D one the table calls 2D, an image of a fixed
 //              format (IMAGE2D_RO) and a binding with no image; on Direct3D 11 an int uniform (no sampler bit).
 // - check.*    check() takes fs_texture_test; a texture of another kind is refused before Metal compiles it; u_params
 //              declared as a sampler is "declared otherwise"; an int uniform, and on macOS a float one, "never sets";
+//              a sampler named u_unorm8 is refused, with nothing compiled;
 //              the other renderer's fs_texture_test is said to be the other renderer's, not a sampler's problem.
 // - set.*      set() registers it; bindTexture() says whether the shader has the sampler; set() of the same id keeps
 //              its bindings and remove(id) drops them (seen through unbindTexture() moving the generation or not).
@@ -112,6 +114,20 @@ namespace
         if (codeAt != nullptr)
             *codeAt = at + 4;                        // the code's size, then the code
         return found;
+    }
+
+    // The table's uniform `from` renamed `to`, of any length (the table is read entry by entry; the code is left as it
+    // is). False when the table has no `from`.
+    bool renameUniform(Bytes& b, std::string_view from, std::string_view to)
+    {
+        const std::size_t end = typeAt(b, from);
+        if (end == 0 || to.empty() || to.size() > 255)
+            return false;
+        const std::size_t name = end - from.size();
+        b[name - 1] = static_cast<uint8_t>(to.size());
+        b.erase(b.begin() + static_cast<std::ptrdiff_t>(name), b.begin() + static_cast<std::ptrdiff_t>(end));
+        b.insert(b.begin() + static_cast<std::ptrdiff_t>(name), to.begin(), to.end());
+        return true;
     }
 
     // Where the first OpTypeImage (opcode 25) of a SPIR-V binary's code is, in bytes; 0 when absent. Its words: the
@@ -256,6 +272,10 @@ int main(int argc, char** argv)
         b[3] = 10;
         samplersRefuse(P, "samplers.spirv_version_10", b, D::Code::spirv, "version 10");
         b = spv;
+        P.eq("samplers.spirv_unorm8_patch", renameUniform(b, "s_mask", "u_unorm8"), 1);
+        samplersRefuse(P, "samplers.spirv_funkgui_name_unorm8", b, D::Code::spirv,
+                       "has the name of a uniform FunkGui");
+        b = spv;
         b[spvParams] = static_cast<uint8_t>((b[spvParams] & 0xF0) | 1);   // End: a storage image or buffer
         samplersRefuse(P, "samplers.spirv_buffer", b, D::Code::spirv, "never binds");
         // The code's image type (the two samplers share it): what the tex info (0x0200, 2D floats) cannot say.
@@ -291,6 +311,9 @@ int main(int argc, char** argv)
     P.eq("samplers.metal_name_patch", patch(m, std::string_view("\x06s_mask\x10", 8),
                                             std::string_view("\x06u_rect\x10", 8)), 1);
     samplersRefuse(P, "samplers.funkgui_name", m, D::Code::metal, "has the name of a uniform FunkGui");
+    m = mtl;                                                     // v0.26.0: the instanced UI program's table
+    P.eq("samplers.metal_unorm8_patch", renameUniform(m, "s_mask", "u_unorm8"), 1);
+    samplersRefuse(P, "samplers.funkgui_name_unorm8", m, D::Code::metal, "has the name of a uniform FunkGui");
     m = mtl;
     P.eq("samplers.metal_buffer_patch", patch(m, "_mtl_u [[buffer(0)]]", "_mtl_u [[buffer(2)]]", mslAt), 1);
     samplersRefuse(P, "samplers.metal_buffer", m, D::Code::metal, "uses _mtl_u, a buffer");
@@ -354,6 +377,10 @@ int main(int argc, char** argv)
         checkRefuses(P, "check.float_uniform", m, "reads the uniform u_paramz, which FunkGui never sets");
 #endif
     }
+    // A sampler named u_unorm8 (v0.26.0's table, a Vec4 x 64 in bgfx): refused by check(), so set() never makes it.
+    m = mine;
+    P.eq("check.unorm8_patch", renameUniform(m, "s_mask", "u_unorm8"), 1);
+    checkRefuses(P, "check.unorm8_sampler", m, "has the name of a uniform FunkGui");
     P.eq("check.compiled_nothing", static_cast<int64_t>(D::metalCompileCount() - compiles), 0);
 
     // ---- set: the registry's side -----------------------------------------------------------------------------------
