@@ -12,8 +12,9 @@ bytes}`). New tests: `fg.canvas.instance` (every preset, wasm32 too) and `fg.gpu
 read-back and the overflow paths of both geometries; skipped without a Metal device); `fg.shader.sampler` refuses a
 sampler named `u_unorm8`; `fg.gallery.live`'s overflow case now runs with a 4 KiB transient buffer (8 KiB holds its
 frame as instances). On macOS arm64: `agent-gui` 91/91 (`fg.shader.hash`'s four new rows its only
-candidates), `agent` 72/72, `nojuce` 60/60 and `web` 60/60, no warnings, and the 9 live tests. FCompressor and Linux
-not run here. Windows: not compiled here (shaderc compiles Direct3D 11 on a Windows host only).
+candidates), `agent` 72/72, `nojuce` 60/60 and `web` 60/60, no warnings, and the 9 live tests. FCompressor (its
+`agent` and `agent-gui` checks with this FunkGui) green; Linux x86-64 (an Arch container) `nojuce` 60/60 and
+`agent-gui` 82/82, no warnings. Windows: not compiled here (shaderc compiles Direct3D 11 on a Windows host only).
 
 - **Primitives as instances** (`BgfxSink`): each primitive is uploaded as one 80-byte record (`canvas/Expand.h`
   `Inst`: five vec4 of bgfx instance data) instead of six 64-byte vertices (384 bytes), and a run of primitives is one
