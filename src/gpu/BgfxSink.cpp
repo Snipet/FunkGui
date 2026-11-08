@@ -14,6 +14,8 @@
 // v0.19.0: a frame with shader draws is the same calls, split into the runs funkgui::drawSteps gives, with each
 // shader draw submitted between them (gpu/BgfxSink.h); without shader draws there is one run, so one draw call.
 // v0.20.0: image draws are split out the same way, each one draw call with the image program (src/gpu/ImageGpu.h).
+// v0.26.0: a run of primitives is one instanced draw call over the context's quad (gpu/BgfxSink.h), the same draw calls
+// in the same order; a frame drawn as vertices is the code below as it was.
 
 namespace funkgui
 {
@@ -33,6 +35,23 @@ namespace funkgui
         }
 
         constexpr uint64_t kState = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA;
+
+        // v0.26.0: u_unorm8 holds canvas/Expand.h unorm8Values' 256 floats, four to a vec4 (BgfxContext's uniform).
+        constexpr uint16_t kUnorm8Vec4s = 256 / 4;
+
+        // v0.26.0: whether the transient buffer has `bytes` left, asked in 16-byte units. Every allocation FunkGui
+        // makes there starts and ends on 16 bytes (64-byte vertices, 80-byte records), so bgfx rounds nothing here.
+        // Asked with a stride the buffer's offset is not a multiple of, bgfx first rounds the offset up, and past the
+        // buffer's end its count wraps: a 32 MiB buffer filled to its last byte by vertices, asked for 80-byte records,
+        // says that millions fit.
+        bool roomFor(uint64_t bytes) noexcept
+        {
+            constexpr uint64_t kMostUnits = uint64_t{ 1 } << 26;  // 1 GiB: more than any buffer, and no wrap in bgfx
+            const uint64_t units = (bytes + 15) / 16;
+            if (units == 0)
+                return true;
+            return units <= kMostUnits && bgfx::getAvailInstanceDataBuffer(static_cast<uint32_t>(units), 16) >= units;
+        }
     }
 
     BgfxSink::Result BgfxSink::submit(const PrimList& list, bgfx::ViewId view, bgfx::FrameBufferHandle fb, int physW,
@@ -49,11 +68,19 @@ namespace funkgui
 
         lastVertices_ = 0;
         lastDraws_ = 0;
+        lastBytes_ = 0;
         images::gpu::sweep();                        // v0.20.0: textures of removed or replaced pictures go
         if (list.prims.empty() && list.shaders.empty() && list.images.empty())
             return Result::empty;
 
-        expand(list, scratch_);
+        // v0.26.0: the primitives as instances when the context can and every one of them is instanceable; else as
+        // expand()'s vertices, at the head of the vertex buffer as before.
+        const bool asInstances = ctx.config().instancing && ctx.instancing() && instances(list, instances_);
+        const auto nInstances = asInstances ? static_cast<uint32_t>(instances_.size()) : 0u;
+        if (asInstances)
+            scratch_.clear();
+        else
+            expand(list, scratch_);
         const auto primVertices = static_cast<uint32_t>(scratch_.size());
         if (!list.shaders.empty())
         {
@@ -79,7 +106,19 @@ namespace funkgui
             }
         }
         const auto n = static_cast<uint32_t>(scratch_.size());
-        if (bgfx::getAvailTransientVertexBuffer(n, ctx.layout()) < n)
+        // v0.26.0: the instance records and the vertices come out of the same transient buffer, records first, each
+        // allocation starting at the next multiple of its stride (less than one stride on). Room for both, that
+        // padding included, is checked before either is allocated, so a frame that does not fit takes nothing from
+        // the buffer and a later editor's frame in the same bgfx::frame() may still fit, as before v0.26.0. Without
+        // records the check is the one before v0.26.0 (bgfx's count, exact for vertices alone), roomFor's first so
+        // that bgfx's count cannot wrap after another editor's records.
+        bool fits = true;
+        if (nInstances > 0)
+            fits = roomFor(uint64_t{ nInstances } * kInstanceBytes + (kInstanceBytes - 1)
+                           + (n > 0 ? uint64_t{ n } * sizeof(Vtx) + (sizeof(Vtx) - 1) : 0u));
+        else if (n > 0)
+            fits = roomFor(uint64_t{ n } * sizeof(Vtx)) && bgfx::getAvailTransientVertexBuffer(n, ctx.layout()) >= n;
+        if (!fits)
         {
             // The whole frame is one batch, so an exhausted buffer drops everything rather than one class of
             // widget. Counted, never silent (02 §4.5).
@@ -87,9 +126,19 @@ namespace funkgui
             return Result::droppedOverflow;
         }
 
-        bgfx::TransientVertexBuffer tvb;
-        bgfx::allocTransientVertexBuffer(&tvb, n, ctx.layout());
-        std::memcpy(tvb.data, scratch_.data(), static_cast<size_t>(n) * sizeof(Vtx));
+        bgfx::InstanceDataBuffer idb{};
+        if (nInstances > 0)
+        {
+            bgfx::allocInstanceDataBuffer(&idb, nInstances, static_cast<uint16_t>(kInstanceBytes));
+            std::memcpy(idb.data, instances_.data(), static_cast<size_t>(nInstances) * sizeof(Inst));
+        }
+        bgfx::TransientVertexBuffer tvb{};
+        if (n > 0)
+        {
+            bgfx::allocTransientVertexBuffer(&tvb, n, ctx.layout());
+            std::memcpy(tvb.data, scratch_.data(), static_cast<size_t>(n) * sizeof(Vtx));
+        }
+        const float* unorm8 = unorm8Values();
 
         const float dpi = info.dpi > 0.05f ? info.dpi : 1.0f;     // HR's guard on the backing scale
         const float viewSize[4] = { static_cast<float>(info.logicalW), static_cast<float>(info.logicalH), 1.0f / dpi,
@@ -97,6 +146,20 @@ namespace funkgui
         drawSteps(list, steps_);
         for (const DrawStep& step : steps_)
         {
+            if (step.kind == DrawStep::Kind::prims && asInstances)
+            {
+                // v0.26.0: the same draw call with one instance per primitive of the run.
+                bgfx::setUniform(ctx.uViewSize(), viewSize);
+                bgfx::setUniform(ctx.uUnorm8(), unorm8, kUnorm8Vec4s);
+                bgfx::setTexture(0, ctx.sTexColor(), ctx.fontTex());
+                bgfx::setVertexBuffer(0, ctx.quad());
+                bgfx::setIndexBuffer(ctx.quadIndices());
+                bgfx::setInstanceDataBuffer(&idb, step.first, step.count);
+                bgfx::setState(kState);
+                bgfx::submit(view, ctx.progUiInstanced());
+                ++lastDraws_;
+                continue;
+            }
             if (step.kind == DrawStep::Kind::prims)
             {
                 // HR's call for call; without shader draws this is the frame's one draw call over every vertex.
@@ -157,7 +220,9 @@ namespace funkgui
             bgfx::submit(view, program);
             ++lastDraws_;
         }
-        lastVertices_ = n;
+        lastVertices_ = n + nInstances * static_cast<uint32_t>(kVerticesPerPrim);
+        lastBytes_ = n * static_cast<uint32_t>(sizeof(Vtx)) + nInstances * static_cast<uint32_t>(kInstanceBytes);
+        lastGeometry_ = asInstances ? Geometry::instances : Geometry::vertices;
         return Result::submitted;
     }
 

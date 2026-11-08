@@ -116,4 +116,54 @@ namespace funkgui
         float loU = 0.0f, loV = 0.0f, hiU = 1.0f, hiV = 1.0f;
     };
     ImageSampling imageSampling(const ImageDraw&, int level, int picW, int picH) noexcept;
+
+    // ---- v0.26.0 additions: primitives as instances (BgfxSink) ------------------------------------------------------
+    // BgfxSink draws a frame's primitives as instances of one quad: each primitive is one 80-byte record (five vec4 of
+    // bgfx instance data, i_data0..i_data4), and the instanced UI vertex shader (shaders/vs_ui_inst.sc) makes from it
+    // the vertices expand() writes, so 80 bytes per primitive reach the GPU where expand() writes 384. The vertices are
+    // the same bit for bit (every corner the shader makes is expand()'s Vtx, its colours the values the vertex fetch
+    // makes of Color0 and Color1), so the frame is the same pixel for pixel, and fs_ui.sc is unchanged. expand() stays
+    // the reference: fg.canvas.instance proves instanceCorner(instance(p), k) equal to the k-th Vtx of expand(p) for
+    // every primitive it records, and fg.gpu.instancing compares the two paths' pixels on the GPU. Pure functions with
+    // no bgfx, testable headless.
+
+    struct Inst
+    {
+        float rect[4];                           // i_data0: x0, y0, x1, y1 (the quad, the Prim's)
+        float d0[4];                             // i_data1: Prim::d0 (the TL local x, y, or text u0, v0; hw, hh)
+        float e0d2[4];                           // i_data2: Prim::e0[0], e0[1] (the BR local x, y), d2[0], d2[1]
+        float d1[4];                             // i_data3: Prim::d1
+        float packed[4];                         // i_data4: three integers below 2^24, each exact in a float, and
+                                                 // Prim::d2[3] (the flags) as it is:
+                                                 // [0] c0's r | g << 8 | b << 16 (Prim::c0's bytes 0..2)
+                                                 // [1] c0's a | c1's r << 8 | c1's g << 16
+                                                 // [2] c1's b | c1's a << 8 | kind << 16 (the kind: Prim::d2[2])
+    };
+    static_assert(sizeof(Inst) == 80 && std::is_trivially_copyable_v<Inst>, "Inst is five vec4 of instance data");
+
+    inline constexpr int kInstanceBytes = static_cast<int>(sizeof(Inst));
+
+    // Whether p can be drawn as an instance: its kind, d2[2], is an integer from 0 to 255 held exactly (0 as +0), so
+    // that the record gives back its very bits. Every primitive a Canvas records is; a PrimList built by hand with
+    // another kind draws as expand()'s vertices instead (instances() below), so it too draws as it always did.
+    bool instanceable(const Prim&) noexcept;
+
+    // p's record (for a p that is not instanceable, the kind it gives back is not p's).
+    Inst instance(const Prim& p) noexcept;
+
+    // Every primitive of the list, in order, into out (resized to prims.size(), capacity kept). False, with out
+    // unspecified, when one is not instanceable: BgfxSink then draws the frame's primitives as expand()'s vertices.
+    bool instances(const PrimList&, std::vector<Inst>& out);
+
+    // The vertex shader's half on the CPU: corner k (0..5, expand()'s order a, b, c, a, c, d) of an instance as
+    // shaders/vs_ui_inst.sc makes it, step for step, with its colours as the bytes the shader looks up in
+    // unorm8Values() (a Vtx holds them packed). For an instanceable p, instanceCorner(instance(p), k) is the k-th Vtx
+    // of expand(p), bit for bit.
+    Vtx instanceCorner(const Inst&, int k) noexcept;
+
+    // What the instanced shader gives a colour byte c: unorm8Values()[c] = c / 255 rounded to the nearest float, the
+    // conversion of a normalised Uint8 that Metal, Vulkan and Direct3D 11 define for the vertex fetch (checked bit for
+    // bit on Metal by fg.gpu.instancing). BgfxSink passes the 256 values to the shader as the uniform u_unorm8 (64
+    // vec4): a table, so the value never depends on how a shader compiler divides.
+    const float* unorm8Values() noexcept;
 }

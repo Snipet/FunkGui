@@ -3,8 +3,11 @@
 #include <funkgui/canvas/Images.h>
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 
 // The CPU half of BgfxSink (02 §3.2, SPRINTS §7 D9): a Prim back into HR's six non-indexed vertices a, b, c, a, c, d
 // (the snapshot's SdfCanvas::quad, gpu/SdfCanvas.cpp:85-89). No bgfx here, so fg.canvas.expansion runs headless;
@@ -252,4 +255,129 @@ namespace funkgui
         range(m.uv.y, m.uv.h, lh, s.loV, s.hiV);
         return s;
     }
+}
+
+// ---- v0.26.0: primitives as instances (canvas/Expand.h) -------------------------------------------------------------
+// The record BgfxSink uploads per primitive and, in instanceCorner(), shaders/vs_ui_inst.sc's own steps on the CPU. The
+// three packed fields are integers below 2^24, so every float below is exact: a product by a power of two, a floor, and
+// a difference of two such integers. The shader takes the same steps, so whatever a compiler reorders (fast math
+// included) the bytes it unpacks are the ones packed here.
+
+namespace funkgui
+{
+    static_assert(offsetof(Inst, rect) == 0 && offsetof(Inst, d0) == 16 && offsetof(Inst, e0d2) == 32
+                      && offsetof(Inst, d1) == 48 && offsetof(Inst, packed) == 64,
+                  "Inst is i_data0..i_data4 in order (shaders/varying_inst.def.sc)");
+
+    namespace
+    {
+        // c / 255 for every byte, rounded to the nearest float (a constant expression rounds as the run time does).
+        constexpr std::array<float, 256> makeUnorm8() noexcept
+        {
+            std::array<float, 256> t{};
+            for (int c = 0; c < 256; ++c)
+                t[static_cast<std::size_t>(c)] = static_cast<float>(c) / 255.0f;
+            return t;
+        }
+        constexpr std::array<float, 256> kUnorm8 = makeUnorm8();
+
+        // The kind as an integer 0..255 (0 for anything else: the record of a primitive that is not instanceable).
+        uint32_t kindOf(const Prim& p) noexcept
+        {
+            const float k = p.d2[2];
+            return k >= 0.0f && k <= 255.0f ? static_cast<uint32_t>(k) : 0u;
+        }
+
+        // vs_ui_inst.sc's bytes3(): the three bytes of a packed field, low first.
+        struct Bytes3
+        {
+            float lo, mid, hi;
+        };
+        Bytes3 bytes3(float p) noexcept
+        {
+            const float hi = std::floor(p * (1.0f / 65536.0f));
+            const float lo = p - hi * 65536.0f;
+            const float mid = std::floor(lo * (1.0f / 256.0f));
+            return { lo - mid * 256.0f, mid, hi };
+        }
+
+        // A byte unpacked by bytes3() (0 for anything else: a record that instance() did not make).
+        uint32_t byteOf(float b) noexcept { return b >= 0.0f && b < 256.0f ? static_cast<uint32_t>(b) : 0u; }
+
+        // The corners of expand()'s order a, b, c, a, c, d on the unit quad (BgfxSink's quad vertex buffer).
+        constexpr float kCornerX[kVerticesPerPrim] = { 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 0.0f };
+        constexpr float kCornerY[kVerticesPerPrim] = { 0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f };
+    }
+
+    bool instanceable(const Prim& p) noexcept
+    {
+        const float k = p.d2[2];
+        if (!(k >= 0.0f && k <= 255.0f))
+            return false;
+        return std::bit_cast<uint32_t>(static_cast<float>(static_cast<uint32_t>(k))) == std::bit_cast<uint32_t>(k);
+    }
+
+    Inst instance(const Prim& p) noexcept
+    {
+        Inst r;
+        r.rect[0] = p.x0;
+        r.rect[1] = p.y0;
+        r.rect[2] = p.x1;
+        r.rect[3] = p.y1;
+        for (int i = 0; i < 4; ++i)
+        {
+            r.d0[i] = p.d0[i];
+            r.d1[i] = p.d1[i];
+        }
+        r.e0d2[0] = p.e0[0];
+        r.e0d2[1] = p.e0[1];
+        r.e0d2[2] = p.d2[0];
+        r.e0d2[3] = p.d2[1];
+        r.packed[0] = static_cast<float>(p.c0 & 0xffffffu);
+        r.packed[1] = static_cast<float>((p.c0 >> 24) | ((p.c1 & 0xffffu) << 8));
+        r.packed[2] = static_cast<float>(((p.c1 >> 16) & 0xffffu) | (kindOf(p) << 16));
+        r.packed[3] = p.d2[3];
+        return r;
+    }
+
+    bool instances(const PrimList& list, std::vector<Inst>& out)
+    {
+        out.resize(list.prims.size());                   // shrinking keeps the capacity
+        Inst* dst = out.data();
+        for (const Prim& p : list.prims)
+        {
+            if (!instanceable(p))
+                return false;
+            *dst++ = instance(p);
+        }
+        return true;
+    }
+
+    Vtx instanceCorner(const Inst& in, int k) noexcept
+    {
+        const int at = std::clamp(k, 0, kVerticesPerPrim - 1);
+        const bool right = kCornerX[at] > 0.5f;
+        const bool bottom = kCornerY[at] > 0.5f;
+        const Bytes3 a = bytes3(in.packed[0]);       // c0's r, g, b
+        const Bytes3 b = bytes3(in.packed[1]);       // c0's a, c1's r, g
+        const Bytes3 c = bytes3(in.packed[2]);       // c1's b, a, the kind
+        Vtx v;
+        v.x = right ? in.rect[2] : in.rect[0];
+        v.y = bottom ? in.rect[3] : in.rect[1];
+        v.c0 = byteOf(a.lo) | (byteOf(a.mid) << 8) | (byteOf(a.hi) << 16) | (byteOf(b.lo) << 24);
+        v.c1 = byteOf(b.mid) | (byteOf(b.hi) << 8) | (byteOf(c.lo) << 16) | (byteOf(c.mid) << 24);
+        v.d0[0] = right ? in.e0d2[0] : in.d0[0];
+        v.d0[1] = bottom ? in.e0d2[1] : in.d0[1];
+        v.d0[2] = in.d0[2];
+        v.d0[3] = in.d0[3];
+        for (int i = 0; i < 4; ++i)
+            v.d1[i] = in.d1[i];
+        v.d2[0] = in.e0d2[2];
+        v.d2[1] = in.e0d2[3];
+        v.d2[2] = c.hi;
+        v.d2[3] = in.packed[3];
+        return v;
+    }
+
+    const float* unorm8Values() noexcept { return kUnorm8.data(); }
 }
