@@ -3,6 +3,23 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.26.1 — 2026-11-09 · PATCH: custom shaders under Direct3D 11
+
+Golden impact: **none** (no golden file changed; nothing records, draws, dumps or hashes differently: Metal's and
+SPIR-V's binaries count FunkGui's uniforms as before, and only a count of 0 is read differently). New rows in
+`fg.shader.library` (`set.test_reads_u_rect`, `set.rect_counted_0`, `set.rect_counted_0.not_otherwise` and
+`set.rect_counted_2.*`). GPU sources only (`src/gpu/ShaderLibrary.cpp`) and that test: `agent-gui` 91/91, `agent`
+72/72 and `nojuce` 60/60 on macOS arm64, no warnings; `web` not run (it builds neither). FCompressor and Linux: not run
+(FCompressor pins v0.21.0; the change reads a count only Direct3D's binaries write, and the new rows patch bytes: the
+SPIR-V test binary counts `u_rect` 1, as Metal's does). Windows: not compiled here; found by a consumer's first
+Windows CI run, whose custom shaders are its check.
+
+- **Fix: Direct3D 11's custom shaders refused.** shaderc's HLSL path writes a uniform's count as its reflection's
+  `Elements` (`D3D11_SHADER_TYPE_DESC`), which is 0 for a uniform that is no array; Metal's and SPIR-V's binaries count
+  it 1. `shaders::check()` and `set()` asked for 1 at least, so on Windows they refused every custom shader that reads
+  `u_viewSize` or `u_rect` ("the shader declares u_viewSize otherwise than FunkGui: uniform vec4 u_viewSize;"). A count
+  of 0 is now one vec4; one above the declaration (`u_rect[2]`, `u_params[16]`) is still refused.
+
 ## v0.26.0 — 2026-11-07 · MINOR: primitives drawn as instances
 
 Golden impact: **none** on existing rows (nothing records, dumps, fingerprints or draws differently: the instanced
