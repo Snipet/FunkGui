@@ -14,8 +14,9 @@
 // - set.*: this platform's test binary is registered (on macOS after Metal compiled its code), replaced, and removed;
 //   each refusal (no bytes, not a shader, cut short, a vertex shader, other varyings, u_params as a sampler, an unknown
 //   uniform, a resized u_params, the other renderer's code, and on macOS code Metal refuses or without bgfx's entry
-//   point) is false with a reason and leaves the id as it was. Without a Metal device (a VM) the rows that need one are
-//   skipped and noted.
+//   point) is false with a reason and leaves the id as it was. A u_rect counted 0 elements, as Direct3D's binaries count
+//   a uniform that is no array, is taken (0.26.1), and one counted 2 refused. Without a Metal device (a VM) the rows
+//   that need one are skipped and noted.
 
 #include <funkgui/gpu/ShaderLibrary.h>
 #include <funkgui/shaders/fs_custom_test.mtl.h>
@@ -211,6 +212,30 @@ int main(int argc, char** argv)
         const bool done = patch(renamed, "u_params", "u_paramz", params->typeAt - params->name.size());
         P.eq("set.renamed_patch", done, 1);
         refused(P, "set.unknown_uniform", 2, renamed, "never sets");
+    }
+    // 0.26.1: a uniform that is no array, counted 0 elements as Direct3D's binaries count it (shaderc's HLSL path writes
+    // its reflection's Elements) where Metal's and SPIR-V's count 1, is one vec4 all the same; counted 2, it is not.
+    const Uniform* rect = nullptr;
+    for (const Uniform& u : us)
+        if (u.name == "u_rect")
+            rect = &u;
+    P.eq("set.test_reads_u_rect", rect != nullptr && rect->num == 1, 1);
+    if (rect != nullptr)
+    {
+        Bytes counted0 = mine;
+        counted0[rect->typeAt + 1] = 0;
+        std::string why0 = "stale";
+        const bool took = S::set(4, counted0.data(), static_cast<uint32_t>(counted0.size()), why0);
+        std::printf("INFO     set.rect_counted_0: %s%s\n", took ? "true" : "false ", took ? "" : why0.c_str());
+        P.eq("set.rect_counted_0.not_otherwise", why0.find("otherwise than FunkGui") == std::string::npos, 1);
+        if (!noMetal)
+        {
+            P.eq("set.rect_counted_0", took && S::has(4), 1);
+            S::remove(4);
+        }
+        Bytes counted2 = mine;
+        counted2[rect->typeAt + 1] = 2;
+        refused(P, "set.rect_counted_2", 2, counted2, "uniform vec4 u_rect;");
     }
     refused(P, "set.other_renderer", 2, other, otherWhy);
 #if defined(__APPLE__)

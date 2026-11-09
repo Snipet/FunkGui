@@ -721,8 +721,11 @@ namespace funkgui::shaders
                 const bool ours = u.name == "u_viewSize" || u.name == "u_rect" || u.name == "u_params";
                 if (ours)
                 {
+                    // Elements: Metal's and SPIR-V's binaries count a uniform that is no array 1; Direct3D's count it
+                    // 0, as its reflection does (shaderc's HLSL path writes D3D11_SHADER_TYPE_DESC::Elements). One vec4.
+                    const int elements = u.num == 0 ? 1 : u.num;
                     const int most = u.name == "u_params" ? 4 : 1;
-                    if (u.type != kVec4Type || u.num < 1 || u.num > most)
+                    if (u.type != kVec4Type || elements > most)
                     {
                         why = "the shader declares " + u.name + " otherwise than FunkGui: "
                               + (u.name == "u_params" ? "uniform vec4 u_params[4];" : "uniform vec4 " + u.name + ";");
