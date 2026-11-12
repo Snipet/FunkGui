@@ -62,6 +62,9 @@
 //   keeps its log and also fills the in-memory clipboard that clipboardText() answers.
 //   announce() logs every text that is not empty, whatever its priority (an empty one is what EditorHost does not
 //   post either); a11yFocus() logs every call, id 0 included.
+// - F1: the old pointer calls are the Button overloads with Button::left, which send the same events bit for bit
+//   (popup = ctrl || right is ctrl for left). wheel(WheelEvent) and magnify(MagnifyEvent) send their pointerMove with
+//   popup false whatever the Ctrl, and leave a press open, as wheel() does.
 
 namespace funkgui
 {
@@ -75,6 +78,15 @@ namespace funkgui
             e.mods = m;
             e.clicks = clicks;
             e.popup = m.ctrl;
+            return e;
+        }
+
+        // F1: the same with a button; Button::right is a popup too (JUCE's isPopupMenu).
+        PointerEvent pointerAt(float x, float y, Mods m, int clicks, Button b)
+        {
+            PointerEvent e = pointerAt(x, y, m, clicks);
+            e.button = b;
+            e.popup = m.ctrl || b == Button::right;
             return e;
         }
 
@@ -272,9 +284,14 @@ namespace funkgui
 
     void HeadlessHost::click(float x, float y, Mods m)
     {
+        click(x, y, Button::left, m);                    // Button::left: the events these always sent, bit for bit
+    }
+
+    void HeadlessHost::click(float x, float y, Button b, Mods m)
+    {
         if (pressed_)
             release();                                   // an open press ends first, as press() ends one
-        const PointerEvent e = pointerAt(x, y, m, 1);
+        const PointerEvent e = pointerAt(x, y, m, 1, b);
         pointer_ = { x, y };
         panel_.pointerMove(e);
         panel_.pointerDown(e);
@@ -283,9 +300,14 @@ namespace funkgui
 
     void HeadlessHost::doubleClick(float x, float y, Mods m)
     {
+        doubleClick(x, y, Button::left, m);
+    }
+
+    void HeadlessHost::doubleClick(float x, float y, Button b, Mods m)
+    {
         if (pressed_)
             release();
-        const PointerEvent one = pointerAt(x, y, m, 1), two = pointerAt(x, y, m, 2);
+        const PointerEvent one = pointerAt(x, y, m, 1, b), two = pointerAt(x, y, m, 2, b);
         pointer_ = { x, y };
         panel_.pointerMove(one);
         panel_.pointerDown(one);
@@ -297,9 +319,14 @@ namespace funkgui
 
     void HeadlessHost::drag(float x0, float y0, float x1, float y1, int steps, Mods m)
     {
+        drag(x0, y0, x1, y1, Button::left, steps, m);
+    }
+
+    void HeadlessHost::drag(float x0, float y0, float x1, float y1, Button b, int steps, Mods m)
+    {
         if (pressed_)
             release();
-        const PointerEvent start = pointerAt(x0, y0, m, 1);
+        const PointerEvent start = pointerAt(x0, y0, m, 1, b);
         panel_.pointerMove(start);
         panel_.pointerDown(start);
         const int n = steps < 1 ? 1 : steps;
@@ -308,9 +335,9 @@ namespace funkgui
             const float t = static_cast<float>(k) / static_cast<float>(n);
             const float x = k == n ? x1 : x0 + (x1 - x0) * t;
             const float y = k == n ? y1 : y0 + (y1 - y0) * t;
-            panel_.pointerDrag(pointerAt(x, y, m, 1));
+            panel_.pointerDrag(pointerAt(x, y, m, 1, b));
         }
-        panel_.pointerUp(pointerAt(x1, y1, m, 1));
+        panel_.pointerUp(pointerAt(x1, y1, m, 1, b));
         pointer_ = { x1, y1 };
     }
 
@@ -327,15 +354,39 @@ namespace funkgui
         panel_.wheel(w);
     }
 
+    bool HeadlessHost::wheel(const WheelEvent& w)
+    {
+        pointer_ = { w.x, w.y };
+        PointerEvent e = pointerAt(w.x, w.y, w.mods, 1);
+        e.popup = false;                                 // Ctrl with a wheel is a modifier (zoom), not a popup
+        panel_.pointerMove(e);
+        return panel_.wheel(w);
+    }
+
+    bool HeadlessHost::magnify(const MagnifyEvent& g)
+    {
+        pointer_ = { g.x, g.y };
+        PointerEvent e = pointerAt(g.x, g.y, g.mods, 1);
+        e.popup = false;
+        panel_.pointerMove(e);
+        return panel_.magnify(g);
+    }
+
     // ---- FSynth G1: a drag in steps, file drops ---------------------------------------------------------------------
 
     void HeadlessHost::press(float x, float y, Mods m)
     {
+        press(x, y, Button::left, m);
+    }
+
+    void HeadlessHost::press(float x, float y, Button b, Mods m)
+    {
         if (pressed_)
             release();                                   // a second press while pressed releases first
-        const PointerEvent e = pointerAt(x, y, m, 1);
+        const PointerEvent e = pointerAt(x, y, m, 1, b);
         pointer_ = { x, y };
         pressMods_ = m;
+        pressButton_ = b;
         pressed_ = true;
         panel_.pointerMove(e);
         panel_.pointerDown(e);
@@ -354,7 +405,7 @@ namespace funkgui
             const float py = k == n ? y : y0 + (y - y0) * t;
             pointer_ = { px, py };
             if (pressed_)
-                panel_.pointerDrag(pointerAt(px, py, m, 1));
+                panel_.pointerDrag(pointerAt(px, py, m, 1, pressButton_));
             else
                 panel_.pointerMove(pointerAt(px, py, m, 1));
         }
@@ -365,7 +416,7 @@ namespace funkgui
         if (!pressed_)
             return;
         pressed_ = false;
-        panel_.pointerUp(pointerAt(pointer_.x, pointer_.y, pressMods_, 1));
+        panel_.pointerUp(pointerAt(pointer_.x, pointer_.y, pressMods_, 1, pressButton_));
     }
 
     bool HeadlessHost::dropFiles(std::vector<std::string> paths, float x, float y)

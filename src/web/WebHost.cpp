@@ -38,6 +38,9 @@
 //   and when the document is hidden. Its late release, should it come, is a release without a press.
 // - Buttons. pointerdown is the first button to go down and pointerup the last to come up, so a press is one button
 //   from the Panel's side whatever else is pressed during it. A release without a press the host took is ignored.
+//   F1: its PointerEvent::button is web::buttonFromDom of the pressing button, on the press, its drags and its
+//   release; a move with no press says left. The middle button is still not taken (web::takesButton), so a browser's
+//   middle click (autoscroll, paste on Linux) is the page's as before. A pinch reaches the page as a wheel with Ctrl.
 // - Click counts are ClickCounter's, over client px and the events' timeStamp. A move with no press counts 1.
 // - A zoom change (a click, a preference revision, a window resize) is applied at the start of the next frame, as in
 //   EditorHost; only the constructor sizes the canvas at once. A window resize always nudges: it is also how a
@@ -478,9 +481,10 @@ namespace funkgui
     }
 
     // Client px -> the Panel's logical px, through the canvas's box.
-    PointerEvent WebHost::pointer(const DomPoint& at, int domMods, bool rightButton, int clicks) const
+    PointerEvent WebHost::pointer(const DomPoint& at, int domMods, bool rightButton, int clicks, Button button) const
     {
         PointerEvent p;
+        p.button = button;                           // F1: the press's (web::buttonFromDom); left for a plain move
         p.x = web::toLogical(at.clientX, at.left, at.width, logicalW_);
         p.y = web::toLogical(at.clientY, at.top, at.height, logicalH_);
         p.mods = modsOf(domMods);
@@ -538,7 +542,8 @@ namespace funkgui
                 host.pressedButton_ = button;
                 host.pressedPointer_ = pointerId;
                 const int clicks = host.clicks_.down(timeMs, clientX, clientY, button);
-                host.lastPress_ = host.pointer(at, domMods, button == web::kButtonRight, clicks);
+                host.lastPress_ = host.pointer(at, domMods, button == web::kButtonRight, clicks,
+                                               web::buttonFromDom(button));
                 host.panel_.pointerDown(host.lastPress_);
                 host.updateCursor();
                 return 1;                            // the listener focuses the canvas and captures the pointer
@@ -555,7 +560,7 @@ namespace funkgui
                 {
                     host.clicks_.moved(clientX, clientY);
                     host.lastPress_ = host.pointer(at, domMods, host.pressedButton_ == web::kButtonRight,
-                                                   host.clicks_.count(timeMs));
+                                                   host.clicks_.count(timeMs), web::buttonFromDom(host.pressedButton_));
                     host.panel_.pointerDrag(host.lastPress_);
                 }
                 else
@@ -568,7 +573,8 @@ namespace funkgui
                 if (!host.pressed_)
                     return 0;                        // the release of a press the host did not take
                 const int clicks = host.clicks_.count(timeMs);
-                host.endPress(host.pointer(at, domMods, host.pressedButton_ == web::kButtonRight, clicks),
+                host.endPress(host.pointer(at, domMods, host.pressedButton_ == web::kButtonRight, clicks,
+                                           web::buttonFromDom(host.pressedButton_)),
                               clicks >= 2);
                 return 0;
             }

@@ -43,6 +43,21 @@ namespace funkgui
         void  drag(float x0, float y0, float x1, float y1, int steps = 8, Mods = {});
         void  wheel(float x, float y, float dy, bool smooth = false, Mods = {});
         void  keys(const char* spec);          // HR replayKeys grammar + home,end,pageup,pagedown
+
+        // ---- F1: buttons, whole wheel events, magnify -------------------------------------------------------------
+        // The calls above send Button::left, as before. These send `button` on every pointer event of the gesture
+        // (its pointerMove first, as above, included) and otherwise the same events in the same order; popup is ctrl
+        // or Button::right (JUCE's isPopupMenu). press(x, y, button, m) carries the button through moveTo's drags and
+        // release(), as it carries the Mods.
+        void  click(float x, float y, Button, Mods = {});
+        void  doubleClick(float x, float y, Button, Mods = {});
+        void  drag(float x0, float y0, float x1, float y1, Button, int steps = 8, Mods = {});
+        void  press(float x, float y, Button, Mods = {});
+        // The whole event as given (dx, reversed, inertial, Mods): pointerMove at (e.x, e.y) with e.mods and popup
+        // false (Ctrl here is a wheel modifier, not a popup), then Panel::wheel(e). Returns the Panel's answer.
+        bool  wheel(const WheelEvent&);
+        // pointerMove at (e.x, e.y) with e.mods and popup false, then Panel::magnify(e). Returns the Panel's answer.
+        bool  magnify(const MagnifyEvent&);
         std::vector<A11yItem> accessibility() const;
         bool  writeDump(const char* path) const;                     // the last draw()'s frame, dump v2
         bool  writePng (const char* path, int supersample = 2) const;   // SoftRaster: agents can look at frames
@@ -206,6 +221,7 @@ namespace funkgui
         std::string clipboard_;                      // FSynth G1: setClipboard(), copyText()
         Point    pointer_{};                         // the last position sent
         Mods     pressMods_{};                       // the Mods of the press in progress
+        Button   pressButton_ = Button::left;        // F1: and its button
         bool     pressed_ = false;                   // between press() and release()
     };
 }

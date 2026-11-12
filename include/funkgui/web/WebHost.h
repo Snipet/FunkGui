@@ -198,7 +198,8 @@ namespace funkgui
         {
             double clientX, clientY, left, top, width, height;
         };
-        PointerEvent pointer(const DomPoint&, int domMods, bool rightButton, int clicks) const;
+        PointerEvent pointer(const DomPoint&, int domMods, bool rightButton, int clicks,
+                             Button button = Button::left) const;
         Mods   modsOf(int domMods) const noexcept;
         void   endPress(const PointerEvent& at, bool doubleClick);
         void   updateCursor();
