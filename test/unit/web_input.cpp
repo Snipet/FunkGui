@@ -7,7 +7,7 @@
 //   platform.*  which browser platform names are Apple's
 //   mods.*      shift, ctrl, alt and meta as Mods: on Apple's platforms cmd is Meta; elsewhere Ctrl sets cmd AND ctrl
 //               and Meta is nothing (JUCE)
-//   button.*    the buttons a host takes (left and right; never the middle one)
+//   button.*    the buttons a host takes (left and right; never the middle one), and (F1) buttonFromDom
 //   popup.*     the right button; Ctrl on Apple's platforms only
 //   logical.*   client px to the Panel's px at 100, 125, 150 and 175 %, bit for bit, with a fractional canvas origin
 //   key.*       EditorHost's key table entry by entry; the space bar's character; A..Z lower-cased under cmd only;
@@ -89,6 +89,10 @@ int main(int argc, char** argv)
     P.eq("button.middle_ignored", web::takesButton(1), 0);
     P.eq("button.right_taken", web::takesButton(2), 1);
     P.eq("button.back_ignored", web::takesButton(3) || web::takesButton(4) || web::takesButton(-1), 0);
+    P.eq("button.from_dom.left", web::buttonFromDom(0) == funkgui::Button::left, 1);     // F1
+    P.eq("button.from_dom.middle", web::buttonFromDom(1) == funkgui::Button::middle, 1);
+    P.eq("button.from_dom.right", web::buttonFromDom(2) == funkgui::Button::right, 1);
+    P.eq("button.from_dom.other", web::buttonFromDom(3) == funkgui::Button::left, 1);
     P.eq("popup.left", web::popupFromDom(false, false, true) || web::popupFromDom(false, false, false), 0);
     P.eq("popup.right_apple", web::popupFromDom(true, false, true), 1);
     P.eq("popup.right_other", web::popupFromDom(true, false, false), 1);

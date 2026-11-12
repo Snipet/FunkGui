@@ -171,6 +171,20 @@ namespace funkgui
             return out;
         }
 
+        // F1: the button of a press, its drags and its release (JUCE's mouseUp carries the buttons as they were just
+        // before the release). Left when none is down (a move) and when several are: the left one first, then the
+        // right, then the middle.
+        Button buttonFrom(const juce::ModifierKeys& m)
+        {
+            if (m.isLeftButtonDown())
+                return Button::left;
+            if (m.isRightButtonDown())
+                return Button::right;
+            if (m.isMiddleButtonDown())
+                return Button::middle;
+            return Button::left;
+        }
+
         // A file written beside `path` and renamed onto it once closed: a reader that polls for the file (the capture
         // script) never sees half of it (HR SdfCanvas.cpp:290-319).
         template <typename WriteFn>
@@ -815,6 +829,7 @@ namespace funkgui
         p.mods = modsFrom(e.mods);
         p.clicks = e.getNumberOfClicks();
         p.popup = e.mods.isPopupMenu();              // right-click or ctrl-click: the host menu, never a write
+        p.button = buttonFrom(e.mods);               // F1: a middle press was (and is) a press; now it says so
         return p;
     }
 
@@ -906,6 +921,21 @@ namespace funkgui
         updateCursor();
         if (!used)
             juce::Component::mouseWheelMove(e, wheel);
+    }
+
+    // F1: a trackpad's pinch. Like the wheel, one the Panel does not use goes to the parent.
+    void EditorHost::mouseMagnify(const juce::MouseEvent& e, float scaleFactor)
+    {
+        MagnifyEvent g;
+        g.x = e.position.x / zoomScale_;
+        g.y = e.position.y / zoomScale_;
+        g.scale = scaleFactor;
+        g.mods = modsFrom(e.mods);
+        nudgeFullRate();
+        const bool used = panel_->magnify(g);
+        updateCursor();
+        if (!used)
+            juce::Component::mouseMagnify(e, scaleFactor);
     }
 
     bool EditorHost::keyPressed(const juce::KeyPress& k)

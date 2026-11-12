@@ -40,6 +40,7 @@ namespace funkgui
         virtual void  pointerUp(const PointerEvent&) {}
         virtual void  doubleClick(const PointerEvent&) {}
         virtual bool  wheel(const WheelEvent&) { return false; }
+        virtual bool  magnify(const MagnifyEvent&) { return false; }   // F1: true = consumed (else the parent's)
         virtual bool  key(const KeyEvent&) { return false; }       // true = consumed (Logic/Live must not swallow it)
         virtual Cursor cursor() const { return Cursor::normal; }
         virtual void  accessibility(std::vector<A11yItem>&) const = 0;

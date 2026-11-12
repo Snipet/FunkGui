@@ -37,6 +37,9 @@ namespace funkgui::shaders::detail
     // id draws whatever is registered and bound under it now (gpu/EditorHost.h "Unchanged frames"). Never 0.
     uint64_t generation();
 
+    // F1 (gpu/GpuInfo.h): the programs registered (set() and not removed), whether or not bgfx has built them.
+    uint32_t programCount();
+
     // Destroys every bgfx object the registry holds (the programs, their fragment shaders and sampler uniforms, the
     // vertex shader, the two uniforms and the textures) and keeps the binaries, the texels and the bindings. Called by
     // BgfxContext::destroyResources() while bgfx is still up.

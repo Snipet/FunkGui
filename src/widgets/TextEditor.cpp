@@ -8,6 +8,7 @@
 #include <funkgui/text/FontService.h>
 #include <funkgui/text/TextFit.h>
 #include <funkgui/widgets/FocusRing.h>
+#include <funkgui/widgets/Scroll.h>
 
 #include <algorithm>
 #include <cctype>
@@ -34,11 +35,9 @@ namespace funkgui
     {
         constexpr float kBorder = 1.0f, kRadius = 2.0f;
         constexpr float kCaretW = 1.5f;
-        constexpr float kBarW = 4.0f, kBarInset = 2.0f, kBarMin = 12.0f;
+        using scroll::kBarW;                             // F1: the wheel rule and the bars are widgets/Scroll.h's
+        using scroll::kBarInset;
         constexpr float kGutterPad = 6.0f;
-        constexpr float kWheelPxPerUnit = 512.0f;        // smooth: JUCE's precise device gives 0.5/256 per point
-        constexpr float kWheelNotch = 50.0f / 256.0f;    // one notch of a notched wheel (JUCE on X11)
-        constexpr float kRowsPerNotch = 3.0f;
         constexpr float kWrapSlack = 2.0f;               // a wrapped row leaves this much room for the caret
 
         bool isWordChar(char c) noexcept { return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_'; }
@@ -557,10 +556,9 @@ namespace funkgui
         const Rect ta = textArea();
         const Rect r{ rightEdge() - kBarInset - kBarW, ta.y, kBarW,
                       std::max(0.0f, ta.h - (hbarShown() ? kBarW + kBarInset : 0.0f)) };
-        const float content = std::max(contentHeight(), 1.0f);
-        thumbH = std::min(r.h, std::max(kBarMin, r.h * ta.h / content));
-        const float range = maxScrollY();
-        thumbY = r.y + (range > 0.0f ? scrollY_ / range : 0.0f) * (r.h - thumbH);
+        const scroll::Thumb t = scroll::thumb(r.h, contentHeight(), ta.h, scrollY_);
+        thumbH = t.size;
+        thumbY = r.y + t.pos;
         return r;
     }
 
@@ -569,10 +567,9 @@ namespace funkgui
         const Rect inner = innerRect(), ta = textArea();
         const Rect r{ ta.x, inner.bottom() - kBarInset - kBarW,
                       std::max(0.0f, ta.w - (vbarShown() ? kBarW + kBarInset : 0.0f)), kBarW };
-        const float content = std::max(maxLineW_ + kCaretW + 1.0f, 1.0f);
-        thumbW = std::min(r.w, std::max(kBarMin, r.w * ta.w / content));
-        const float range = maxScrollX();
-        thumbX = r.x + (range > 0.0f ? scrollX_ / range : 0.0f) * (r.w - thumbW);
+        const scroll::Thumb t = scroll::thumb(r.w, maxLineW_ + kCaretW + 1.0f, ta.w, scrollX_);   // shown: no wrap
+        thumbW = t.size;
+        thumbX = r.x + t.pos;
         return r;
     }
 
@@ -1888,9 +1885,8 @@ namespace funkgui
         const bool canScroll = vbarShown() || hbarShown();
         if (!canScroll)
             return false;
-        const float px = e.smooth ? kWheelPxPerUnit : kRowsPerNotch * rowH_ / kWheelNotch;
-        scrollY_ -= e.dy * px;
-        scrollX_ -= e.dx * px;
+        scrollY_ -= scroll::wheelPx(e.dy, e.smooth, rowH_);
+        scrollX_ -= scroll::wheelPx(e.dx, e.smooth, rowH_);
         clampScroll();
         return true;                                     // an edge bump stays here: the parent never scrolls under it
     }

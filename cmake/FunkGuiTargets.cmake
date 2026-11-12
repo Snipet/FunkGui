@@ -449,6 +449,9 @@ if(FUNKGUI_WITH_JUCE)
 else()
   target_compile_definitions(FunkGuiCore INTERFACE FUNKGUI_HAS_JUCE=0)
 endif()
+# F1: funkgui::version() (core/Version.h) answers project(FunkGui VERSION ...), which src/core/Version.cpp reads from
+# FUNKGUI_VERSION_STRING.
+target_compile_definitions(FunkGuiCore INTERFACE "FUNKGUI_VERSION_STRING=\"${FUNKGUI_VERSION}\"")
 
 #=======================================================================================================================
 # FunkGuiGpu (FunkGui::gpu), FunkGuiShaders, licences: only with bgfx (02 §1.2, §1.5, §1.6)

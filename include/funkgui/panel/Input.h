@@ -12,12 +12,19 @@ namespace funkgui
         bool shift = false, cmd = false, alt = false, ctrl = false;
     };
 
+    // F1: the mouse button of a press, its drags and its release. A host that cannot tell (a move with no button
+    // down, an old HeadlessHost call) says left. A Panel that never reads it behaves as before: EditorHost delivered a
+    // middle press as a left one, and still delivers it, now with Button::middle. popup is unchanged and independent:
+    // a right press is Button::right and popup; a ctrl-click is popup with Button::left.
+    enum class Button : uint8_t { left, middle, right };
+
     struct PointerEvent
     {
-        float x = 0.0f, y = 0.0f;
-        Mods  mods{};
-        int   clicks = 1;
-        bool  popup = false;                     // right-click or ctrl-click: the host menu, never a write
+        float  x = 0.0f, y = 0.0f;
+        Mods   mods{};
+        int    clicks = 1;
+        bool   popup = false;                    // right-click or ctrl-click: the host menu, never a write
+        Button button = Button::left;            // F1: see Button
     };
 
     struct WheelEvent
@@ -25,6 +32,15 @@ namespace funkgui
         float x = 0.0f, y = 0.0f;
         float dx = 0.0f, dy = 0.0f;              // JUCE's MouseWheelDetails deltas
         bool  smooth = false, reversed = false, inertial = false;
+        Mods  mods{};
+    };
+
+    // F1: a trackpad's pinch (JUCE's mouseMagnify). scale is the factor since the last event: > 1 opens (zoom in),
+    // < 1 closes. A browser reports a pinch as a wheel with Ctrl, so a web host never sends one.
+    struct MagnifyEvent
+    {
+        float x = 0.0f, y = 0.0f;
+        float scale = 1.0f;
         Mods  mods{};
     };
 

@@ -1040,6 +1040,8 @@ namespace funkgui::shaders
 
         uint64_t generation() { return registry().generation; }
 
+        uint32_t programCount() { return static_cast<uint32_t>(registry().entries.size()); }   // F1: gpuInfo()
+
         uint64_t metalCompileCount()
         {
 #if defined(__APPLE__)

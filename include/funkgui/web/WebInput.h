@@ -71,6 +71,13 @@ namespace funkgui::web
 
     constexpr bool takesButton(int button) noexcept { return button == kButtonLeft || button == kButtonRight; }
 
+    // F1: PointerEvent::button of a press the host takes, from MouseEvent.button: 2 is Button::right, 1 (which
+    // takesButton() still refuses) Button::middle, anything else Button::left.
+    constexpr Button buttonFromDom(int button) noexcept
+    {
+        return button == kButtonRight ? Button::right : button == 1 ? Button::middle : Button::left;
+    }
+
     // PointerEvent::popup: the right button, or Ctrl on Apple's platforms.
     constexpr bool popupFromDom(bool rightButton, bool ctrl, bool apple) noexcept
     {

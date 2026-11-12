@@ -195,6 +195,7 @@ namespace funkgui
         void mouseUp(const juce::MouseEvent&) override;
         void mouseDoubleClick(const juce::MouseEvent&) override;
         void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+        void mouseMagnify(const juce::MouseEvent&, float scaleFactor) override;   // F1: Panel::magnify
         bool keyPressed(const juce::KeyPress&) override;   // Panel::key's result: true keeps Logic/Live from eating keys
         bool isInterestedInFileDrag(const juce::StringArray&) override;
         void filesDropped(const juce::StringArray&, int, int) override;
