@@ -3,6 +3,42 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.27.0 — 2026-11-15 · MINOR: mouse buttons and pinch, the TextEditor's scrolling made public, version() and gpuInfo()
+
+Golden impact: **none** (no golden file changed; nothing records, draws, dumps or hashes differently: the old
+`HeadlessHost` calls send `Button::left`, bit for bit as before, and the `TextEditor` scrolls and draws its bar by
+the same arithmetic, now `widgets/Scroll.h`'s). New tests: `fg.host.buttons`, `fg.host.magnify`, `fg.widgets.scroll`
+and `fg.gpu.info` (its live rows where GPU pictures exist; skipped and noted elsewhere), with `button.from_dom` rows
+in `fg.web.input`. **Verified on Linux x86-64 only** (an Ubuntu 24.04 container, Mesa's lavapipe under Xvfb with
+openbox), at this commit: `agent-gui` 86/86, `agent` 74/74 and `nojuce` 63/63, no warnings, `tools/verify.sh` with
+nothing blocking, drifting or missing. **Not run: macOS** (so nothing on Metal: `fg.gpu.info`'s live rows, the live
+tests, `EditorHost`'s `mouseMagnify` from a real trackpad), **`web`** (`WebHost`'s change is compiled by no preset run
+here; its `fg.web.input` rows are plain C++ and pass in all three), Windows, and FCompressor. A consumer
+(TestingPlayground's circuit editor) builds against this code and passes its suite on Linux; its CI is the first
+build of this release on macOS and Windows.
+
+- **A press's mouse button** (`panel/Input.h`): `enum class Button { left, middle, right }` and
+  `PointerEvent::button`, the button of a press, its drags and its release. `EditorHost` sets it from JUCE's
+  modifiers; `WebHost` from the DOM's button (the middle button is still not taken there); `HeadlessHost` gains
+  `Button` overloads of `click`, `doubleClick`, `drag` and `press`. A Panel that never reads it behaves as before:
+  a middle press was delivered as a left one and still is, now saying `Button::middle`. `popup` is unchanged and
+  independent of it: a right press is `Button::right` and `popup`; a ctrl-click is `popup` with `Button::left`.
+- **A trackpad's pinch:** `MagnifyEvent` (its place, `scale` since the last event: above 1 opens, below 1 closes, and
+  the modifiers) and `Panel::magnify(const MagnifyEvent&)`, true when consumed. `EditorHost` forwards JUCE's
+  `mouseMagnify`; `HeadlessHost` gains `magnify(const MagnifyEvent&)` and `wheel(const WheelEvent&)`. A browser
+  reports a pinch as a wheel with Ctrl, so a web host never sends one.
+- **`widgets/Scroll.h`** (`funkgui::scroll`): the `TextEditor`'s wheel rule and scrollbar geometry, public, so a list
+  or any other view that scrolls moves and draws as the `TextEditor` does: `kWheelPxPerUnit`, `kWheelNotch`,
+  `kRowsPerNotch`, `kBarW`, `kBarInset`, `kBarMin`, `wheelPx(delta, smooth, rowHeight)` and
+  `thumb(area, content, view, offset)`. `TextEditor` uses them itself: there is one definition. Plain arithmetic, no
+  JUCE.
+- **`funkgui::version()`** (`core/Version.h`): `project(FunkGui VERSION ...)` of the FunkGui compiled into the
+  binary, as "MAJOR.MINOR.PATCH", for a product's about or debug page. Core: no JUCE, no bgfx.
+- **`funkgui::gpuInfo()`** (`gpu/GpuInfo.h`): what the GPU layer runs on, read-only and with no bgfx type: whether
+  bgfx runs, the renderer's name, the GPU's vendor and device ids, the largest texture side, the transient vertex
+  buffer's size, whether primitives are drawn as instances, the picture textures and custom shaders alive, and
+  whether the platform has GPU pictures. While bgfx does not run, the fields that come from it are empty or 0.
+
 ## v0.26.1 — 2026-11-09 · PATCH: custom shaders under Direct3D 11
 
 Golden impact: **none** (no golden file changed; nothing records, draws, dumps or hashes differently: Metal's and
