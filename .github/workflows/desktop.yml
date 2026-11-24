@@ -1,0 +1,438 @@
+# FunkGui on the desktop without JUCE (v0.28.0): configures the `desktop` preset (FUNKGUI_WITH_JUCE=OFF, bgfx,
+# FunkGui::desktop over SDL3), builds it and runs its tests on macOS (Apple silicon, Metal), Windows (x64, clang-cl,
+# Direct3D 11) and Linux (x86-64, Clang, Vulkan on X11), on every push to main and to a claude/** branch, on pull
+# requests, and by hand. Each platform's gallery executable is kept as an artifact, funkgui-gallery-desktop-<platform>,
+# with the licences of what it holds and a README.txt that says how to run it: what a person downloads to see
+# FunkGui::desktop on a machine of theirs.
+#
+# Nothing here has a GPU or a screen of its own. On Linux the tests and the gallery run on a headless X server (Xvfb,
+# with openbox as its window manager) and Mesa's software Vulkan (lavapipe): the real GPU path, drawn by a software
+# driver. On macOS and Windows they run on the runner's own session: Metal in a virtual machine, and Direct3D 11's
+# software adapter. `funkgui_gallery_desktop --frames 120 --shot` writes the frame read back from the GPU as a PNG,
+# kept as funkgui-gallery-desktop-pictures-<platform>. What no runner shows (a real GPU, a real screen, a person
+# dragging a window's edge) is proven by a person running the artifact.
+#
+# The order is for a person waiting on an artifact: the gallery is built and kept first, then the desktop host's own
+# tests (fg.desktop.*) are built and run, then the rest of the preset and all its tests. Each fails the job on every
+# platform. Windows builds what does not need POSIX (FunkGui's gallery probe and six of its older tests do, and are
+# not defined there).
+#
+# Three caches spare a run what does not change between runs (actions/cache's restore and save, apart):
+#
+#   sources   bgfx.cmake (with bgfx, bx and bimg) and SDL at their pins, cloned by git into the deps folder FunkGui
+#             reads (FUNKGUI_DEPS_DIR, outside the checkout), where its configure finds them and asserts their
+#             commits. Key sources-<platform>-<bgfx.cmake's commit>-<SDL's commit>.
+#   shaderc   bgfx's shader compiler, the build's slowest part by far (spirv-tools, glslang and tint: about 2,000
+#             CPU-seconds), kept as FunkGui's prebuilt one, tools/shaderc-<tag>/shaderc and its shaderc.stamp, in the
+#             same deps folder. Key shaderc-<platform>-<bgfx.cmake's commit>. A run that missed builds it first and
+#             saves it at once, whatever happens to the rest of the run.
+#   compiler  the compilers' objects, through CMake's compiler launchers, in a folder outside the checkout of at most
+#             2 GB: ccache on macOS and Linux, sccache on Windows (ccache refuses clang-cl's /clang: options, which
+#             FunkGui's own targets pass; sccache's release is pinned by its SHA-256 below). Key
+#             <tool>-<platform>-<hash of cmake/FunkGuiDeps.cmake>-<commit>, restored from the newest with the same
+#             pins, else the newest of the platform. Saved once the gallery is built, on main, or when nothing was
+#             restored (a branch's first run), so the repository's 10 GB of caches stay main's.
+#
+# A claude/** branch of this repository is built by its push; its pull request's run would be the same build twice and
+# is skipped. Each action is pinned to its release's full commit SHA, with the tag in a comment.
+name: Desktop
+
+on:
+  push:
+    branches: [main, 'claude/**']
+  pull_request:
+  workflow_dispatch:
+
+# nothing by default; each job asks for what it needs
+permissions: {}
+
+# a newer push to a pull request replaces its run in flight; a branch's runs all finish (each warms the caches)
+concurrency:
+  group: desktop-${{ github.event_name }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name != github.repository ||
+      !startsWith(github.head_ref, 'claude/')
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: macos-arm64, os: macos-15, jobs: 3, exe: funkgui_gallery_desktop }
+          - { platform: windows-x64, os: windows-latest, jobs: 4, exe: funkgui_gallery_desktop.exe }
+          - { platform: linux-x64, os: ubuntu-24.04, jobs: 4, exe: funkgui_gallery_desktop }
+    defaults:
+      run:
+        shell: bash
+    env:
+      BUILD: build-desktop
+    steps:
+      # what FunkGui::desktop needs to build on Linux (README, "Desktop"), and what the tests need to run headless
+      - name: Packages (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang ninja-build ccache pkg-config \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxtst-dev \
+            libxkbcommon-dev libgl1-mesa-dev libasound2-dev libpulse-dev libudev-dev libdbus-1-dev \
+            libvulkan1 mesa-vulkan-drivers xvfb xauth openbox
+          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)
+          [ -n "$icd" ] || { echo "no lavapipe ICD"; exit 1; }
+          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
+
+      - name: ccache and ninja (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          command -v ccache || HOMEBREW_NO_AUTO_UPDATE=1 brew install ccache
+          command -v ninja || HOMEBREW_NO_AUTO_UPDATE=1 brew install ninja
+
+      # sccache's release, checked against the SHA-256 its release published (the archive's .sha256), written here so
+      # that a replaced archive fails the run; a new version changes all three lines
+      - name: sccache (Windows)
+        if: runner.os == 'Windows'
+        env:
+          VERSION: v0.19.0
+          SHA256: 130e4f8eb672e76590e9993c2ab890c4763b88238577bb11d8062158c7698353
+        run: |
+          name="sccache-${VERSION}-x86_64-pc-windows-msvc"
+          cd "$RUNNER_TEMP"   # relative names below: Git Bash's tar takes D:\... for a remote host
+          curl -fsSL --retry 3 -o "$name.tar.gz" "https://github.com/mozilla/sccache/releases/download/${VERSION}/$name.tar.gz"
+          echo "$SHA256  $name.tar.gz" | sha256sum -c
+          tar -xzf "$name.tar.gz"
+          exe=$(cygpath -m "$RUNNER_TEMP/$name/sccache.exe")
+          "$exe" --version
+          echo "FG_SCCACHE=$exe" >> "$GITHUB_ENV"
+
+      - name: Visual Studio's environment and its clang-cl (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $clang = 'Microsoft.VisualStudio.Component.VC.Llvm.Clang'
+          $vs = & $vswhere -latest -products * -requires $clang -property installationPath
+          if (-not $vs) { throw "no Visual Studio with its C++ Clang tools" }
+          cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && set" | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$') {
+              "$($matches[1])=$($matches[2])" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+            }
+          }
+          "$vs\VC\Tools\Llvm\x64\bin" | Out-File $env:GITHUB_PATH -Append -Encoding utf8   # its clang-cl first
+
+      # the files as they are in the repository, on Windows too: the golden files and the shaders are compared and
+      # hashed byte for byte, and Git for Windows would check them out with CRLF line ends
+      - name: Line ends as committed (Windows)
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # the pins, which name the caches, and the folders outside the checkout: the deps folder FunkGui's configure
+      # reads (FUNKGUI_DEPS_DIR) and the compiler cache's
+      - name: The pins, the caches' folders and keys
+        id: keys
+        run: |
+          pin() { sed -nE "s/^set\($1 +([^ )]+)\).*/\1/p" cmake/FunkGuiDeps.cmake; }
+          bgfx_tag=$(pin FUNKGUI_BGFX_TAG); bgfx_sha=$(pin FUNKGUI_BGFX_SHA)
+          sdl_tag=$(pin FUNKGUI_SDL_TAG); sdl_sha=$(pin FUNKGUI_SDL_SHA)
+          for v in "$bgfx_tag" "$bgfx_sha" "$sdl_tag" "$sdl_sha"; do
+            [ -n "$v" ] || { echo "a pin is missing in cmake/FunkGuiDeps.cmake"; exit 1; }
+          done
+          {
+            echo "bgfx_tag=$bgfx_tag"; echo "bgfx_sha=$bgfx_sha"; echo "sdl_tag=$sdl_tag"; echo "sdl_sha=$sdl_sha"
+          } >> "$GITHUB_OUTPUT"
+          deps="$RUNNER_TEMP/fg-deps"
+          if [ "$RUNNER_OS" = Windows ]; then deps=$(cygpath -m "$deps"); fi
+          mkdir -p "$deps/tools"
+          echo "FUNKGUI_DEPS_DIR=$deps" >> "$GITHUB_ENV"
+          if [ "$RUNNER_OS" = Windows ]; then
+            dir=$(cygpath -m "$RUNNER_TEMP/sccache")
+            mkdir -p "$dir"
+            echo "cache=sccache" >> "$GITHUB_OUTPUT"
+            {
+              echo "FG_CI_CACHE=$dir"
+              echo "SCCACHE_DIR=$dir"
+              echo "SCCACHE_CACHE_SIZE=2G"
+              # one server for the build steps, stopped after them; a server that fails leaves the compile to
+              # clang-cl, uncached, rather than failing the build
+              echo "SCCACHE_IDLE_TIMEOUT=0"
+              echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1"
+            } >> "$GITHUB_ENV"
+          else
+            mkdir -p "$RUNNER_TEMP/ccache"
+            echo "cache=ccache" >> "$GITHUB_OUTPUT"
+            {
+              echo "FG_CI_CACHE=$RUNNER_TEMP/ccache"
+              echo "CCACHE_DIR=$RUNNER_TEMP/ccache"
+              echo "CCACHE_MAXSIZE=2G"
+              # the compiler by what it says it is, not by its file's time (Apple's clang is a shim)
+              echo "CCACHE_COMPILERCHECK=string:$(clang --version | cksum | cut -d' ' -f1)"
+            } >> "$GITHUB_ENV"
+          fi
+
+      - name: Restore the sources
+        id: sources
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ env.FUNKGUI_DEPS_DIR }}/bgfx.cmake-${{ steps.keys.outputs.bgfx_tag }}
+            ${{ env.FUNKGUI_DEPS_DIR }}/SDL-${{ steps.keys.outputs.sdl_tag }}
+          key: sources-${{ matrix.platform }}-${{ steps.keys.outputs.bgfx_sha }}-${{ steps.keys.outputs.sdl_sha }}
+
+      - name: Restore the shader compiler
+        id: shaderc
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.FUNKGUI_DEPS_DIR }}/tools/shaderc-${{ steps.keys.outputs.bgfx_tag }}
+          key: shaderc-${{ matrix.platform }}-${{ steps.keys.outputs.bgfx_sha }}
+
+      - name: Restore the compiler's cache
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.FG_CI_CACHE }}
+          key: ${{ steps.keys.outputs.cache }}-${{ matrix.platform }}-${{ hashFiles('cmake/FunkGuiDeps.cmake') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ steps.keys.outputs.cache }}-${{ matrix.platform }}-${{ hashFiles('cmake/FunkGuiDeps.cmake') }}-
+            ${{ steps.keys.outputs.cache }}-${{ matrix.platform }}-
+
+      # by git at the pinned tags, as FunkGui's own FetchContent would, into the folder its configure looks in first;
+      # the configure asserts each commit
+      - name: Fetch the sources
+        id: fetch
+        if: steps.sources.outputs.cache-hit != 'true'
+        env:
+          BGFX_TAG: ${{ steps.keys.outputs.bgfx_tag }}
+          SDL_TAG: ${{ steps.keys.outputs.sdl_tag }}
+        run: |
+          cd "$FUNKGUI_DEPS_DIR"
+          rm -rf "bgfx.cmake-$BGFX_TAG" "SDL-$SDL_TAG"
+          git -c advice.detachedHead=false clone --depth 1 --branch "$BGFX_TAG" --recurse-submodules \
+              --shallow-submodules https://github.com/bkaradzic/bgfx.cmake.git "bgfx.cmake-$BGFX_TAG"
+          git -c advice.detachedHead=false clone --depth 1 --branch "$SDL_TAG" \
+              https://github.com/libsdl-org/SDL.git "SDL-$SDL_TAG"
+          du -sh "bgfx.cmake-$BGFX_TAG" "SDL-$SDL_TAG"
+
+      - name: Save the sources
+        if: steps.fetch.outcome == 'success'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ env.FUNKGUI_DEPS_DIR }}/bgfx.cmake-${{ steps.keys.outputs.bgfx_tag }}
+            ${{ env.FUNKGUI_DEPS_DIR }}/SDL-${{ steps.keys.outputs.sdl_tag }}
+          key: ${{ steps.sources.outputs.cache-primary-key }}
+
+      # Release: the artifact is what a person runs. Warnings in FunkGui's own sources are errors on every platform.
+      - name: Configure
+        run: |
+          cmd=(cmake --preset desktop -DCMAKE_BUILD_TYPE=Release)
+          if [ "$RUNNER_OS" = Windows ]; then
+            cmd+=(-DCMAKE_C_COMPILER_LAUNCHER="$FG_SCCACHE" -DCMAKE_CXX_COMPILER_LAUNCHER="$FG_SCCACHE")
+          else
+            cmd+=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
+          fi
+          "${cmd[@]}"
+
+      - name: The compiler cache's statistics, zeroed
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then "$FG_SCCACHE" --zero-stats || true; else ccache -z; fi
+
+      # a run that missed builds the shader compiler first and keeps it at once as FunkGui's prebuilt one, so that a
+      # run that fails later has still warmed the slowest cache
+      - name: Build the shader compiler
+        id: build-shaderc
+        if: steps.shaderc.outputs.cache-hit != 'true'
+        env:
+          TAG: ${{ steps.keys.outputs.bgfx_tag }}
+          SHA: ${{ steps.keys.outputs.bgfx_sha }}
+        run: |
+          cmake --build "$BUILD" --target shaderc --parallel ${{ matrix.jobs }}
+          exe=shaderc; if [ "$RUNNER_OS" = Windows ]; then exe=shaderc.exe; fi
+          found=$(/usr/bin/find "$BUILD" -type f -name "$exe" | head -1)
+          echo "found: $found"
+          [ -n "$found" ] || { echo "::warning::no $exe under $BUILD: not cached"; exit 0; }
+          dir="$FUNKGUI_DEPS_DIR/tools/shaderc-$TAG"
+          mkdir -p "$dir"
+          cp "$found" "$dir/$exe"
+          echo "bgfx.cmake $SHA" > "$dir/shaderc.stamp"
+          ls -l "$dir"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Save the shader compiler
+        if: steps.build-shaderc.outputs.ready == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.FUNKGUI_DEPS_DIR }}/tools/shaderc-${{ steps.keys.outputs.bgfx_tag }}
+          key: ${{ steps.shaderc.outputs.cache-primary-key }}
+
+      # the gallery first: the artifact exists whatever the rest of the build does
+      - name: Build the gallery
+        id: gallery
+        run: cmake --build "$BUILD" --target funkgui_gallery_desktop --parallel ${{ matrix.jobs }}
+
+      - name: The artifact's folder
+        id: package
+        env:
+          # not PLATFORM: Visual Studio's environment has a Platform of its own, and Windows' names have no case
+          FG_PLATFORM: ${{ matrix.platform }}
+          EXE: ${{ matrix.exe }}
+        run: |
+          name="funkgui-gallery-desktop-$FG_PLATFORM"
+          out="$RUNNER_TEMP/artifact"
+          mkdir -p "$out/$name"
+          cp "$BUILD/tools/GalleryDesktop/$EXE" "$out/$name/"
+          cp -R "$BUILD/tools/GalleryDesktop/licences" "$out/$name/"
+          {
+            echo "FunkGui's gallery in a desktop window, without JUCE (FunkGui::desktop over SDL3 and bgfx)."
+            echo "Built by GitHub Actions from $GITHUB_REPOSITORY at $GITHUB_SHA ($GITHUB_REF_NAME), $FG_PLATFORM, Release."
+            echo
+            case "$FG_PLATFORM" in
+              windows-*)
+                echo "Run, from a Command Prompt or PowerShell in this folder:"
+                echo "    .\\$EXE"
+                echo "    .\\$EXE --info" ;;
+              macos-*)
+                echo "Run, from Terminal in this folder (the first line lets a downloaded program run):"
+                echo "    xattr -dr com.apple.quarantine ."
+                echo "    ./$EXE"
+                echo "    ./$EXE --info"
+                echo "(On a laptop's keyboard the F keys below want fn held.)" ;;
+              *)
+                echo "Run, from a terminal in this folder (an X11 or XWayland display and a Vulkan driver):"
+                echo "    ./$EXE"
+                echo "    ./$EXE --info" ;;
+            esac
+            echo
+            echo "A window opens with the gallery's section \"primitives\". F1 and F2 show the section before and"
+            echo "after it, F3 the other theme. --section <name> opens another (--list names them), --info prints the"
+            echo "version, the renderer and the window's size and scale and exits. When the window is closed the"
+            echo "program prints one line: fg.desktop: ok renderer=<name> frames=<n>"
+            echo
+            echo "A section has one fixed size, so its window cannot be resized or maximised: that is by design."
+            echo "To see a window that can, run it with --resize: a Panel that draws its own bounds (a frame on the"
+            echo "window's edges, a block in each corner, a grid, its size as text). While an edge is dragged the"
+            echo "frame should stay on the edge and the blocks in the corners."
+            echo
+            echo "licences/ holds the licences of the code and the font in the executable."
+          } > "$out/$name/README.txt"
+          cat "$out/$name/README.txt"
+          cd "$out"
+          if [ "$RUNNER_OS" = Windows ]; then
+            echo "path=$(cygpath -m "$out/$name")" >> "$GITHUB_OUTPUT"
+          else
+            # an artifact is a zip, which loses the executable bit: a tar inside it keeps it
+            tar -czf "$name.tar.gz" "$name"
+            echo "path=$out/$name.tar.gz" >> "$GITHUB_OUTPUT"
+          fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Keep the gallery
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: ${{ steps.package.outputs.path }}
+          retention-days: 30
+          if-no-files-found: error
+
+      # Linux: a headless desktop for the tests and the gallery (Xvfb and openbox, with Mesa's software Vulkan chosen
+      # above), left running for the rest of the job
+      - name: A headless desktop (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp > "$RUNNER_TEMP/xvfb.log" 2>&1 &
+          for i in $(seq 100); do [ -S /tmp/.X11-unix/X99 ] && break; sleep 0.1; done
+          DISPLAY=:99 openbox > "$RUNNER_TEMP/openbox.log" 2>&1 &
+          sleep 1
+          echo "DISPLAY=:99" >> "$GITHUB_ENV"
+
+      # the desktop host's own tests next, on every platform: fg.desktop.host opens a real (hidden) window on the
+      # platform's GPU path
+      - name: Build the desktop tests
+        id: desktop-tests
+        run: >-
+          cmake --build "$BUILD" --parallel ${{ matrix.jobs }} --target
+          fg_desktop_files fg_desktop_host fg_desktop_input fg_desktop_menu fg_desktop_png fg_desktop_prefs
+
+      - name: Test the desktop host
+        id: desktop-test
+        run: ctest --test-dir "$BUILD" -R '^fg\.desktop\.' --output-on-failure --parallel ${{ matrix.jobs }}
+
+      # the whole preset: FunkGuiCoreCheck, the JUCE-free tools and every test. On Windows the tools and tests whose
+      # sources need POSIX are not defined (the configure says which), and compiling the rest takes a quarter of an
+      # hour there: sccache has to preprocess each of some 2,000 sources to find it in its cache.
+      - name: Build the rest
+        id: rest
+        if: ${{ !cancelled() && steps.gallery.outcome == 'success' }}
+        run: cmake --build "$BUILD" --target all funkgui_tools funkgui_tests --parallel ${{ matrix.jobs }}
+
+      - name: The compiler cache's statistics
+        if: always()
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            "$FG_SCCACHE" --show-stats || true
+            "$FG_SCCACHE" --stop-server > /dev/null || true
+            du -sh "$SCCACHE_DIR" || true
+          else
+            ccache -s || true
+          fi
+
+      - name: Save the compiler's cache
+        if: >-
+          always() && steps.gallery.outcome == 'success' &&
+          (github.ref == 'refs/heads/main' || steps.cache.outputs.cache-matched-key == '')
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.FG_CI_CACHE }}
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+      # every test of the preset
+      - name: Test
+        id: test
+        if: ${{ !cancelled() && steps.rest.outcome == 'success' }}
+        run: ctest --test-dir "$BUILD" -L verify --output-on-failure --parallel ${{ matrix.jobs }}
+
+      # the gallery itself, drawn by the platform's GPU path and read back, whatever the tests did
+      - name: Run the gallery
+        id: run
+        if: ${{ !cancelled() && steps.gallery.outcome == 'success' }}
+        env:
+          EXE: ${{ matrix.exe }}
+        run: |
+          out="$RUNNER_TEMP/pictures"
+          mkdir -p "$out"
+          exe="$BUILD/tools/GalleryDesktop/$EXE"
+          rc=0
+          "$exe" --info || rc=$?
+          "$exe" --frames 120 --shot "$out/gallery-${{ matrix.platform }}.png" || rc=$?
+          "$exe" --section texteditor --theme 1 --frames 60 --shot "$out/texteditor-${{ matrix.platform }}.png" || rc=$?
+          "$exe" --resize --frames 30 --shot "$out/resize-${{ matrix.platform }}.png" || rc=$?
+          ls -l "$out" || true
+          exit $rc
+
+      - name: Keep the gallery's pictures
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: funkgui-gallery-desktop-pictures-${{ matrix.platform }}
+          path: ${{ runner.temp }}/pictures/
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Keep the test log
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tests-${{ matrix.platform }}
+          path: ${{ env.BUILD }}/Testing/Temporary/LastTest*.log
+          retention-days: 7
+          if-no-files-found: ignore

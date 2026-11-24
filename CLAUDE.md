@@ -46,10 +46,19 @@ only set of paths you may change.
 - Environment variables are read only through `funkgui::env("<NAME>")` (prefix added, cached on first use); no
   `getenv` in drawing code.
 - Anything that includes bgfx or Objective-C lives under `include/funkgui/gpu/` and `src/gpu/`; everything else must
-  compile with `FUNKGUI_WITH_BGFX=OFF`. `include/funkgui/test/Harness.h` stays header-only and JUCE-free.
+  compile with `FUNKGUI_WITH_BGFX=OFF`. `include/funkgui/test/Harness.h` stays header-only and JUCE-free. The one
+  exception is `src/desktop/` (v0.28.0), compiled only with `FUNKGUI_WITH_DESKTOP`, which needs bgfx: it may include
+  bgfx's headers and `src/gpu/`'s private ones, and no Objective-C (macOS's Metal layer comes from SDL's C calls).
+- An SDL header appears only in `src/desktop/`, `tools/GalleryDesktop/` and a test that links `FunkGui::desktop`
+  (`links=desktop`); `include/funkgui/desktop/` is plain C++ with no SDL and no bgfx header, and compiles in every
+  configuration (`fg.headers`). What needs no window (input rules, the menu overlay, the preferences' file, file
+  patterns) stays free of SDL so that a test drives it without one.
 - In the library, anything that needs JUCE lives under `gpu/`, `presets/`, `include/funkgui/juce/` or `src/juce/`
   (its JUCE-free counterpart in `src/nojuce/`), or behind `#if FUNKGUI_HAS_JUCE`; everything else must compile with
-  `FUNKGUI_WITH_JUCE=OFF` (the `nojuce` and `web` presets, which leave out a tool or test that includes JUCE). An
+  `FUNKGUI_WITH_JUCE=OFF` (the `nojuce`, `desktop` and `web` presets, which leave out a tool or test that includes
+  JUCE). In `src/gpu/` the JUCE-free files are the ones `cmake/FunkGuiTargets.cmake` lists (`_fg_gpu_without_juce`:
+  the bgfx context, the sink, the shader library, the image program, `gpuInfo()`); a JUCE-free build compiles those and
+  `src/gpu/nojuce/**`, and a new file there that names no JUCE symbol is added to that list. An
   Emscripten header appears only in `src/web/`, `test/web/` and `tools/GalleryWeb/`; `include/funkgui/web/` is plain
   C++ that compiles on every host (`fg.headers`).
 - Public headers (`include/funkgui/**`) are API: a change needs the lead's approval and bumps MINOR at tagging;
@@ -61,6 +70,24 @@ only set of paths you may change.
   `BgfxSink` uses. A change to `Prim`, the vertex layout or `expand()` changes `instance()`, `instanceCorner()` and
   `vs_ui_inst.sc` with it, and `fg.canvas.instance` (CPU) and `fg.gpu.instancing` (Metal, pixel for pixel) keep them
   equal; `fs_ui.sc` serves both.
+
+## The desktop target and the cloud (v0.28.0)
+
+- `FunkGui::desktop` (`FUNKGUI_WITH_DESKTOP`, the `desktop` preset) is `DesktopHost` over SDL3 and the JUCE-free part
+  of `FunkGui::gpu`. It and JUCE exclude each other: both define the three functions of `gpu/NativeSurface.h` that
+  `BgfxContext` calls. SDL is pinned in `cmake/FunkGuiDeps.cmake` (tag and commit) and fetched by git; a pin never
+  becomes an archive URL.
+- A change to a JUCE build's targets is proved, not assumed: configure `agent` and `agent-gui` before and after with
+  `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` and compare the compile commands (v0.28.0 added three test targets and
+  changed none).
+- **In a cloud container** (Linux, no GPU, no display, no `~/audio`): the environment's `FUNKGUI_DEPS_DIR` names the
+  dependency cache (`bgfx.cmake-<tag>/`, `SDL-<tag>/`, `JUCE-<tag>/` and `tools/shaderc-<tag>/shaderc` with its
+  `shaderc.stamp`); release archives by URL are refused there, git clones work. A window is opened on Xvfb with a
+  window manager (openbox) and drawn by Mesa's software Vulkan (lavapipe): the real GPU path on a software driver.
+  Say which machine ran what; macOS and Windows are proved by the `Desktop` workflow's builds and by a person running
+  its artifacts, never by a claim.
+- `.github/workflows/desktop.yml` builds and tests the `desktop` preset on macOS, Windows and Linux and keeps
+  `funkgui-gallery-desktop-<platform>`. Every action is pinned to a commit SHA.
 
 ## Done means (03 §4.7)
 

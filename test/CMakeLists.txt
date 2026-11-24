@@ -4,13 +4,14 @@
 # Self-registration (mirrors FCompressor's FCMP_PROBE, 03 §2.9). Any test/**/*.cpp or test/**/*.mm (*.mm and
 # *_apple.cpp: Apple only; *_linux.cpp: Linux only) whose FIRST line is
 #
-#   // FUNKGUI_TEST name=fg.<x> timeout=<s> gpu=<0|1>[ links=<harness|core|gpu|presets>][ exe=<tool>[ args="<text>"]][ labels=<l>[,<l>…]]
+#   // FUNKGUI_TEST name=fg.<x> timeout=<s> gpu=<0|1>[ links=<harness|core|gpu|presets|desktop>][ exe=<tool>[ args="<text>"]][ labels=<l>[,<l>…]]
 #
 # (keys in that order, single spaces) is one CTest test named fg.<x>:
 # - Without exe=, the file is compiled into its own executable, run as `<exe> fg.<x> <harness flags>`. links= picks
 #   what it links: harness (FunkGui::harness only, no JUCE), core (+ FunkGui::core; the default when gpu=0), gpu
-#   (+ FunkGui::gpu and the shaders; the default when gpu=1) or presets (core + FunkGui::presets and SQLite; G8, S11;
-#   skipped without FUNKGUI_WITH_PRESETS). Every test executable gets ${FUNKGUI_GENERATED_DIR} on its include path and,
+#   (+ FunkGui::gpu and the shaders; the default when gpu=1), presets (core + FunkGui::presets and SQLite; G8, S11;
+#   skipped without FUNKGUI_WITH_PRESETS) or desktop (v0.28.0: core + FunkGui::gpu + FunkGui::desktop and SDL3; needs
+#   gpu=1; skipped without FUNKGUI_WITH_DESKTOP). Every test executable gets ${FUNKGUI_GENERATED_DIR} on its include path and,
 #   when gpu=1, builds after FunkGuiShaders. One that includes <funkgui/shaders/ui.es300.h> (v0.12.0: the GLSL ES text,
 #   generated in every configuration) builds after FunkGuiShaderText.
 # - With exe=<tool target>, the file is a registration stub and is not compiled: the test runs
@@ -114,6 +115,16 @@ function(_fg_add_test name timeout gpu links exe args labels source)
     message(STATUS "FunkGui tests: ${name} skipped (FUNKGUI_WITH_PRESETS is OFF)")
     return()
   endif()
+  if(links STREQUAL "desktop" AND NOT TARGET FunkGuiDesktop)
+    message(STATUS "FunkGui tests: ${name} skipped (FUNKGUI_WITH_DESKTOP is OFF)")
+    return()
+  endif()
+  # v0.28.0: a tool this platform cannot build (cmake/FunkGuiTargets.cmake: FUNKGUI_UNAVAILABLE_TOOLS).
+  get_property(_unavailable_tools GLOBAL PROPERTY FUNKGUI_UNAVAILABLE_TOOLS)
+  if(exe AND exe IN_LIST _unavailable_tools)
+    message(STATUS "FunkGui tests: ${name} skipped (its tool, ${exe}, is not built on this platform)")
+    return()
+  endif()
   if(NOT FUNKGUI_WITH_JUCE AND NOT FUNKGUI_HARNESS_ONLY)
     get_property(_juce_tools GLOBAL PROPERTY FUNKGUI_JUCE_ONLY_TOOLS)
     set(_needs_juce OFF)
@@ -126,6 +137,16 @@ function(_fg_add_test name timeout gpu links exe args labels source)
     endif()
     if(_needs_juce)
       message(STATUS "FunkGui tests: ${name} skipped (needs JUCE, FUNKGUI_WITH_JUCE is OFF)")
+      return()
+    endif()
+  endif()
+
+  # A Windows host (v0.28.0, FunkGui's own build there): a compiled test whose source needs POSIX (open_memstream,
+  # <unistd.h>) does not compile there and is not defined.
+  if(CMAKE_HOST_WIN32 AND NOT exe)
+    file(STRINGS "${source}" _posix LIMIT_COUNT 1 REGEX "open_memstream[ \t]*\\(|^#include <unistd\\.h>")
+    if(_posix)
+      message(STATUS "FunkGui tests: ${name} skipped (its source needs POSIX, and this is Windows)")
       return()
     endif()
   endif()
@@ -147,6 +168,19 @@ function(_fg_add_test name timeout gpu links exe args labels source)
     elseif(EXISTS "${PROJECT_SOURCE_DIR}/${exe}" AND NOT IS_DIRECTORY "${PROJECT_SOURCE_DIR}/${exe}")
       set(_command ${PROJECT_SOURCE_DIR}/${exe} ${_args})
       set(_harness OFF)
+      # A Windows host (v0.28.0) runs no script by its first line: a Python script is given to the interpreter CMake
+      # finds, and any other script's test is not defined there.
+      if(CMAKE_HOST_WIN32)
+        if(exe MATCHES "\\.py$")
+          find_package(Python3 COMPONENTS Interpreter QUIET)
+        endif()
+        if(exe MATCHES "\\.py$" AND Python3_Interpreter_FOUND)
+          set(_command ${Python3_EXECUTABLE} ${_command})
+        else()
+          message(STATUS "FunkGui tests: ${name} skipped (a Windows host cannot run ${exe})")
+          return()
+        endif()
+      endif()
     else()
       message(FATAL_ERROR "${source}: exe=${exe} is neither a target nor a file in ${PROJECT_SOURCE_DIR}")
     endif()
@@ -165,6 +199,8 @@ function(_fg_add_test name timeout gpu links exe args labels source)
       target_link_libraries(${_target} PRIVATE FunkGui::core FunkGui::harness)
       if(links STREQUAL "gpu")
         target_link_libraries(${_target} PRIVATE FunkGui::gpu)
+      elseif(links STREQUAL "desktop")
+        target_link_libraries(${_target} PRIVATE FunkGui::gpu FunkGui::desktop)
       elseif(links STREQUAL "presets")
         target_link_libraries(${_target} PRIVATE FunkGui::presets)
       endif()
@@ -252,7 +288,7 @@ foreach(_f IN LISTS _fg_test_files)
   set(_exe "")
   set(_args "")
   set(_labels "")
-  if(_rest MATCHES "^ links=(harness|core|gpu|presets)(.*)$")
+  if(_rest MATCHES "^ links=(harness|core|gpu|presets|desktop)(.*)$")
     set(_links ${CMAKE_MATCH_1})
     set(_rest "${CMAKE_MATCH_2}")
   endif()
@@ -281,8 +317,8 @@ foreach(_f IN LISTS _fg_test_files)
       set(_links core)
     endif()
   endif()
-  if(_links STREQUAL "gpu" AND NOT _gpu)
-    message(FATAL_ERROR "${_f}: links=gpu needs gpu=1")
+  if(_links MATCHES "^(gpu|desktop)$" AND NOT _gpu)
+    message(FATAL_ERROR "${_f}: links=${_links} needs gpu=1")
   endif()
   _fg_add_test(${_name} ${_timeout} ${_gpu} "${_links}" "${_exe}" "${_args}" "${_labels}" ${_f})
 endforeach()
@@ -290,7 +326,12 @@ endforeach()
 # ---- fg.headers: every public header compiles standalone (tools/check-headers.sh; gpu/ only with bgfx) ---------------
 # The compile flags are a real consumer's: those of an OBJECT target that links FunkGui::core (+ ::gpu) and ::harness
 # and calls funkgui_configure_product (it is never built). The script reads them from fg-headers.flags.
-if(NOT FUNKGUI_HARNESS_ONLY)
+# Not on a Windows host (v0.28.0, FunkGui's own build there): the script is a shell script that drives a GNU-style
+# compiler with POSIX paths. The headers are checked on macOS and Linux, and compiled on Windows by what includes them.
+if(CMAKE_HOST_WIN32 AND NOT FUNKGUI_HARNESS_ONLY)
+  message(STATUS "FunkGui tests: fg.headers is not defined on a Windows host (tools/check-headers.sh is a shell script)")
+endif()
+if(NOT FUNKGUI_HARNESS_ONLY AND NOT CMAKE_HOST_WIN32)
   set_property(GLOBAL APPEND PROPERTY FUNKGUI_TEST_NAMES fg.headers)
   add_library(fg_header_flags OBJECT EXCLUDE_FROM_ALL)
   target_link_libraries(fg_header_flags PRIVATE FunkGui::core FunkGui::harness)
@@ -307,7 +348,13 @@ if(NOT FUNKGUI_HARNESS_ONLY)
   endforeach()
   if(FUNKGUI_WITH_BGFX)
     target_link_libraries(fg_header_flags PRIVATE FunkGui::gpu)
-    list(APPEND _fg_headers_args --bgfx)
+    # v0.28.0: bgfx without JUCE. include/funkgui/gpu/ also holds the headers of what binds FunkGui::gpu to JUCE
+    # (EditorHost.h, FramePump.h, A11yBridge.h), which cannot compile there, and tools/check-headers.sh takes gpu/ as a
+    # whole or not at all: without JUCE it is not checked (the script says so of each header). Its JUCE-free headers
+    # are compiled by FunkGui::gpu's and FunkGui::desktop's own sources in such a build.
+    if(FUNKGUI_WITH_JUCE)
+      list(APPEND _fg_headers_args --bgfx)
+    endif()
   endif()
   if(NOT FUNKGUI_WITH_JUCE)
     list(APPEND _fg_headers_args --no-juce)            # juce/ and presets/ headers need JUCE: not checked without it

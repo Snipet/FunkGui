@@ -15,8 +15,14 @@
 # prebuilt one's shaderc.stamp, or "bgfx.cmake <HEAD>" of the sources a shaderc target is built from); fg.shader.hash
 # asserts it against the pin with a spec row (S0 review R-G1 #9).
 #
-# FUNKGUI_WITH_JUCE=OFF (v0.12.0): JUCE is neither fetched, nor looked for, nor version-checked, and there is no bgfx
-# (the top-level CMakeLists.txt turns FUNKGUI_WITH_BGFX off with it). _fg_juce below is "this configuration has JUCE".
+# FUNKGUI_WITH_JUCE=OFF (v0.12.0): JUCE is neither fetched, nor looked for, nor version-checked. _fg_juce below is "this
+# configuration has JUCE". bgfx is fetched and checked with or without it (v0.28.0; before, bgfx went with JUCE).
+#
+# FUNKGUI_WITH_DESKTOP (v0.28.0): SDL3, which FunkGui fetches itself, in a consumer too, unless the consumer already
+# defined SDL3::SDL3: by git at the pinned release, its commit asserted, as a static library with the subsystems the
+# desktop host and an application on it use (video, events, joystick, gamepad, haptic, audio, dialogs) and no others.
+# NORMAL variables only, as for bgfx. On Linux only its X11 video driver is built: FunkGui's Vulkan surface is an X11
+# window's, and a Wayland desktop runs it through XWayland (README, "Desktop": the system packages).
 
 include(FetchContent)
 
@@ -34,6 +40,8 @@ set(FUNKGUI_BGFX_SHA  99752df38e40179cf998bb880fe4c16c0b3d60ca)
 set(FUNKGUI_BGFX_API  153)
 set(FUNKGUI_BGFX_SUB_SHAS bgfx=c7684e20da1e385edc439ef39cdb42b8c661016f bx=0b001f5f36579e8aea07efa5af139ca18dad9505
                           bimg=3b4baab0128ac499c5c3bc37202781bf54084049)
+set(FUNKGUI_SDL_TAG   release-3.4.20)                # v0.28.0: FunkGui::desktop (zlib licence)
+set(FUNKGUI_SDL_SHA   f00dc919ca35b9756316e86c4777392de442f9b2)
 
 # ---- Helpers ---------------------------------------------------------------------------------------------------------
 
@@ -130,7 +138,13 @@ endif()
 
 # ---- Top level: machine-cache defaults, declarations, prebuilt shaderc -----------------------------------------------
 if(PROJECT_IS_TOP_LEVEL)
-  set(FUNKGUI_DEPS_DIR "$ENV{HOME}/audio/.deps" CACHE PATH
+  # v0.28.0: the environment's FUNKGUI_DEPS_DIR names it where there is no ~/audio (a cloud container, CI).
+  if(DEFINED ENV{FUNKGUI_DEPS_DIR} AND NOT "$ENV{FUNKGUI_DEPS_DIR}" STREQUAL "")
+    set(_fg_deps_default "$ENV{FUNKGUI_DEPS_DIR}")
+  else()
+    set(_fg_deps_default "$ENV{HOME}/audio/.deps")
+  endif()
+  set(FUNKGUI_DEPS_DIR "${_fg_deps_default}" CACHE PATH
       "Machine dependency cache written by FCompressor's Scripts/deps.sh (03 §2.4)")
 
   # A NORMAL variable (never cached), and only when the user gave no override (03 §2.3 step 1).
@@ -149,10 +163,16 @@ if(PROJECT_IS_TOP_LEVEL)
 
   if(FUNKGUI_WITH_BGFX AND NOT FUNKGUI_HARNESS_ONLY)
     _funkgui_default_source_dir(BGFX bgfx.cmake-${FUNKGUI_BGFX_TAG})
+    if(FUNKGUI_WITH_DESKTOP)
+      _funkgui_default_source_dir(SDL3 SDL-${FUNKGUI_SDL_TAG})
+    endif()
     # The prebuilt shaderc (03 §2.5): used only when its stamp names the pinned bgfx.cmake SHA; otherwise the guarded
     # fetch below builds shaderc from the pinned sources (HR's tool settings).
     if(NOT FUNKGUI_SHADERC)
       set(_fg_prebuilt "${FUNKGUI_DEPS_DIR}/tools/shaderc-${FUNKGUI_BGFX_TAG}/shaderc")
+      if(CMAKE_HOST_WIN32)                             # v0.28.0: FunkGui's own build on Windows
+        string(APPEND _fg_prebuilt ".exe")
+      endif()
       set(_fg_stamp "${FUNKGUI_DEPS_DIR}/tools/shaderc-${FUNKGUI_BGFX_TAG}/shaderc.stamp")
       set(_fg_stamp_line "")
       if(EXISTS "${_fg_stamp}")
@@ -283,5 +303,46 @@ if(FUNKGUI_WITH_BGFX AND NOT FUNKGUI_HARNESS_ONLY)
     else()
       set(FUNKGUI_SHADERC_STAMP "bgfx.cmake (unknown: ${_fg_bgfx_src} is not a git checkout)")
     endif()
+  endif()
+endif()
+
+# ---- SDL3: only when FUNKGUI_WITH_DESKTOP (v0.28.0; the top of this file) --------------------------------------------
+if(FUNKGUI_WITH_DESKTOP AND NOT FUNKGUI_HARNESS_ONLY)
+  if(TARGET SDL3::SDL3)
+    message(STATUS "FunkGui: FunkGui::desktop on the consumer's SDL3::SDL3 (FunkGui is pinned to ${FUNKGUI_SDL_TAG})")
+  else()
+    set(SDL_SHARED OFF)
+    set(SDL_STATIC ON)
+    set(SDL_TEST_LIBRARY OFF)
+    set(SDL_TESTS OFF)
+    set(SDL_EXAMPLES OFF)
+    set(SDL_INSTALL OFF)
+    set(SDL_UNINSTALL OFF)
+    # The subsystems nothing here uses. Events, threads, timers and the rest of SDL's core are always built.
+    foreach(_fg_sdl_off GPU RENDER CAMERA SENSOR POWER TRAY)
+      set(SDL_${_fg_sdl_off} OFF)
+    endforeach()
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+      # X11 only (the top of this file), and no OpenGL, GLES or Vulkan of SDL's own: bgfx makes the Vulkan surface.
+      set(SDL_X11 ON)
+      foreach(_fg_sdl_off WAYLAND KMSDRM OPENGL OPENGLES VULKAN)
+        set(SDL_${_fg_sdl_off} OFF)
+      endforeach()
+    endif()
+    # First declaration wins: a no-op if the consumer declared SDL3. SYSTEM: SDL's headers are third-party code.
+    # EXCLUDE_FROM_ALL: only what FunkGui::desktop links is built.
+    FetchContent_Declare(SDL3 GIT_REPOSITORY https://github.com/libsdl-org/SDL.git GIT_TAG ${FUNKGUI_SDL_TAG}
+                              GIT_SHALLOW TRUE SYSTEM EXCLUDE_FROM_ALL)
+    FetchContent_MakeAvailable(SDL3)
+    if(NOT TARGET SDL3::SDL3)
+      message(FATAL_ERROR "FunkGui: SDL ${FUNKGUI_SDL_TAG} defined no SDL3::SDL3")
+    endif()
+    FetchContent_GetProperties(SDL3 SOURCE_DIR _fg_sdl_src)
+    _funkgui_assert_git("${_fg_sdl_src}" ${FUNKGUI_SDL_SHA} SDL)
+    # Third-party code FunkGui does not edit: its warnings are not FunkGui's (as bgfx's, above).
+    if(TARGET SDL3-static)
+      target_compile_options(SDL3-static PRIVATE -w)
+    endif()
+    set(FUNKGUI_SDL_SOURCE_DIR "${_fg_sdl_src}")
   endif()
 endif()

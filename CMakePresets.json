@@ -39,7 +39,20 @@
       "description": "The JUCE-free core: no JUCE is fetched or on any include path; no gpu, no presets. Builds FunkGuiCoreCheck, the JUCE-free tools and the JUCE-free fg tests, which run against the same goldens (the atlas is the committed bake).",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
-        "FUNKGUI_WITH_JUCE": "OFF"
+        "FUNKGUI_WITH_JUCE": "OFF",
+        "FUNKGUI_WITH_BGFX": "OFF"
+      }
+    },
+    {
+      "name": "desktop",
+      "inherits": "base",
+      "displayName": "desktop (FUNKGUI_WITH_JUCE=OFF, bgfx and SDL3: FunkGui::desktop, RelWithDebInfo)",
+      "description": "FunkGui on the desktop without JUCE (v0.28.0): the JUCE-free core, the JUCE-free part of FunkGui::gpu (bgfx, the shaders) and FunkGui::desktop over SDL3, fetched at its pin. Builds funkgui_gallery_desktop, the JUCE-free tools and fg tests and the fg.desktop tests. macOS (Metal), Linux (Vulkan on X11) and Windows (Direct3D 11, clang-cl).",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "FUNKGUI_WITH_JUCE": "OFF",
+        "FUNKGUI_WITH_BGFX": "ON",
+        "FUNKGUI_WITH_DESKTOP": "ON"
       }
     },
     {
@@ -50,7 +63,8 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "FUNKGUI_WEB": "ON",
-        "FUNKGUI_WITH_JUCE": "OFF"
+        "FUNKGUI_WITH_JUCE": "OFF",
+        "FUNKGUI_WITH_BGFX": "OFF"
       }
     },
     {
@@ -87,6 +101,13 @@
       "nativeToolOptions": []
     },
     {
+      "name": "desktop",
+      "configurePreset": "desktop",
+      "targets": ["all", "funkgui_tools", "funkgui_tests"],
+      "jobs": 6,
+      "nativeToolOptions": []
+    },
+    {
       "name": "web",
       "configurePreset": "web",
       "targets": ["all", "funkgui_tools", "funkgui_tests"],
@@ -110,6 +131,7 @@
     { "name": "agent", "inherits": "base", "configurePreset": "agent" },
     { "name": "agent-gui", "inherits": "base", "configurePreset": "agent-gui" },
     { "name": "nojuce", "inherits": "base", "configurePreset": "nojuce" },
+    { "name": "desktop", "inherits": "base", "configurePreset": "desktop" },
     { "name": "web", "inherits": "base", "configurePreset": "web" },
     { "name": "lead", "inherits": "base", "configurePreset": "lead" }
   ],
@@ -136,6 +158,14 @@
         { "type": "configure", "name": "nojuce" },
         { "type": "build", "name": "nojuce" },
         { "type": "test", "name": "nojuce" }
+      ]
+    },
+    {
+      "name": "desktop-verify",
+      "steps": [
+        { "type": "configure", "name": "desktop" },
+        { "type": "build", "name": "desktop" },
+        { "type": "test", "name": "desktop" }
       ]
     },
     {

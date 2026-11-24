@@ -15,11 +15,13 @@ check its layout, text and accessibility against golden files and render any fra
 has a small widget set, a preset store and the test harness itself.
 
 From v0.12.0 the core also builds without JUCE, so the same Panel runs in a browser: compiled to WebAssembly by
-Emscripten, on a `<canvas>`, where a WebGL2 sink draws the recorded frame in one draw call.
+Emscripten, on a `<canvas>`, where a WebGL2 sink draws the recorded frame in one draw call. From v0.28.0 it runs in a
+desktop window without JUCE too: `FunkGui::desktop`, over SDL3 and the same bgfx frame
+([Desktop](#desktop-without-juce)).
 
 FunkGui is the GUI of [FCompressor](https://github.com/Snipet/FCompressor). HardwareReverb, a private plugin whose GUI
 code FunkGui grew from, has moved onto it too. FunkGui is at 0.x, and its API may change between minor versions.
-Every release is an annotated tag on `main` (latest: `v0.27.0`), and [`CHANGELOG.md`](CHANGELOG.md) says what each
+Every release is an annotated tag on `main` (latest: `v0.28.0`), and [`CHANGELOG.md`](CHANGELOG.md) says what each
 release does to a consumer's golden files.
 
 ![Widgets from FunkGui's gallery: slider states, filled areas and a transfer curve, segmented selectors, latches and a focus ring](docs/images/gallery.png)
@@ -38,6 +40,7 @@ Canvas        records primitives on the CPU into a PrimList; makes no GPU calls
                               per frame (plus one per custom-shader rectangle or picture and one for the run after
                               it), every primitive one 80-byte instance of a shared quad (v0.26.0)
   +-- WebHost + WebGlSink     browser: a <canvas>, no JUCE; WebGL2, one draw call per frame (plus one per picture)
+  +-- DesktopHost + BgfxSink  desktop (v0.28.0): a window of SDL3's, no JUCE; the same bgfx frame as EditorHost's
   +-- HeadlessHost            tests: fixed dt, synthetic input -> frame dump, fingerprint, PNG, accessibility list
   +-- renderGpuPicture        pictures (v0.23.0): any recorded frame drawn offscreen by bgfx and read back as RGBA
 ```
@@ -173,6 +176,15 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
   under node. Every header is plain C++ and compiles on every host; `WebHost`, `WebGlSink` and
   `installLocalStoragePrefs()` are defined only under Emscripten. The menu and the clipboard live behind
   `src/web/WebServices.h`, private to the host.
+- **desktop** (`FunkGui::desktop`, from v0.28.0; `FUNKGUI_WITH_DESKTOP`, no JUCE): `DesktopHost`, `EditorHost`'s and
+  `WebHost`'s sibling in a window of SDL3's, drawn by the JUCE-free part of `FunkGui::gpu` (Metal, Direct3D 11, or
+  Vulkan on X11). It runs the loop (frames paced by the display's vsync while anything moves, 12 a second idle, asleep
+  between events), leaves unchanged frames undrawn, converts SDL's pointer, wheel, pinch, key and text events by
+  JUCE's rules (`DesktopInput.h`, header-only and tested without a window), and serves menus drawn by the Canvas in
+  the same window (`MenuOverlay`: `MenuLook`'s metrics and palette, submenus, keys and type-ahead), SDL's file
+  dialogs, the clipboard, system cursors, unbounded drags and the UI zoom. `PrefsFile.h` keeps the preferences in a
+  small text file. `capture()` reads the frame back from the GPU. [Desktop](#desktop-without-juce) below has the
+  options, the Linux packages, what was run where and what is not there.
 - **presets** (FunkPresets): a SQLite preset store shared by every plugin instance, a preset manager with product
   hooks, and an XML preset file format. It does not depend on the GUI layers.
 - **test** (`test/Harness.h`): a header-only, JUCE-free probe harness. Spec rows are judged at once and never stored;
@@ -202,7 +214,9 @@ Public headers live in `include/funkgui/<layer>/`, in namespace `funkgui` (`funk
 - **Dependencies:** JUCE 8.0.4 (another version is a configure error unless `FUNKGUI_ALLOW_OTHER_JUCE=ON`);
   bgfx.cmake `v1.153.9385-561` (bgfx API 153 is checked); SQLite 3 for the presets (the macOS SDK's). On Linux also
   GLib (the preset keys' Unicode fold) and the development packages JUCE needs (ALSA, FreeType, Fontconfig, X11). A
-  build with `FUNKGUI_WITH_JUCE=OFF` fetches neither JUCE nor bgfx and needs none of these.
+  build with `FUNKGUI_WITH_JUCE=OFF` fetches no JUCE and needs none of these; with `FUNKGUI_WITH_BGFX=OFF` too it
+  fetches nothing at all. `FUNKGUI_WITH_DESKTOP` adds SDL `release-3.4.20` (zlib licence), which FunkGui fetches by
+  git and builds as a static library ([Desktop](#desktop-without-juce) lists what it needs on Linux).
 
 ## Using FunkGui from CMake
 
@@ -242,11 +256,15 @@ funkgui_configure_product(my_ui PRODUCT MyPlugin OBJC_PREFIX MyPl ENV_PREFIX MYP
 ```
 
 - **Targets.** `FunkGui::harness` (always), `FunkGui::core`, `FunkGui::gpu` (with `FUNKGUI_WITH_BGFX`),
-  `FunkGui::presets` (with `FUNKGUI_WITH_PRESETS`), `FunkGui::web` (under Emscripten; linked by name), and `FunkGui`
-  (core plus gpu). They are INTERFACE libraries that carry FunkGui's sources, so FunkGui compiles inside your target
-  with your JUCE configuration, or with none. There is no install step and no package config.
+  `FunkGui::presets` (with `FUNKGUI_WITH_PRESETS`), `FunkGui::web` (under Emscripten; linked by name),
+  `FunkGui::desktop` (with `FUNKGUI_WITH_DESKTOP`; linked by name) and `FunkGui` (core plus gpu). They are INTERFACE
+  libraries that carry FunkGui's sources, so FunkGui compiles inside your target with your JUCE configuration, or
+  with none. There is no install step and no package config.
 - **Without JUCE.** `FUNKGUI_WITH_JUCE=OFF` is required under Emscripten (configure stops otherwise, unless
-  `FUNKGUI_HARNESS_ONLY` is on) and also builds natively. `funkgui_add_font` does nothing there: a page carries the
+  `FUNKGUI_HARNESS_ONLY` is on) and also builds natively. From v0.28.0 a native build without JUCE keeps
+  `FUNKGUI_WITH_BGFX` as it is given (ON by default): `FunkGui::gpu` then holds what names no JUCE symbol (the bgfx
+  context, the sink, custom shaders, pictures, `gpuInfo()`), and a build that wants no GPU says
+  `FUNKGUI_WITH_BGFX=OFF` (before, bgfx went with JUCE). `funkgui_add_font` does nothing there: a page carries the
   font's licence, `fonts/JetBrainsMono-LICENSE.txt`, itself. [`tools/GalleryWeb`](tools/GalleryWeb) is a complete page.
 - **Link PRIVATE.** A PUBLIC link on a `juce_add_plugin` target would compile FunkGui again into every format wrapper.
 - **Product identity.** Every target that links `FunkGui::core` calls `funkgui_configure_product()`, which sets the
@@ -261,8 +279,9 @@ funkgui_configure_product(my_ui PRODUCT MyPlugin OBJC_PREFIX MyPl ENV_PREFIX MYP
 
 | Option | Default | Effect |
 | --- | --- | --- |
-| `FUNKGUI_WITH_JUCE` | ON | OFF: `FunkGui::core` without JUCE; no bgfx, `FunkGui::gpu` or `FunkGui::presets` |
+| `FUNKGUI_WITH_JUCE` | ON | OFF: `FunkGui::core` without JUCE; no `FunkGui::presets`, and `FunkGui::gpu` without its JUCE-bound part (`EditorHost`, GPU pictures) |
 | `FUNKGUI_WITH_BGFX` | ON | `FunkGui::gpu`, the shaders and bgfx. OFF: a headless build with no GPU code |
+| `FUNKGUI_WITH_DESKTOP` | OFF | `FunkGui::desktop` over SDL3 (needs `FUNKGUI_WITH_BGFX=ON` and `FUNKGUI_WITH_JUCE=OFF`) |
 | `FUNKGUI_WITH_PRESETS` | ON | `FunkGui::presets` (links SQLite 3) |
 | `FUNKGUI_HARNESS_ONLY` | OFF | Only `FunkGui::harness`; JUCE is not needed (DSP-only builds) |
 | `FUNKGUI_BUILD_TOOLS` | ON at top level | The tool targets, such as `funkgui_framerender` (excluded from `all`) |
@@ -335,6 +354,143 @@ int main()
 }
 ```
 
+## Desktop (without JUCE)
+
+From v0.28.0 a Panel also runs in a window of its own with no JUCE under it: `FunkGui::desktop` is `DesktopHost`
+([`include/funkgui/desktop/DesktopHost.h`](include/funkgui/desktop/DesktopHost.h)) over SDL3 for the window and the
+events and over `FunkGui::gpu` for the drawing. It is for an application that is not a plug-in.
+
+```cmake
+set(FUNKGUI_WITH_JUCE OFF)
+set(FUNKGUI_WITH_BGFX ON)
+set(FUNKGUI_WITH_DESKTOP ON)        # fetches SDL3 at its pin unless you already defined SDL3::SDL3
+FetchContent_Declare(FunkGui GIT_REPOSITORY https://github.com/Snipet/FunkGui.git GIT_TAG v0.28.0)
+FetchContent_MakeAvailable(FunkGui)
+
+add_executable(my_app main.cpp)
+target_link_libraries(my_app PRIVATE FunkGui::core FunkGui::gpu FunkGui::desktop)
+funkgui_configure_product(my_app PRODUCT MyApp OBJC_PREFIX MyApp ENV_PREFIX MYAPP_ PREFS_FOLDER MyApp)
+funkgui_compile_shaders(my_app)
+```
+
+```cpp
+#include <funkgui/desktop/DesktopHost.h>
+
+int main()
+{
+    MyPanel panel;                                   // a funkgui::Panel, as everywhere else
+    funkgui::desktop::DesktopHost host(panel, { .title = "My application" });
+    std::string why;
+    if (!host.open(why))                             // SDL's video subsystem, the window, bgfx on it
+        return std::fprintf(stderr, "%s\n", why.c_str()), 1;
+    return host.run();                               // until the window closes; pump() is one turn of it
+}
+```
+
+- **The window and the frame.** The window holds the Panel at its logical size times the UI zoom times the display's
+  content scale (2 on a Retina display, 1.5 at Windows' 150 %), so a Panel draws and hit-tests in its own px on every
+  display. A Panel whose `resizable()` is true gets a resizable window; a fixed Panel's window can be neither
+  resized nor maximised. A frame is `EditorHost`'s: the preferences followed, `Options::beforeTick`,
+  `Panel::tick(dt)`, the recording, and a frame equal to the last one drawn is not submitted (on Linux every frame is
+  drawn, as under JUCE). While the Panel wants full rate the display's vsync paces the frames; otherwise the loop
+  sleeps and draws 12 a second. During a live resize of the window the frames are drawn from SDL's event watch.
+- **`Options`:** `title`; `themeIndex` (-1 follows the preference); `resizable`, `maxWidth`, `maxHeight`; `rawEvent`,
+  called with every SDL event before the host reads it (how an application takes key-up, gamepad and joystick events,
+  which a Panel's structs do not carry); `beforeTick`; `zoomSteps`, `defaultZoomPercent`, `zoomPrefKey`; `vsync`;
+  `fixedDt` (a pinned clock, for tests and captures); `hidden`; `prefsFile` and `prefsOrganisation`.
+  `DesktopHost::requestFrame()` wakes the loop from any thread, and `capture()` returns the last frame read back from
+  the GPU as RGBA.
+- **Services.** Menus are drawn by the Canvas in the same window, over the Panel's frame
+  ([`MenuOverlay.h`](include/funkgui/desktop/MenuOverlay.h)): rows, separators, headers, ticks and radio dots,
+  shortcuts as text, disabled rows, submenus, the keys (arrows, Home, End, Page Up and Down, Return, Space, Escape)
+  and type-ahead; a press outside dismisses; a menu stays inside the window and scrolls when it is taller. File
+  choosers are SDL's dialogs (the system's own), and their callback runs on the main thread. The clipboard's text is
+  read and written. The cursor follows `Panel::cursor()` on SDL's system cursors (`grab` and `grabbing` show the
+  pointing hand and the move cursor, `copy` the arrow: SDL has none of those three). `setUnboundedDrag` uses SDL's
+  relative mouse mode. `announce()` and `a11yFocus()` do nothing.
+- **Preferences** are kept in `preferences.txt` under SDL's preferences folder for `PREFS_FOLDER`
+  (`~/Library/Application Support/<folder>/` on macOS, `%APPDATA%\<folder>\` on Windows, `~/.local/share/<folder>/`
+  on Linux), or in `<ENV_PREFIX>PREFS_DIR` when that is set ([`PrefsFile.h`](include/funkgui/desktop/PrefsFile.h)).
+- **SDL3** is fetched by git at `release-3.4.20` (its commit is checked) and built as a static library with the
+  video, events, joystick, gamepad, haptic, audio and dialog subsystems; its GPU, render, camera, sensor, power and
+  tray subsystems are left out. A consumer that already defined `SDL3::SDL3` keeps its own. FunkGui initialises only
+  SDL's video subsystem, and an application initialises what else it uses.
+- **Linux** draws with Vulkan into an X11 window, so SDL's X11 video driver is the one built and asked for; a Wayland
+  desktop runs it through XWayland. To build, beside Clang, CMake, Ninja and git (Debian and Ubuntu names):
+  `libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxtst-dev
+  libxkbcommon-dev libgl1-mesa-dev` for the window (bgfx's own build asks for the OpenGL headers), and for SDL's
+  audio and devices, which an application on it uses, `libasound2-dev libpulse-dev libudev-dev libdbus-1-dev`. To
+  run: an X display and a Vulkan driver (`mesa-vulkan-drivers` has a software one, lavapipe). SDL's file dialogs there
+  need the desktop's portal (`xdg-desktop-portal`) or `zenity`.
+- **JUCE and the desktop host exclude each other in this release.** `BgfxContext` calls three functions of
+  `gpu/NativeSurface.h` that JUCE's render views define in a JUCE build and `FunkGui::desktop` defines in this one, so
+  `FUNKGUI_WITH_DESKTOP` needs `FUNKGUI_WITH_JUCE=OFF` (configure says so). GPU pictures (`renderGpuPicture`) answer
+  `unsupported` without JUCE: they run on JUCE's message thread; `DesktopHost::capture()` reads a window's frame.
+- **Not there** in this release, each left for a later one:
+  - a second window (one `DesktopHost` at a time registers with bgfx);
+  - popup windows: a menu is drawn inside its Panel's window and cannot leave it;
+  - the system menu bar (macOS's application menu is SDL's default one);
+  - accessibility: no mirror of `Panel::accessibility()`, nothing is spoken;
+  - input methods: typed text arrives a code point at a time, and no composition is shown;
+  - drag and drop of files onto the window (`Panel::filesDropped`);
+  - a newer bgfx: the pin is the plug-ins';
+  - Wayland natively (XWayland runs it);
+  - text beyond the atlas: the bundled face's printable ASCII and FunkGui's extra glyphs, as in every JUCE-free build.
+
+`funkgui_gallery_desktop` ([`tools/GalleryDesktop`](tools/GalleryDesktop)) is the gallery in such a window, and what
+the `Desktop` workflow keeps as an artifact for each platform. **A gallery section's window cannot be resized or
+maximised, by design:** each section is a Panel of one fixed size, and a fixed Panel's window is not resizable.
+`--resize` shows a resizable Panel instead, made for looking at a live resize: it draws its own bounds (a frame on the
+window's edges, a block in each corner, a grid from the top left, its size as text), so while an edge is dragged the
+frame should stay on the edge and the blocks in the corners.
+
+```sh
+cmake --workflow --preset desktop-verify
+tools/verify.sh build-desktop
+build-desktop/tools/GalleryDesktop/funkgui_gallery_desktop                    # F1/F2: sections, F3: the theme
+build-desktop/tools/GalleryDesktop/funkgui_gallery_desktop --resize           # a resizable window: drag its edges
+build-desktop/tools/GalleryDesktop/funkgui_gallery_desktop --info             # version, renderer, sizes; exits
+build-desktop/tools/GalleryDesktop/funkgui_gallery_desktop --frames 120 --shot gallery.png   # for a machine
+```
+
+**What was run where** (v0.28.0, 2026-11-24). No machine of FunkGui's own had a GPU or a screen:
+
+- **Linux x86-64**, in an Ubuntu 24.04 container (Clang 18) and on GitHub's `ubuntu-24.04` runner, both with Xvfb,
+  openbox and Mesa's software Vulkan (lavapipe): the `desktop` preset's 70 tests pass, `fg.desktop.host` among them on
+  a real (hidden) window, and the gallery's frame read back from the GPU is the gallery (the workflow keeps the PNG).
+  That is the real GPU path, drawn by a software driver. An idle gallery window there takes about 3 % of one core
+  (every frame is drawn on Linux, 12 a second, by the software driver).
+- **macOS arm64**, on GitHub's `macos-15` runner only (a virtual machine with Apple's GPU): the preset builds with no
+  warning, its 70 tests pass (`fg.desktop.host` on Metal) and the gallery runs 120 frames on Metal and writes its PNG.
+- **Windows x64**, on GitHub's `windows-latest` runner only (clang-cl, no GPU: Direct3D 11's software adapter): the
+  preset builds with no warning, the gallery runs 120 frames on Direct3D 11 and writes its PNG, and the 44 tests that
+  exist there pass: the six `fg.desktop.*` (`fg.desktop.host` on Direct3D 11) and 38 of FunkGui's others. Not built
+  on Windows, each saying so at configure: the gallery probe and six tests, whose sources need POSIX
+  (`open_memstream`, `<unistd.h>`), so `fg.gallery.*`, `fg.canvas.image`, `fg.canvas.parity`, `fg.canvas.shader`,
+  `fg.harness.self`, `fg.prefs.backend` and `fg.web.prefs` do not run there; nor does `fg.headers` (a shell script).
+- The three renderers draw the same frame: of the gallery's 144,000 pixels at scale 1, Metal's and Direct3D 11's
+  differ by at most 2 in a channel, and Vulkan's (lavapipe's) from either by more than 2 in 161 pixels (6 at most).
+- **A person's machine, Windows only so far:** the repository's owner ran the workflow's Windows artifacts on their
+  own Windows 11 machine (a 3840 x 2160 display at 150 % scale, Direct3D 11) on 2026-11-24, and reported:
+  - the artifact of run 45389650505 (commit `30a3feb`, the host before its menus and file dialogs): the window opened
+    titled "FunkGui gallery: primitives (F1/F2: section, F3: theme)", the primitives section drew correctly (the
+    rounded rectangles, the soft-edged one, hairlines, segments, the polyline, the big numerals, the symbol row, the
+    LATCH widget, the labels) and sharp at 150 %, at rest the process sat near 0 % CPU, and on closing it printed
+    `fg.desktop: ok renderer=Direct3D 11 frames=825`; no issue;
+  - `--section services` (a later build): everything works: the Canvas-drawn menu (opening, choosing, dismissing),
+    the three file dialogs (a cancelled save read "SAVE: CANCELLED") and the clipboard; the HOST line read "MENUS FILE
+    CHOOSER CLIPBOARD COMMAND KEY CTRL";
+  - `--resize` (run 45394491459, commit `5f7c23f`): "resizing now works great". A live resize by dragging and
+    maximising both work; no lag, stretch or flash was reported. Their screenshots show the window at 1133 x 563
+    logical px with the frame on all four edges and a block in each corner, and maximised at 2560 x 1369 logical px,
+    the display's work area at 150 %, with the grid from the top left and a block in each corner; they confirmed that
+    nothing was missing on screen when maximised (the Panel and the swap chain take the window's client area in
+    pixels, never its outer frame, which overhangs the monitor then).
+- **Not run on a person's machine: macOS.** What still waits for a person's eyes: everything on a Mac (the look of
+  a live resize there, a Retina display, a trackpad's scrolling and pinch, the file dialogs), and on either system a
+  window moved to a second monitor of another scale, the cursors, an unbounded drag's hidden pointer, and vsync's
+  pacing (the runners have none).
+
 ## Building and testing FunkGui
 
 ```sh
@@ -346,16 +502,23 @@ cmake --workflow --preset agent-gui-verify    # adds bgfx, the shaders and the G
 tools/verify.sh build-agent-gui
 cmake --workflow --preset nojuce-verify       # the core without JUCE, on the host compiler
 tools/verify.sh build-nojuce
+cmake --workflow --preset desktop-verify      # without JUCE: the core, bgfx and FunkGui::desktop over SDL3
+tools/verify.sh build-desktop
 cmake --workflow --preset web-verify          # the core without JUCE as wasm32 (Emscripten); node runs the tests
 tools/verify.sh build-web
 ```
 
 Configure fetches JUCE 8.0.4 (and bgfx.cmake for the GPU presets) and checks their commits against the pins. When
 `~/audio/.deps` (`FUNKGUI_DEPS_DIR`) holds them, as FCompressor's `Scripts/deps.sh` leaves it, that cache is used
-instead, including a prebuilt `shaderc`. The `nojuce` and `web` presets fetch neither: they build `FunkGuiCoreCheck`
+instead, including a prebuilt `shaderc`; the environment's `FUNKGUI_DEPS_DIR` names another such folder (v0.28.0: a
+machine with no `~/audio`, CI). The `nojuce` and `web` presets fetch neither: they build `FunkGuiCoreCheck`
 (every core source and, under Emscripten, `FunkGui::web`'s, under `-Werror` with no JUCE on the include path) and the
-tools and tests that need no JUCE, and run those tests against the same goldens. The `lead` preset is the Release GPU
-build used for tagging.
+tools and tests that need no JUCE, and run those tests against the same goldens. The `desktop` preset (v0.28.0) is
+`nojuce` with bgfx and `FunkGui::desktop`: it fetches bgfx.cmake and SDL, builds `funkgui_gallery_desktop` beside the
+JUCE-free tools and tests, and adds the `fg.desktop.*` tests; `fg.desktop.host` opens a real (hidden) window on the
+GPU path, on Linux only when `DISPLAY` is set (Xvfb with Mesa's lavapipe will do). It is also FunkGui's own build on
+Windows (clang-cl, from an "x64 Native Tools" prompt), where the tools and tests whose sources need POSIX are left
+out. The `lead` preset is the Release GPU build used for tagging.
 
 Every test is a CTest test labelled `verify`, and `tools/verify.sh` classifies the results: blocking (spec failure,
 harness error, crash, timeout, disabled test), golden drift, missing golden, and the slowest tests. A test run never
@@ -411,6 +574,8 @@ include/funkgui/     the public API, one directory per layer
 src/                 the implementations, same layout; only src/gpu/ touches bgfx or Objective-C++
 src/juce/, nojuce/   the core's sources that need JUCE, and their JUCE-free counterparts (FUNKGUI_WITH_JUCE=OFF)
 src/web/             FunkGui::web, the only library sources that include Emscripten's headers
+src/desktop/         FunkGui::desktop (v0.28.0), the only library sources that include SDL's headers
+src/gpu/nojuce/      what FunkGui::gpu defines without JUCE in place of a JUCE-bound file
 shaders/             the bgfx vertex and fragment shaders: one program, four primitive kinds; WebGL2 gets the same
                      program as generated GLSL ES 3.00 text. vs_ui_inst.sc and varying_inst.def.sc: its vertex
                      shader for primitives drawn as instances (v0.26.0). vs_custom.sc, varying_custom.def.sc and
@@ -427,6 +592,8 @@ test/golden/         the blessed golden files
 tools/               verify.sh, golden.py, funkgui_framerender, the gallery probe and app, FontProbe, AtlasDump,
                      AtlasBlob, PrefsCheck, capture-frame.sh, subset-font.sh, check-headers.sh
 tools/GalleryWeb/    the gallery as a web page, over WebHost
+tools/GalleryDesktop/  the gallery in a desktop window without JUCE, over DesktopHost
+.github/workflows/   desktop.yml: the desktop preset built and tested on macOS, Windows and Linux; the gallery kept
 tools/web/           check-page.mjs, which runs a page in headless Chrome
 SEED.tsv             every file first copied from HardwareReverb, with its sha256
 ```
