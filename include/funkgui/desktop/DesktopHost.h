@@ -52,10 +52,12 @@
 // main thread, from the loop), the clipboard's text through SDL. showParamMenu() does nothing (no plug-in host);
 // announce() and a11yFocus() do nothing: this release has no accessibility mirror (README, "Desktop").
 //
-// Preferences. open() gives UiPreferences a file store when Options::prefsFile is true and nothing else replaced the
-// default store since the process started: "preferences.txt" in <ENV_PREFIX>PREFS_DIR when that variable is set, else
-// in SDL's preferences folder for the organisation Options::prefsOrganisation and the application
-// FUNKGUI_PREFS_FOLDER (desktop/PrefsFile.h has the format).
+// Preferences. The first open() of a process whose Options::prefsFile is true gives UiPreferences a file store
+// (UiPreferences::setBackend; desktop/PrefsFile.h has the format): "preferences.txt" in <ENV_PREFIX>PREFS_DIR when
+// that variable is set (a test's sandbox), else in SDL's preferences folder for the application FUNKGUI_PREFS_FOLDER
+// (and the organisation Options::prefsOrganisation, a folder above it when it is not empty): on macOS
+// ~/Library/Application Support/<folder>/, on Windows %APPDATA%\<folder>\, on Linux ~/.local/share/<folder>/
+// (or $XDG_DATA_HOME). An application with a store of its own sets prefsFile false.
 //
 // Threads: everything here is the main thread's (the thread that called open(); on macOS and Windows that must be the
 // process's main thread, SDL's rule), except requestFrame().
@@ -119,9 +121,9 @@ namespace funkgui::desktop
 
         bool hidden = false;                         // the window is made hidden and stays so (tests)
 
-        // The preferences' file store (above). The organisation names the folder SDL makes for the file.
+        // The preferences' file store (above), and the organisation's folder above the application's ("": none).
         bool        prefsFile = true;
-        std::string prefsOrganisation = "FunkGui";
+        std::string prefsOrganisation;
 
         std::function<void(bool)> setUiAttached;     // true from open(), false from close(): a telemetry gate
         std::function<void()> beginBatch, endBatch;  // HostServices::beginBatch/endBatch; empty = no-op

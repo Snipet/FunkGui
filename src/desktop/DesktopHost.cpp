@@ -11,9 +11,12 @@
 #include <funkgui/canvas/Images.h>
 #include <funkgui/canvas/PrimList.h>
 #include <funkgui/core/Config.h>
+#include <funkgui/core/Env.h>
 #include <funkgui/core/Theme.h>
+#include <funkgui/desktop/DesktopFiles.h>
 #include <funkgui/desktop/DesktopInput.h>
 #include <funkgui/desktop/MenuOverlay.h>
+#include <funkgui/desktop/PrefsFile.h>
 #include <funkgui/gpu/BgfxContext.h>
 #include <funkgui/gpu/BgfxSink.h>
 #include <funkgui/prefs/UiPreferences.h>
@@ -34,6 +37,8 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -62,6 +67,11 @@
 //   and key event is the menu's and the Panel gets none: it is told the pointer left (pointerExit) when the menu
 //   first takes a pointer event, and its next move after the menu closed is a move again. A press the Panel took
 //   before the menu opened (the click on a dropdown that opened it) stays the Panel's until its release.
+// - File choosers are SDL's dialogs, which answer through a callback on a thread of SDL's choosing, some time later,
+//   and cannot be closed from here. The callback only puts the answer in a box the host shares with it (a mutex, a
+//   generation number) and wakes the loop; the loop hands it to the Panel's callback on the main thread. A chooser
+//   that was replaced by a second chooseFiles, or whose host closed, still answers: into a box that no longer waits
+//   for that generation, where the answer is dropped. The dialog starts in the user's Documents folder.
 // - A window that is hidden or minimised ticks and draws nothing, and a frame drawn while SDL reports it occluded is
 //   drawn again once it is not (macOS presents nothing for such a window).
 // - The event watch draws only on the main thread, never inside a frame, and not more often than every 4 ms.
@@ -133,6 +143,74 @@ namespace funkgui::desktop
         }
     }
 
+    namespace
+    {
+        // What a file dialog's callback shares with the host (the top of this file). `waiting` is the generation of
+        // the request whose answer the host still wants (0: none); an answer for another generation is dropped.
+        struct ChooserBox
+        {
+            std::mutex mutex;
+            uint64_t waiting = 0;
+            bool     answered = false;
+            std::vector<std::string> paths;          // the answer for `waiting`, when answered
+            uint32_t wakeEvent = 0;
+        };
+
+        // One dialog's context, owned by its callback.
+        struct ChooserCall
+        {
+            std::shared_ptr<ChooserBox> box;
+            uint64_t generation = 0;
+            std::vector<SDL_DialogFileFilter> filters;
+            std::string filterName, filterPattern, location;
+            SDL_PropertiesID props = 0;              // the dialog's properties, kept until it has answered
+        };
+
+        void SDLCALL chooserAnswered(void* userdata, const char* const* files, int)
+        {
+            const std::unique_ptr<ChooserCall> call(static_cast<ChooserCall*>(userdata));
+            if (call->props != 0)
+                SDL_DestroyProperties(call->props);
+            std::vector<std::string> paths;
+            if (files != nullptr)                    // nullptr: the dialog failed; no file: the user cancelled
+                for (const char* const* f = files; *f != nullptr; ++f)
+                    paths.emplace_back(*f);
+            ChooserBox& box = *call->box;
+            {
+                const std::lock_guard<std::mutex> lock(box.mutex);
+                if (box.waiting != call->generation)
+                    return;                          // replaced, or its host closed: nobody waits for this answer
+                box.paths = std::move(paths);
+                box.answered = true;
+            }
+            if (box.wakeEvent != 0)
+            {
+                SDL_Event e{};
+                e.type = box.wakeEvent;
+                SDL_PushEvent(&e);                   // any thread: the loop delivers the answer
+            }
+        }
+
+        // Once a process: UiPreferences gets its file store (DesktopHost.h, "Preferences").
+        void installPrefsFile(const std::string& organisation)
+        {
+            static bool installed = false;
+            if (installed)
+                return;
+            installed = true;
+            std::string folder;
+            if (const char* dir = funkgui::env("PREFS_DIR"); dir != nullptr && *dir != 0)
+                folder = std::string(dir) + "/";
+            else if (char* made = SDL_GetPrefPath(organisation.c_str(), FUNKGUI_PREFS_FOLDER))
+            {
+                folder = made;                       // SDL made the folder; the path ends in a separator
+                SDL_free(made);
+            }
+            if (!folder.empty())
+                UiPreferences::get().setBackend(prefsFileBackend(folder + kPrefsFileName));
+        }
+    }
+
     //==================================================================================================================
     // Impl
     //==================================================================================================================
@@ -198,6 +276,12 @@ namespace funkgui::desktop
         std::vector<int> zoomSteps;
         std::string      zoomPrefKey;
         int zoomDefault = 100, zoomChosen = 100, zoomTarget = 100, zoomApplied = 100;
+
+        std::shared_ptr<ChooserBox> chooser = std::make_shared<ChooserBox>();
+        uint64_t      chooserGeneration = 0;         // the last request's
+        FilesCallback chooserDone;                   // its callback, until it is answered, replaced or dropped
+        FileRequest::Mode chooserMode = FileRequest::Mode::open;
+        std::string   chooserExtension;              // a save's ".ext" ("": no rule)
 
         MenuOverlay menu;
         uint32_t menuDrawn = 0;                      // menu.revision() of the last frame drawn
@@ -433,6 +517,42 @@ namespace funkgui::desktop
                 SDL_SetCursor(cursors[id]);
         }
 
+        // A file dialog's answer, if one has arrived for the request that waits: to the Panel's callback, here on the
+        // main thread. The callback may ask for another chooser.
+        void deliverFiles()
+        {
+            std::vector<std::string> paths;
+            {
+                const std::lock_guard<std::mutex> lock(chooser->mutex);
+                if (!chooser->answered || chooser->waiting != chooserGeneration)
+                    return;
+                paths = std::move(chooser->paths);
+                chooser->paths.clear();
+                chooser->answered = false;
+                chooser->waiting = 0;
+            }
+            FilesCallback done = std::move(chooserDone);
+            chooserDone = nullptr;
+            if (chooserMode == FileRequest::Mode::save && !paths.empty())
+                paths.front() = withExtension(std::move(paths.front()), chooserExtension);
+            if (chooserMode != FileRequest::Mode::openMany && paths.size() > 1)
+                paths.resize(1);
+            if (done)
+                done(paths);
+        }
+
+        // The chooser that waits, if any, is let go: its callback does not run, and its dialog's answer is dropped.
+        void dropChooser()
+        {
+            {
+                const std::lock_guard<std::mutex> lock(chooser->mutex);
+                chooser->waiting = 0;
+                chooser->answered = false;
+                chooser->paths.clear();
+            }
+            chooserDone = nullptr;
+        }
+
         // The menu takes a pointer event: the Panel is told once that the pointer left it.
         void menuTakesPointer()
         {
@@ -623,6 +743,7 @@ namespace funkgui::desktop
         {
             wakePending.store(false);
             nudge();
+            deliverFiles();                          // a file dialog may have answered
             return;
         }
         switch (e.type)
@@ -902,7 +1023,11 @@ namespace funkgui::desktop
             m.wakeEvent = type != 0 ? type : 0;
         }
 
-        // The preferences and the theme.
+        m.chooser->wakeEvent = m.wakeEvent;
+
+        // The preferences (their file store first) and the theme.
+        if (m.options.prefsFile)
+            installPrefsFile(m.options.prefsOrganisation);
         auto& prefs = UiPreferences::get();
         prefs.reload();
         m.prefsRevision = prefs.revision();
@@ -1009,6 +1134,7 @@ namespace funkgui::desktop
             // A window can close with a button still down, in which case the release never arrives; leaving the
             // gesture open would strand the product's parameter write (EditorHost's rule).
             m.menu.dismiss();                        // unanswered: its callback does not run
+            m.dropChooser();                         // nor a chooser's
             m.setUnbounded(false);
             m.pressed = false;
             m.pressIsMenus = false;
@@ -1302,7 +1428,7 @@ namespace funkgui::desktop
 
     unsigned DesktopHost::services() const
     {
-        return hostservice::menus | hostservice::clipboard;
+        return hostservice::menus | hostservice::fileChooser | hostservice::clipboard;
     }
 
     bool DesktopHost::showMenu(const MenuRequest& request, MenuCallback done)
@@ -1321,9 +1447,59 @@ namespace funkgui::desktop
         impl_->nudge();
     }
 
-    bool DesktopHost::chooseFiles(const FileRequest&, FilesCallback)
+    bool DesktopHost::chooseFiles(const FileRequest& request, FilesCallback done)
     {
-        return false;
+        Impl& m = *impl_;
+        if (!m.open)
+            return false;                            // `done` is dropped unrun
+        m.dropChooser();                             // a chooser still open is replaced: its callback does not run
+        m.chooserDone = std::move(done);
+        m.chooserMode = request.mode;
+        m.chooserExtension = std::string(saveExtension(request.pattern));
+        const uint64_t generation = ++m.chooserGeneration;
+        {
+            const std::lock_guard<std::mutex> lock(m.chooser->mutex);
+            m.chooser->waiting = generation;
+        }
+
+        // The dialog's context and properties, which its callback frees: SDL may read them until it calls back.
+        auto* call = new ChooserCall;
+        call->box = m.chooser;
+        call->generation = generation;
+        call->filterPattern = sdlFilterPattern(request.pattern);
+        if (!call->filterPattern.empty())
+        {
+            call->filterName = request.pattern;      // the wildcards themselves name the filter: "*.wav;*.aiff"
+            call->filters.push_back({ call->filterName.c_str(), call->filterPattern.c_str() });
+        }
+        if (const char* documents = SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS))
+            call->location = documents;              // ends in a separator
+        const bool save = request.mode == FileRequest::Mode::save;
+        if (save)
+        {
+            // The suggested name, legal and with the extension a save ends in, in the folder the dialog starts in.
+            std::string name = legalFileName(request.suggestedName);
+            if (!name.empty())
+                call->location += withExtension(std::move(name), m.chooserExtension);
+        }
+
+        const SDL_PropertiesID props = SDL_CreateProperties();
+        SDL_SetPointerProperty(props, SDL_PROP_FILE_DIALOG_WINDOW_POINTER, m.window);
+        if (!call->filters.empty())
+        {
+            SDL_SetPointerProperty(props, SDL_PROP_FILE_DIALOG_FILTERS_POINTER, call->filters.data());
+            SDL_SetNumberProperty(props, SDL_PROP_FILE_DIALOG_NFILTERS_NUMBER,
+                                  static_cast<Sint64>(call->filters.size()));
+        }
+        if (!call->location.empty())
+            SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_LOCATION_STRING, call->location.c_str());
+        if (!request.title.empty())
+            SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_TITLE_STRING, request.title.c_str());
+        SDL_SetBooleanProperty(props, SDL_PROP_FILE_DIALOG_MANY_BOOLEAN, request.mode == FileRequest::Mode::openMany);
+        call->props = props;
+        SDL_ShowFileDialogWithProperties(save ? SDL_FILEDIALOG_SAVEFILE : SDL_FILEDIALOG_OPENFILE, &chooserAnswered,
+                                         call, props);
+        return true;
     }
 
     bool DesktopHost::copyText(std::string_view utf8)
