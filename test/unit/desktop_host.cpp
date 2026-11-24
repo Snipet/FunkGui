@@ -14,8 +14,17 @@
 //   input.*     SDL events pushed to the window reach the Panel as its structs: a move, a press, a drag and a release
 //               in logical px with the button and the click count, a right press as a popup, a wheel notch in JUCE's
 //               units, a named key, a chord, typed text
-//   services.*  the clipboard's text written and read back; themeIndex(); nowSeconds() is the pinned clock
+//   services.*  the clipboard's text written and read back; themeIndex(); nowSeconds() is the pinned clock; the
+//               three services are reported
+//   drag.*      setUnboundedDrag() during a press: the drag's positions are the sum of the pointer's relative moves,
+//               and the release ends the mode
+//   menu.*      showMenu() draws a menu into the window's frame (its surface's colour read back from the GPU); a
+//               click on an item answers with its id, on the main thread, after the menu closed; the Panel gets no
+//               pointer event meanwhile but one pointerExit; dismissMenus() drops the callback
 //   resize.*    a fixed Panel that changes its own size has the window follow, and the next frame is the new size
+//   zoom.*      a zoom step chosen is applied at the next frame: the same logical size, more pixels
+//   resizable.* a resizable Panel in a resizable window: a new window size reaches it as resize() in logical px, not
+//               under its minimum
 //   close.*     close() closes the Panel's gestures; pump() answers false after it; a second open() works
 // Spec rows only.
 
@@ -51,6 +60,9 @@ namespace
     {
     public:
         int w = 320, h = 200;
+        bool canResize = false;
+        int resizes = 0;
+        bool unboundOnPress = false;                 // pointerDown asks the host for an unbounded drag
         int ticks = 0, draws = 0, closes = 0, exits = 0;
         float lastDt = 0.0f;
         funkgui::HostServices* host = nullptr;
@@ -76,10 +88,24 @@ namespace
         uint32_t a11yRevision() const override { return 0; }
         void a11yAction(uint32_t, funkgui::A11yAction, double) override {}
         void closeGestures() override { ++closes; }
+        bool resizable() const override { return canResize; }
+        int  minWidth() const override { return canResize ? 200 : w; }
+        int  minHeight() const override { return canResize ? 120 : h; }
+        void resize(int nw, int nh) override
+        {
+            ++resizes;
+            w = nw;
+            h = nh;
+        }
 
         void pointerMove(const funkgui::PointerEvent& e) override { log("move", e); }
         void pointerExit() override { ++exits; }
-        void pointerDown(const funkgui::PointerEvent& e) override { log("down", e); }
+        void pointerDown(const funkgui::PointerEvent& e) override
+        {
+            log("down", e);
+            if (unboundOnPress && host != nullptr)
+                host->setUnboundedDrag(true);
+        }
         void pointerDrag(const funkgui::PointerEvent& e) override { log("drag", e); }
         void pointerUp(const funkgui::PointerEvent& e) override { log("up", e); }
         void doubleClick(const funkgui::PointerEvent& e) override { log("double", e); }
@@ -384,6 +410,123 @@ int main(int argc, char** argv)
     P.eq("services.theme_index", host.themeIndex(), 0);
     P.near("services.now_is_the_pinned_clock", host.nowSeconds(), static_cast<double>(panel.ticks) / 60.0, 1.0e-4);
     P.eq("services.zoom_100", host.zoomPercent(), 100);
+    P.eq("services.all_three", host.services() == (funkgui::hostservice::menus | funkgui::hostservice::fileChooser
+                                                   | funkgui::hostservice::clipboard), 1);
+
+    // ---- an unbounded drag ------------------------------------------------------------------------------------------
+    {
+        SDL_Window* window = host.window();
+        const SDL_WindowID id = SDL_GetWindowID(window);
+        int ww = 0, wh = 0;
+        SDL_GetWindowSize(window, &ww, &wh);
+        const float unit = static_cast<float>(ww) / 320.0f;      // window units a logical px
+        const auto button = [&](bool down, float lx, float ly)
+        {
+            SDL_Event e{};
+            e.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+            e.button.windowID = id;
+            e.button.button = SDL_BUTTON_LEFT;
+            e.button.down = down;
+            e.button.clicks = 1;
+            e.button.x = lx * unit;
+            e.button.y = ly * unit;
+            SDL_PushEvent(&e);
+        };
+        const auto relative = [&](float dx, float dy)
+        {
+            SDL_Event e{};
+            e.type = SDL_EVENT_MOUSE_MOTION;
+            e.motion.windowID = id;
+            e.motion.x = 5.0f;                       // where a held pointer sits means nothing: the moves do
+            e.motion.y = 5.0f;
+            e.motion.xrel = dx * unit;
+            e.motion.yrel = dy * unit;
+            SDL_PushEvent(&e);
+        };
+        panel.events.clear();
+        panel.unboundOnPress = true;
+        button(true, 100.0f, 100.0f);
+        relative(10.0f, 0.0f);
+        relative(500.0f, -300.0f);                   // far outside the window
+        button(false, 0.0f, 0.0f);
+        pump(host, 2);
+        panel.unboundOnPress = false;
+        P.eq("drag.unbounded_first", has(panel, "drag 110.0 100.0 button=0 clicks=1 popup=0"), 1);
+        P.eq("drag.unbounded_sums_past_the_window", has(panel, "drag 610.0 -200.0 button=0 clicks=1 popup=0"), 1);
+        P.eq("drag.release_at_the_virtual_place", has(panel, "up 610.0 -200.0 button=0 clicks=1 popup=0"), 1);
+        panel.events.clear();
+        button(true, 100.0f, 100.0f);
+        relative(10.0f, 0.0f);                       // bounded again: the event's position counts, not its move
+        button(false, 20.0f, 20.0f);
+        pump(host, 2);
+        P.eq("drag.bounded_after_release", has(panel, "drag 5.0 5.0 button=0 clicks=1 popup=0")
+                                               || has(panel, "drag " + std::to_string(5.0f / unit).substr(0, 3)
+                                                                 + " " + std::to_string(5.0f / unit).substr(0, 3)
+                                                                 + " button=0 clicks=1 popup=0"), 1);
+    }
+
+    // ---- a menu, drawn into the window's frame ----------------------------------------------------------------------
+    {
+        SDL_Window* window = host.window();
+        const SDL_WindowID id = SDL_GetWindowID(window);
+        int ww = 0, wh = 0;
+        SDL_GetWindowSize(window, &ww, &wh);
+        const float unit = static_cast<float>(ww) / 320.0f;
+        const auto click = [&](float lx, float ly)
+        {
+            for (const bool down : { true, false })
+            {
+                SDL_Event e{};
+                e.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+                e.button.windowID = id;
+                e.button.button = SDL_BUTTON_LEFT;
+                e.button.down = down;
+                e.button.clicks = 1;
+                e.button.x = lx * unit;
+                e.button.y = ly * unit;
+                SDL_PushEvent(&e);
+            }
+        };
+        funkgui::MenuRequest request;
+        request.theme = funkgui::Theme::byIndex(0);
+        request.anchor = { 210.0f, 10.0f, 60.0f, 10.0f };        // right of the Panel's rectangles
+        request.items.push_back({ .id = 7, .label = "Seven" });
+        request.items.push_back({ .id = 8, .label = "Eight" });
+        int answers = 0, answer = -1;
+        const bool shown = host.showMenu(request, [&](int chosen)
+        {
+            ++answers;
+            answer = chosen;
+        });
+        P.eq("menu.shown", shown, 1);
+        P.eq("menu.callback_not_inside_the_call", answers, 0);
+        pump(host, 2);
+        const funkgui::Theme th = funkgui::Theme::byIndex(0);
+        const Col surface = funkgui::mix(th.ground, th.ink100, 0.05f);   // MenuLook's surface on a dark theme
+        // The menu's panel: its left edge on the anchor's, 4 px under it; a point in its second row's left margin.
+        if (host.capture(rgba, cw, ch, why))
+        {
+            const double sx = static_cast<double>(cw) / 320.0, sy = static_cast<double>(ch) / 200.0;
+            P.eq("menu.drawn_by_the_gpu", isCol(px(rgba, cw, static_cast<int>(216.0 * sx), static_cast<int>(60.0 * sy)),
+                                                surface), 1);
+        }
+        else
+            P.eq("menu.drawn_by_the_gpu", 0, 1);
+        panel.events.clear();
+        const int exitsBefore = panel.exits;
+        click(250.0f, 65.0f);                        // the second row: 24 + 5 + 24 .. 24 + 5 + 48 under y = 24
+        pump(host, 2);
+        P.eq("menu.item_chosen", answers == 1 && answer == 8, 1);
+        P.eq("menu.panel_got_no_press", panel.events.empty() && panel.exits == exitsBefore + 1, 1);
+        P.eq("menu.shows_again", host.showMenu(request, [&](int) { ++answers; }), 1);
+        host.dismissMenus();
+        click(250.0f, 65.0f);
+        pump(host, 2);
+        P.eq("menu.dismissed_callback_never_runs", answers, 1);
+        P.eq("menu.then_the_panels_press", has(panel, "down 250.0 65.0 button=0 clicks=1 popup=0"), 1);
+        funkgui::MenuRequest empty;
+        P.eq("menu.refused", host.showMenu(empty, [](int) {}), 0);
+    }
 
     // ---- a fixed Panel that changes its size ------------------------------------------------------------------------
     panel.w = 400;
@@ -396,6 +539,68 @@ int main(int argc, char** argv)
         P.eq("resize.captured_at_the_new_size", cw == d.physW && ch == d.physH, 1);
     else
         P.eq("resize.captured_at_the_new_size", 0, 1);
+
+    // ---- zoom, and a resizable Panel: each in a host of its own -----------------------------------------------------
+    {
+        TestPanel zoomed;
+        funkgui::desktop::Options zo = options;
+        zo.setUiAttached = nullptr;
+        zo.zoomSteps = { 100, 150 };
+        funkgui::desktop::DesktopHost zh(zoomed, zo);
+        if (zh.open(why))
+        {
+            pump(zh, 3);
+            const funkgui::desktop::DesktopHost::Diagnostics before = zh.diagnostics();
+            P.eq("zoom.steps", zh.zoomSteps().size() == 2 && zh.zoomPercent() == 100 && before.zoomPercent == 100, 1);
+            zh.setZoomPercent(125);                  // not a step: nothing moves
+            P.eq("zoom.unlisted_ignored", zh.zoomPercent(), 100);
+            zh.setZoomPercent(150);
+            P.eq("zoom.answers_at_once", zh.zoomPercent(), 150);
+            pump(zh, 6);
+            const funkgui::desktop::DesktopHost::Diagnostics after = zh.diagnostics();
+            std::printf("NOTE     zoom 150: %d x %d px (was %d x %d), scale %.3f\n", after.physW, after.physH,
+                        before.physW, before.physH, after.scale);
+            P.eq("zoom.applied", after.zoomPercent == 150 && after.logicalW == 320 && after.logicalH == 200, 1);
+            P.near("zoom.more_pixels", static_cast<double>(after.physH), 1.5 * static_cast<double>(before.physH), 1.5);
+            P.near("zoom.dpi_follows", after.scale, 1.5 * before.scale, 0.02);
+            zh.close();
+        }
+        else
+            P.eq("zoom.opened", 0, 1);
+
+        TestPanel grows;
+        grows.canResize = true;
+        funkgui::desktop::Options ro = options;
+        ro.setUiAttached = nullptr;
+        funkgui::desktop::DesktopHost rh(grows, ro);
+        if (rh.open(why))
+        {
+            pump(rh, 3);
+            const funkgui::desktop::DesktopHost::Diagnostics before = rh.diagnostics();
+            const bool flagged = (SDL_GetWindowFlags(rh.window()) & SDL_WINDOW_RESIZABLE) != 0;
+            P.eq("resizable.window_is", flagged, 1);
+            int ww = 0, wh = 0;
+            SDL_GetWindowSize(rh.window(), &ww, &wh);
+            SDL_SetWindowSize(rh.window(), ww * 3 / 2, wh * 2);
+            SDL_SyncWindow(rh.window());
+            pump(rh, 6);
+            const funkgui::desktop::DesktopHost::Diagnostics after = rh.diagnostics();
+            std::printf("NOTE     resized: %d x %d logical, %d x %d px (was %d x %d)\n", after.logicalW, after.logicalH,
+                        after.physW, after.physH, before.physW, before.physH);
+            P.eq("resizable.panel_resized", grows.resizes >= 1 && grows.w == 480 && grows.h == 400, 1);
+            P.eq("resizable.frame_follows", after.logicalW == 480 && after.logicalH == 400
+                                                && after.physW == before.physW * 3 / 2 && after.physH == before.physH * 2,
+                 1);
+            P.near("resizable.same_scale", after.scale, before.scale, 0.01);
+            SDL_SetWindowSize(rh.window(), 10, 10);  // under the minimum: the window system or the host holds it
+            SDL_SyncWindow(rh.window());
+            pump(rh, 6);
+            P.eq("resizable.not_under_the_minimum", grows.w >= 200 && grows.h >= 120, 1);
+            rh.close();
+        }
+        else
+            P.eq("resizable.opened", 0, 1);
+    }
 
     // ---- close ------------------------------------------------------------------------------------------------------
     const int ticksBefore = panel.ticks;
