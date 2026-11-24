@@ -308,6 +308,11 @@ jobs:
             echo "version, the renderer and the window's size and scale and exits. When the window is closed the"
             echo "program prints one line: fg.desktop: ok renderer=<name> frames=<n>"
             echo
+            echo "A section has one fixed size, so its window cannot be resized or maximised: that is by design."
+            echo "To see a window that can, run it with --resize: a Panel that draws its own bounds (a frame on the"
+            echo "window's edges, a block in each corner, a grid, its size as text). While an edge is dragged the"
+            echo "frame should stay on the edge and the blocks in the corners."
+            echo
             echo "licences/ holds the licences of the code and the font in the executable."
           } > "$out/$name/README.txt"
           cat "$out/$name/README.txt"
