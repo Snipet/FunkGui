@@ -273,19 +273,20 @@ jobs:
       - name: The artifact's folder
         id: package
         env:
-          PLATFORM: ${{ matrix.platform }}
+          # not PLATFORM: Visual Studio's environment has a Platform of its own, and Windows' names have no case
+          FG_PLATFORM: ${{ matrix.platform }}
           EXE: ${{ matrix.exe }}
         run: |
-          name="funkgui-gallery-desktop-$PLATFORM"
+          name="funkgui-gallery-desktop-$FG_PLATFORM"
           out="$RUNNER_TEMP/artifact"
           mkdir -p "$out/$name"
           cp "$BUILD/tools/GalleryDesktop/$EXE" "$out/$name/"
           cp -R "$BUILD/tools/GalleryDesktop/licences" "$out/$name/"
           {
             echo "FunkGui's gallery in a desktop window, without JUCE (FunkGui::desktop over SDL3 and bgfx)."
-            echo "Built by GitHub Actions from $GITHUB_REPOSITORY at $GITHUB_SHA ($GITHUB_REF_NAME), $PLATFORM, Release."
+            echo "Built by GitHub Actions from $GITHUB_REPOSITORY at $GITHUB_SHA ($GITHUB_REF_NAME), $FG_PLATFORM, Release."
             echo
-            case "$PLATFORM" in
+            case "$FG_PLATFORM" in
               windows-*)
                 echo "Run, from a Command Prompt or PowerShell in this folder:"
                 echo "    .\\$EXE"
