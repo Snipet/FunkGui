@@ -3,6 +3,105 @@
 Every entry states its **golden impact** (`none`, `atlas`, or `geometry: <widgets>`) so consumers can plan
 re-blessing (FCompressor docs/design/02-funkgui-and-ui.md §1.10). Tags are annotated `v0.MINOR.PATCH` on `main`.
 
+## v0.28.0 — 2026-11-24 · MINOR: FunkGui on the desktop without JUCE (SDL3)
+
+Golden impact: **none** (no golden file changed; nothing an existing Panel records, draws, dumps or hashes differs,
+and with JUCE on every target compiles what it compiled: see "Proved" below). New tests: `fg.desktop.input`,
+`fg.desktop.files` and `fg.desktop.png` (every configuration), and with `FUNKGUI_WITH_DESKTOP` `fg.desktop.host`,
+`fg.desktop.menu` and `fg.desktop.prefs`. `fg.desktop.menu` adds 40 golden rows (`frame.theme<0|1>.dpi<1|2>.*`: the
+fingerprints of a frame with a menu, a submenu and every kind of row), which are **candidates until the lead adopts
+them** (`tools/verify.sh` lists them as MISSING; the test passes).
+
+**Verified** (README, "Desktop", says the same at more length):
+- **Linux x86-64** (an Ubuntu 24.04 container, Clang 18; Xvfb with openbox and Mesa's lavapipe for the window):
+  `desktop` 70/70 and `nojuce` 66/66, no warnings, `tools/verify.sh` with nothing blocking and nothing drifting
+  (missing: the 40 new rows above, in `desktop`); `web` 66/66 as wasm32 under node (Emscripten 7.0.1), no warnings
+  (its browser pages were not run). With JUCE: `agent` and `agent-gui` were configured at v0.27.0 and at this release
+  and their compile commands compared (below), and the three new tests that exist there built and passed in `agent`;
+  neither preset was built whole or run.
+- **GitHub's runners** (the new `Desktop` workflow, on the `desktop` preset): `ubuntu-24.04` 70/70 and the gallery's
+  frame read back from Vulkan (lavapipe on Xvfb); `macos-15` (arm64) 70/70 with no warning and the gallery's frame
+  read back from Metal (a virtual machine's Apple GPU); `windows-latest` (clang-cl, warnings as errors) with no
+  warning, 44/44 (the six `fg.desktop.*` and the 38 others that exist there) and the gallery's frame read back from
+  Direct3D 11's software adapter. Seven sources that need POSIX (`open_memstream`, `<unistd.h>`) are not built on
+  Windows: the gallery probe, so no `fg.gallery.*` there, and `fg.canvas.image`, `fg.canvas.parity`,
+  `fg.canvas.shader`, `fg.harness.self`, `fg.prefs.backend` and `fg.web.prefs`; nor is `fg.headers` (a shell script).
+  The three renderers' frames of the gallery agree: Metal's and Direct3D 11's within 2 a channel, Vulkan's within 6.
+- **A person's machine, Windows:** the repository's owner ran the workflow's Windows artifacts on their own Windows
+  11 machine (3840 x 2160 at 150 % scale, Direct3D 11) and reported: the gallery's primitives section drawn
+  correctly and sharp, near 0 % CPU at rest, `fg.desktop: ok renderer=Direct3D 11 frames=825` on closing (commit
+  `30a3feb`, before the menus and file dialogs); in the `services` section the Canvas-drawn menu, the three file
+  dialogs and the clipboard all working; and with `--resize` (commit `5f7c23f`) a live resize by dragging and
+  maximising both working, with nothing missing when maximised and no lag, stretch or flash reported.
+- **Not run:** macOS on a person's machine (nothing on a real display there: a live resize, Retina, a trackpad's pinch
+  and scrolling, the file dialogs); a second monitor of another scale on either system; a JUCE preset built whole;
+  FCompressor, HardwareReverb and TestingPlayground against this release.
+- **Proved, not assumed: a JUCE build is what it was.** With `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`, the `agent` preset
+  has 2,296 compile commands at v0.27.0 and the `agent-gui` preset 3,198; at this release every one of them is there
+  with the same source, object, flags and definitions (the version string aside), and the only additions are the 46
+  commands of the three new tests' targets (`fg_desktop_png`, `fg_desktop_input`, `fg_desktop_files`).
+
+**One change for a consumer:** a native build with `FUNKGUI_WITH_JUCE=OFF` used to have bgfx turned off for it. It now
+keeps `FUNKGUI_WITH_BGFX` as given, which is ON by default: such a build that wants no GPU sets
+`FUNKGUI_WITH_BGFX=OFF` (FunkGui's `nojuce` preset now does). Emscripten builds are unchanged (bgfx is still turned
+off there), and so is every build with JUCE.
+
+- **`FunkGui::gpu` without JUCE.** `FUNKGUI_WITH_BGFX=ON` with `FUNKGUI_WITH_JUCE=OFF` is a valid combination on
+  macOS, Linux and Windows. `FunkGuiGpu` then holds the files that name no JUCE symbol: `BgfxContext`, `BgfxSink`,
+  `ShaderLibrary`, the image program, `gpuInfo()` and, on Apple's platforms, the Metal shader check, with the shaders.
+  `EditorHost`, `FramePump`, the render views, the cursors, the display link, `A11yBridge` and `GpuPicture.cpp` join
+  only with JUCE; without it `renderGpuPicture()` answers `unsupported` and `gpuPicturesSupported()` false
+  (`src/gpu/nojuce/`). A JUCE-free host supplies the three functions of `gpu/NativeSurface.h` that `BgfxContext`
+  calls (`nativeDisplay`, `retainRenderView`, `releaseRenderView`); `FunkGui::desktop` does.
+- **`FUNKGUI_WITH_DESKTOP`** (OFF by default; needs `FUNKGUI_WITH_BGFX=ON` and, in this release,
+  `FUNKGUI_WITH_JUCE=OFF`) and **SDL3**, pinned in `cmake/FunkGuiDeps.cmake` at `release-3.4.20` (commit
+  `f00dc919`, asserted), fetched by git, built static with the video, events, joystick, gamepad, haptic, audio and
+  dialog subsystems; skipped when the consumer already defined `SDL3::SDL3`. On Linux only SDL's X11 video driver is
+  built and asked for (README, "Desktop", lists the packages).
+- **`FunkGui::desktop`: `DesktopHost`** (`desktop/DesktopHost.h`), the host of a Panel in an SDL3 window on bgfx:
+  Metal through the layer of SDL's Metal view on macOS (no Objective-C in FunkGui's desktop sources), Direct3D 11 on
+  the window's `HWND`, Vulkan on the X11 window. `open()`, `run()`, `pump()`, `requestFrame()` (any thread),
+  `close()`, `window()`, `capture()` (the last frame drawn again offscreen by the GPU and read back as RGBA, on
+  Vulkan too) and `diagnostics()`. The frame is `EditorHost`'s, unchanged frames left undrawn included; the loop paces
+  full-rate frames by the swap chain's vsync and idles at 12 Hz asleep in SDL's event wait, with `Panel::idle` at
+  10 Hz; frames are drawn from SDL's event watch during a live resize. The window is sized for the display's content
+  scale and the UI zoom; a resizable Panel gets a resizable window.
+- **Input** (`desktop/DesktopInput.h`, header-only, no SDL header): SDL's modifiers, buttons, key codes, typed text,
+  wheel and pinch as the Panel's structs, by JUCE's rules as `web/WebInput.h` has them; the middle button is a press
+  (as under `EditorHost`); a chord of the command key makes `Key::character`, typed text comes from
+  `SDL_EVENT_TEXT_INPUT`.
+- **Services:** menus drawn by the Canvas in the same window (`desktop/MenuOverlay.h`, in `MenuLook`'s metrics and
+  palette: rows, separators, headers, ticks and radio dots, shortcuts, disabled rows, submenus, the keys, type-ahead,
+  a press outside dismisses, kept inside the window, scrolling when taller); file choosers through SDL's dialogs, the
+  callback on the main thread; the clipboard's text read and written; the cursor on SDL's system cursors;
+  `setUnboundedDrag` through relative mouse mode; the UI zoom; `announce()` and `a11yFocus()` do nothing.
+- **Preferences in a text file** (`desktop/PrefsFile.h`): a `UiPreferences` backend over `preferences.txt`, which the
+  first `open()` installs under SDL's preferences folder for `PREFS_FOLDER`, or in `<ENV_PREFIX>PREFS_DIR`.
+- **A PNG writer without JUCE** (`src/nojuce/WritePng.cpp`): 8-bit RGBA, the pixels in stored deflate blocks, with
+  CRC-32 and Adler-32 of its own and no new dependency. `funkgui::writePng` and `HeadlessHost::writePng` returned
+  false in every build without JUCE before; they now write the file (as large as the pixels).
+- **`funkgui_gallery_desktop`** (`tools/GalleryDesktop`): the gallery in a `DesktopHost`'s window; `--section`,
+  `--theme`, `--frames N`, `--shot file.png`, `--info`, `--list`; F1 and F2 change the section, F3 the theme. A
+  section's window is fixed-size, as its Panel is; `--resize` shows a resizable Panel that draws its own bounds, for
+  looking at a live resize.
+- **The `desktop` preset** and `desktop-verify` workflow preset; `links=desktop` for a test that links
+  `FunkGui::desktop`.
+- **CI:** `.github/workflows/desktop.yml` builds and tests the `desktop` preset on macOS (arm64), Windows (x64,
+  clang-cl) and Linux (x86-64), on Linux on Xvfb with Mesa's software Vulkan, and keeps each platform's gallery as an
+  artifact (`funkgui-gallery-desktop-<platform>`), with caches for the fetched sources, bgfx's shader compiler and
+  the compilers' objects. It is FunkGui's first workflow.
+- **FunkGui's own build on Windows** (the `desktop` preset there; it was built on Windows only inside a consumer
+  before): clang-cl is the default compiler at top level; FunkGui's warning and floating-point flags are spelt for it
+  (`/W4`, `/WX`, `/clang:-ffp-contract=off`); the static C runtime unless the caller chose one; a prebuilt
+  `shaderc.exe` is found in `FUNKGUI_DEPS_DIR`. A tool or test whose source needs POSIX is not defined on a Windows
+  host, nor is `fg.headers`, and a Python script's test runs through the interpreter CMake finds.
+- **`FUNKGUI_DEPS_DIR` from the environment:** at top level the dependency cache's default is the environment's
+  `FUNKGUI_DEPS_DIR` when it is set, else `~/audio/.deps` as before.
+- **A tool directory that needs JUCE is not added without it** (`tools/GalleryApp`, whose own check was for bgfx).
+
+Not in this release, each listed in the README: a second window, popup windows, the system menu bar, accessibility,
+input methods, drag and drop, a newer bgfx, Wayland natively, text beyond the atlas.
+
 ## v0.27.0 — 2026-11-15 · MINOR: mouse buttons and pinch, the TextEditor's scrolling made public, version() and gpuInfo()
 
 Golden impact: **none** (no golden file changed; nothing records, draws, dumps or hashes differently: the old
