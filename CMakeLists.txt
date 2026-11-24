@@ -34,6 +34,13 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(CMAKE_C_COMPILER clang)
     set(CMAKE_CXX_COMPILER clang++)
   endif()
+  # Windows (v0.28.0, FunkGui's own build there: the `desktop` preset): clang-cl, the compiler FunkGui's consumers
+  # build it with on Windows, unless the caller chose one. From an "x64 Native Tools" prompt of a Visual Studio with
+  # its "C++ Clang tools for Windows".
+  if(CMAKE_HOST_WIN32 AND NOT FUNKGUI_WEB AND NOT DEFINED CMAKE_CXX_COMPILER AND NOT DEFINED ENV{CXX})
+    set(CMAKE_C_COMPILER clang-cl)
+    set(CMAKE_CXX_COMPILER clang-cl)
+  endif()
 endif()
 
 project(FunkGui VERSION 0.27.0 LANGUAGES C CXX)       # VERSION changes only in tagging commits (02 §1.10)
@@ -52,12 +59,16 @@ if(PROJECT_IS_TOP_LEVEL)
   # No C++20 modules anywhere: without this, Ninja and a Clang with clang-scan-deps (Linux) scan every source twice.
   set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
   include(${PROJECT_SOURCE_DIR}/cmake/FunkGuiPlatform.cmake)
+  if(WIN32)
+    funkgui_windows_build_defaults()                 # v0.28.0: before any target, the fetched dependencies' included
+  endif()
 endif()
 
 # ---- Options (02 §1.7). A consumer sets them as NORMAL variables before FetchContent_MakeAvailable (CMP0077). --------
 option(FUNKGUI_WITH_JUCE        "JUCE under FunkGui (OFF: a JUCE-free FunkGui::core; no gpu, no presets)"   ON)
 option(FUNKGUI_WITH_BGFX        "FunkGui::gpu, shaders and bgfx (OFF: headless, FunkGui = FunkGuiCore)" ON)
 option(FUNKGUI_WITH_PRESETS     "FunkGui::presets (FunkPresets; SQLite once it has sources)"                 ON)
+option(FUNKGUI_WITH_DESKTOP     "FunkGui::desktop: a Panel in an SDL3 window, no JUCE (needs FUNKGUI_WITH_BGFX)" OFF)
 option(FUNKGUI_HARNESS_ONLY     "Define only FunkGui::harness and never require JUCE (DSP-only consumers)"   OFF)
 option(FUNKGUI_BUILD_TOOLS      "Tool targets (EXCLUDE_FROM_ALL; FCompressor sets ON, K2 #26d)"    ${PROJECT_IS_TOP_LEVEL})
 option(FUNKGUI_BUILD_TESTS      "FunkGui's own fg.* CTest suite (02 §3.11)"                        ${PROJECT_IS_TOP_LEVEL})
@@ -75,18 +86,43 @@ endif()
 
 # FUNKGUI_WITH_JUCE=OFF (v0.12.0): FunkGui::core with no JUCE under it, for a host that is not a JUCE plug-in (the
 # browser: the `web` preset and FCompressor's web build) and, natively, the `nojuce` preset that keeps that core honest
-# on the host compiler. What needs JUCE is not there: FunkGui::gpu (its EditorHost is a juce::Component) and
-# FunkGui::presets (juce::ValueTree and File in its API), the sources under src/juce/ (src/nojuce/ holds their
-# counterparts), and every tool and test that includes JUCE. FunkGuiFonts embeds the face and the committed bake of the
-# atlas without juce_add_binary_data, and FunkGui::core defines FUNKGUI_HAS_JUCE=0. The default, ON, is every build
-# there was before: the same targets, flags and sources, plus FUNKGUI_HAS_JUCE=1. NORMAL variables, as above: they
-# shadow the cache options for this configure only.
+# on the host compiler. What needs JUCE is not there: FunkGui::presets (juce::ValueTree and File in its API), the
+# sources under src/juce/ (src/nojuce/ holds their counterparts), and every tool and test that includes JUCE.
+# FunkGuiFonts embeds the face and the committed bake of the atlas without juce_add_binary_data, and FunkGui::core
+# defines FUNKGUI_HAS_JUCE=0. The default, ON, is every build there was before: the same targets, flags and sources,
+# plus FUNKGUI_HAS_JUCE=1. NORMAL variables, as above: they shadow the cache options for this configure only.
+#
+# v0.28.0: FUNKGUI_WITH_BGFX=ON with FUNKGUI_WITH_JUCE=OFF is a valid combination on macOS, Linux and Windows.
+# FunkGui::gpu then holds what names no JUCE symbol (BgfxContext, BgfxSink, ShaderLibrary, the image program, GpuInfo
+# and the shaders: cmake/FunkGuiTargets.cmake lists the files), and what binds it to JUCE (EditorHost, FramePump, the
+# render views, GpuPicture, the accessibility bridge) is left out. Before v0.28.0 bgfx was turned off whenever JUCE
+# was; so a native JUCE-free build that wants no GPU now says FUNKGUI_WITH_BGFX=OFF itself (the `nojuce` preset does).
+# Emscripten has no bgfx here: FunkGui::web is its GPU layer, and FUNKGUI_WITH_BGFX is turned off there as before.
+#
+# FUNKGUI_WITH_DESKTOP (v0.28.0; OFF): FunkGui::desktop, the host of a Panel in a window of SDL3's with no JUCE
+# (include/funkgui/desktop/DesktopHost.h). It needs bgfx and excludes JUCE in this release: the desktop host and
+# JUCE's render views both define the three functions of gpu/NativeSurface.h that BgfxContext calls.
 if(NOT FUNKGUI_WITH_JUCE AND NOT FUNKGUI_HARNESS_ONLY)
-  if(FUNKGUI_WITH_BGFX OR FUNKGUI_WITH_PRESETS)
-    message(STATUS "FunkGui: FUNKGUI_WITH_JUCE=OFF: FunkGui::gpu and FunkGui::presets need JUCE and are not defined")
+  if(FUNKGUI_WITH_PRESETS)
+    message(STATUS "FunkGui: FUNKGUI_WITH_JUCE=OFF: FunkGui::presets needs JUCE and is not defined")
   endif()
-  set(FUNKGUI_WITH_BGFX OFF)
   set(FUNKGUI_WITH_PRESETS OFF)
+  if(EMSCRIPTEN AND FUNKGUI_WITH_BGFX)
+    message(STATUS "FunkGui: Emscripten: FunkGui::gpu (bgfx) is not defined; FunkGui::web is the GPU layer")
+    set(FUNKGUI_WITH_BGFX OFF)
+  endif()
+endif()
+if(FUNKGUI_WITH_DESKTOP AND NOT FUNKGUI_HARNESS_ONLY)
+  if(FUNKGUI_WITH_JUCE)
+    message(FATAL_ERROR "FunkGui: FUNKGUI_WITH_DESKTOP needs FUNKGUI_WITH_JUCE=OFF in this release (the desktop host "
+                        "and JUCE's render views both define gpu/NativeSurface.h's functions)")
+  endif()
+  if(NOT FUNKGUI_WITH_BGFX)
+    message(FATAL_ERROR "FunkGui: FUNKGUI_WITH_DESKTOP needs FUNKGUI_WITH_BGFX=ON (FunkGui::desktop draws through "
+                        "FunkGui::gpu)")
+  endif()
+elseif(FUNKGUI_WITH_DESKTOP)
+  set(FUNKGUI_WITH_DESKTOP OFF)                      # harness only: nothing else is defined
 endif()
 if(EMSCRIPTEN AND FUNKGUI_WITH_JUCE AND NOT FUNKGUI_HARNESS_ONLY)
   message(FATAL_ERROR "FunkGui: JUCE does not build with Emscripten: set FUNKGUI_WITH_JUCE=OFF (the JUCE-free "
@@ -109,7 +145,7 @@ if(FUNKGUI_BUILD_TESTS)
 endif()
 
 set(_fg_summary "FunkGui::harness")
-foreach(_t core gpu presets web)
+foreach(_t core gpu presets web desktop)
   if(TARGET FunkGui::${_t})
     string(APPEND _fg_summary ", FunkGui::${_t}")
   endif()

@@ -16,6 +16,11 @@
 #   src/gpu/**                                                           -> FunkGuiGpu   (.cpp and .mm; *.mm on
 #                                                                           Apple only, src/gpu/linux/** on Linux
 #                                                                           only, src/gpu/win/** on Windows only)
+#     FUNKGUI_WITH_JUCE=OFF (v0.28.0): only the files that name no JUCE symbol (_fg_gpu_without_juce below) and
+#     src/gpu/nojuce/** (what such a build defines in place of a JUCE-bound file); with JUCE, everything but
+#     src/gpu/nojuce/**, which is every file FunkGuiGpu had before v0.28.0.
+#   src/desktop/**                                                       -> FunkGuiDesktop (v0.28.0; only with
+#                                                                           FUNKGUI_WITH_DESKTOP)
 #   src/presets/**                                                       -> FunkPresets  (empty placeholder until then)
 #   src/web/**                                                           -> FunkGuiWeb   (v0.12.0; Emscripten only)
 #   tools/*.cpp                                                          -> tool FunkGui<Stem> (FrameRender.cpp ->
@@ -40,11 +45,26 @@ endif()
 
 # Warnings for FunkGui's own sources in FunkGui's own targets (tools, tests): the FunkGui test rule of 02 §3.11 and
 # CLAUDE.md. Applied per source file, so JUCE's and bgfx's sources compiled into the same targets never get them.
-set(FUNKGUI_STRICT_WARNINGS -Wall -Wextra -Wshadow -Wpedantic)
-if(FUNKGUI_WERROR)
-  list(APPEND FUNKGUI_STRICT_WARNINGS -Werror)
+#
+# clang-cl (v0.28.0: FunkGui's own build on Windows): it reads -Wall as cl's /Wall, which is Clang's -Weverything, so
+# -Wall -Wextra is spelt /W4 there and -Werror /WX; the other -W flags it takes as Clang does. Flags cl does not have
+# go through /clang: (FUNKGUI_FP_CONTRACT_OFF, the -ffp-contract=off of FunkGui's own targets).
+if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+  set(FUNKGUI_STRICT_WARNINGS /W4 -Wshadow -Wpedantic -Wno-language-extension-token
+                              -Wno-nonportable-system-include-path -Wno-microsoft-enum-value -Wno-unknown-pragmas)
+  if(FUNKGUI_WERROR)
+    list(APPEND FUNKGUI_STRICT_WARNINGS /WX)
+  endif()
+  set(_fg_fp_contract_off /clang:-ffp-contract=off)
+else()
+  set(FUNKGUI_STRICT_WARNINGS -Wall -Wextra -Wshadow -Wpedantic)
+  if(FUNKGUI_WERROR)
+    list(APPEND FUNKGUI_STRICT_WARNINGS -Werror)
+  endif()
+  set(_fg_fp_contract_off -ffp-contract=off)
 endif()
 set_property(GLOBAL PROPERTY FUNKGUI_STRICT_WARNINGS "${FUNKGUI_STRICT_WARNINGS}")
+set_property(GLOBAL PROPERTY FUNKGUI_FP_CONTRACT_OFF "${_fg_fp_contract_off}")
 
 #=======================================================================================================================
 # FunkGuiHarness (FunkGui::harness): header-only, JUCE-free Harness v2 (03 §3.2). Available in every configuration.
@@ -207,7 +227,8 @@ endfunction()
 # K2 #26g) and FunkGui's own sources, including SOURCES given here, get FUNKGUI_STRICT_WARNINGS.
 function(_funkgui_internal_target target)
   set_target_properties(${target} PROPERTIES FUNKGUI_PRECOMPILED_JUCE ON)
-  target_compile_options(${target} PRIVATE -ffp-contract=off)
+  get_property(_fp GLOBAL PROPERTY FUNKGUI_FP_CONTRACT_OFF)
+  target_compile_options(${target} PRIVATE ${_fp})
   target_compile_features(${target} PRIVATE cxx_std_20)
   get_property(_warn GLOBAL PROPERTY FUNKGUI_STRICT_WARNINGS)
   get_property(_lib GLOBAL PROPERTY FUNKGUI_ALL_SOURCES)
@@ -325,6 +346,15 @@ set(_fg_other_modules gpu presets)
 if(EMSCRIPTEN)
   list(APPEND _fg_other_modules web)                 # v0.12.0: the WebGL2 sink; no other build globs src/web/
 endif()
+if(FUNKGUI_WITH_DESKTOP)
+  list(APPEND _fg_other_modules desktop)             # v0.28.0: the SDL3 host; no other build globs src/desktop/
+endif()
+# v0.28.0: FunkGui::gpu without JUCE is these files of src/gpu/ (and src/gpu/nojuce/**): the bgfx context, the sink,
+# the custom shaders, the image program, gpuInfo() and, on Apple's platforms, the Metal shader check. Every other
+# file there includes JUCE (EditorHost, FramePump, HostServicesJuce, A11yBridge, GpuPicture, the render views, the
+# cursors, the display link) and joins only with JUCE.
+set(_fg_gpu_without_juce "/src/gpu/(BgfxContext|BgfxSink|ShaderLibrary|ImageGpu|GpuInfo)\\.cpp$|/src/gpu/nojuce/")
+set(_fg_gpu_mm_without_juce "/src/gpu/ShaderCheckMetal\\.mm$")
 set(_fg_core_sources "")
 set(_fg_all_sources "")
 foreach(_m IN LISTS _fg_core_modules _fg_other_modules)
@@ -343,6 +373,14 @@ foreach(_m IN LISTS _fg_core_modules _fg_other_modules)
   endif()
   if(NOT WIN32)
     list(FILTER _cpp EXCLUDE REGEX "/src/${_m}/win/")
+  endif()
+  if(_m STREQUAL "gpu")
+    if(FUNKGUI_WITH_JUCE)
+      list(FILTER _cpp EXCLUDE REGEX "/src/gpu/nojuce/")
+    else()
+      list(FILTER _cpp INCLUDE REGEX "${_fg_gpu_without_juce}")
+      list(FILTER _mm INCLUDE REGEX "${_fg_gpu_mm_without_juce}")
+    endif()
   endif()
   set(_fg_sources_${_m} ${_cpp} ${_mm})
   set_property(GLOBAL PROPERTY FUNKGUI_SOURCES_${_m} "${_fg_sources_${_m}}")
@@ -423,7 +461,7 @@ if(FUNKGUI_WITH_JUCE AND (FUNKGUI_BUILD_TOOLS OR FUNKGUI_BUILD_TESTS))
   add_library(FunkGuiJuce STATIC EXCLUDE_FROM_ALL)
   target_link_libraries(FunkGuiJuce PRIVATE juce::juce_gui_basics juce::juce_data_structures juce::juce_audio_processors)
   target_compile_definitions(FunkGuiJuce PRIVATE JUCE_STANDALONE_APPLICATION=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
-  target_compile_options(FunkGuiJuce PRIVATE -ffp-contract=off)
+  target_compile_options(FunkGuiJuce PRIVATE ${_fg_fp_contract_off})
   target_compile_features(FunkGuiJuce PUBLIC cxx_std_20)
   # Consumers compile against exactly the module configuration the archive was built with. SYSTEM: the re-exported
   # JUCE include directories stay system headers for FunkGui's -Werror sources.
@@ -657,8 +695,24 @@ if(EMSCRIPTEN)
   add_dependencies(FunkGuiWeb FunkGuiShaderText)
 endif()
 
+#=======================================================================================================================
+# FunkGuiDesktop (FunkGui::desktop, v0.28.0): the host of a Panel in an SDL3 window with no JUCE under it
+# (include/funkgui/desktop/DesktopHost.h), over FunkGui::gpu. Only with FUNKGUI_WITH_DESKTOP, which the top-level
+# CMakeLists.txt holds to FUNKGUI_WITH_BGFX=ON and FUNKGUI_WITH_JUCE=OFF. INTERFACE, like the other library targets:
+# its sources compile in the consumer, which calls funkgui_configure_product() and funkgui_compile_shaders() as any
+# GPU consumer does. It defines the three functions of gpu/NativeSurface.h that BgfxContext calls (nativeDisplay,
+# retainRenderView, releaseRenderView), which is why it and JUCE's render views exclude each other.
+#=======================================================================================================================
+if(FUNKGUI_WITH_DESKTOP)
+  add_library(FunkGuiDesktop INTERFACE)
+  add_library(FunkGui::desktop ALIAS FunkGuiDesktop)
+  target_sources(FunkGuiDesktop INTERFACE ${_fg_sources_desktop})
+  target_link_libraries(FunkGuiDesktop INTERFACE FunkGuiGpu SDL3::SDL3)
+  target_compile_definitions(FunkGuiDesktop INTERFACE FUNKGUI_HAS_DESKTOP=1)
+endif()
+
 # FunkGui (umbrella): FunkGuiCore, plus FunkGuiGpu when enabled. (FunkGui::web is linked by name: its link options
-# are a browser's, and FunkGui's own wasm tests run under node.)
+# are a browser's, and FunkGui's own wasm tests run under node. FunkGui::desktop is linked by name too.)
 add_library(FunkGui INTERFACE)
 target_link_libraries(FunkGui INTERFACE FunkGuiCore)
 if(TARGET FunkGuiGpu)
@@ -703,6 +757,16 @@ if(FUNKGUI_BUILD_TOOLS)
   file(GLOB _fg_tool_dirs CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/tools/*/CMakeLists.txt)
   foreach(_cml IN LISTS _fg_tool_dirs)
     get_filename_component(_dir "${_cml}" DIRECTORY)
+    # v0.28.0: a tool directory whose CMakeLists.txt calls one of JUCE's juce_add_* commands is not added without
+    # JUCE (tools/GalleryApp: its own check is for bgfx, which before v0.28.0 was never there without JUCE).
+    if(NOT FUNKGUI_WITH_JUCE)
+      file(STRINGS "${_cml}" _fg_tool_juce LIMIT_COUNT 1 REGEX "^[ \t]*juce_add_[a-z_]+\\(")
+      if(_fg_tool_juce)
+        get_filename_component(_fg_tool_name "${_dir}" NAME)
+        message(STATUS "FunkGui: tools/${_fg_tool_name} needs JUCE (FUNKGUI_WITH_JUCE is OFF); not added")
+        continue()
+      endif()
+    endif()
     add_subdirectory(${_dir})
   endforeach()
   get_property(_fg_tools GLOBAL PROPERTY FUNKGUI_TOOL_TARGETS)
