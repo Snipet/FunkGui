@@ -56,16 +56,16 @@ endfunction()
 # called by the top-level CMakeLists.txt before any target exists, so it holds for the dependencies fetched below too:
 # - the static C runtime, unless the caller chose one: a tool built here (funkgui_gallery_desktop) then runs on a
 #   machine with no Visual C++ redistributable, and every library in it has the same runtime;
-# - /utf-8 (the sources are UTF-8) and /bigobj;
-# - windows.h without its min and max macros and its rarely used parts;
 # - RelWithDebInfo inlines fully (/Ob2), as Clang's -O2 does elsewhere: CMake's /Ob1 there inlines only what is
 #   marked inline, and SoftRaster and the tests ran several times slower in a consumer that kept it.
+# What only FunkGui's own sources want is given to FunkGui's own targets alone
+# (cmake/FunkGuiTargets.cmake _funkgui_internal_target: /utf-8, windows.h without its min and max macros and its
+# rarely used parts), never to a dependency: bgfx's shader compiler includes Direct3D's COM headers, which need the
+# parts WIN32_LEAN_AND_MEAN leaves out.
 macro(funkgui_windows_build_defaults)
   if(NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
   endif()
-  add_compile_options($<$<COMPILE_LANGUAGE:CXX,C>:/bigobj> $<$<COMPILE_LANGUAGE:CXX,C>:/utf-8>)
-  add_compile_definitions(NOMINMAX= WIN32_LEAN_AND_MEAN=1 _CRT_SECURE_NO_WARNINGS)
   foreach(_fg_lang C CXX)
     string(REPLACE "/Ob1" "/Ob2" CMAKE_${_fg_lang}_FLAGS_RELWITHDEBINFO "${CMAKE_${_fg_lang}_FLAGS_RELWITHDEBINFO}")
   endforeach()

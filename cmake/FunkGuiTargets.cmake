@@ -229,6 +229,13 @@ function(_funkgui_internal_target target)
   set_target_properties(${target} PROPERTIES FUNKGUI_PRECOMPILED_JUCE ON)
   get_property(_fp GLOBAL PROPERTY FUNKGUI_FP_CONTRACT_OFF)
   target_compile_options(${target} PRIVATE ${_fp})
+  # Windows (v0.28.0, FunkGui's own build there): UTF-8 sources, large objects, and windows.h without its min and max
+  # macros and its rarely used parts, as the consumers that built FunkGui on Windows before define them (the forms
+  # JUCE's own headers use, so they are no redefinitions there).
+  if(WIN32)
+    target_compile_options(${target} PRIVATE /utf-8 /bigobj)
+    target_compile_definitions(${target} PRIVATE NOMINMAX= WIN32_LEAN_AND_MEAN=1 _CRT_SECURE_NO_WARNINGS)
+  endif()
   target_compile_features(${target} PRIVATE cxx_std_20)
   get_property(_warn GLOBAL PROPERTY FUNKGUI_STRICT_WARNINGS)
   get_property(_lib GLOBAL PROPERTY FUNKGUI_ALL_SOURCES)
