@@ -23,7 +23,8 @@
 // closed), the frame is recorded: FrameInfo as EditorHost fills it, dpi = physical height / logical height; (6) a
 // recording equal to the last one drawn is not submitted (canvas/FrameCompare.h); else BgfxSink::submit, bgfx::frame()
 // and BgfxContext::afterFrame(); (7) Panel::wantsFullRate() is the loop's next rate. On Linux every frame is drawn
-// (an X11 window keeps no picture: gpu/NativeSurface.h renderViewKeepsFrame says why).
+// (an X11 window keeps no picture: gpu/NativeSurface.h renderViewKeepsFrame says why). A window the system reports
+// occluded (wholly covered, or on another desktop) is ticked and not drawn, and drawn again when it is seen.
 //
 // The loop (web/WebClock.h FrameCadence, the other hosts' cadence): while the Panel wants full rate, or input arrived,
 // frames are paced by the swap chain's vsync (bgfx::frame() waits for the display; never more than about 75 a second

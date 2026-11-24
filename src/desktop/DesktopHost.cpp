@@ -72,8 +72,8 @@
 //   generation number) and wakes the loop; the loop hands it to the Panel's callback on the main thread. A chooser
 //   that was replaced by a second chooseFiles, or whose host closed, still answers: into a box that no longer waits
 //   for that generation, where the answer is dropped. The dialog starts in the user's Documents folder.
-// - A window that is hidden or minimised ticks and draws nothing, and a frame drawn while SDL reports it occluded is
-//   drawn again once it is not (macOS presents nothing for such a window).
+// - A window that is hidden or minimised neither ticks nor draws. One that SDL reports occluded (wholly covered, or
+//   on another desktop) ticks and is not drawn, and is drawn again when it is seen.
 // - The event watch draws only on the main thread, never inside a frame, and not more often than every 4 ms.
 
 namespace funkgui::desktop
@@ -667,6 +667,16 @@ namespace funkgui::desktop
         {
             cadence.requestRate(panel.wantsFullRate());
         };
+        // An occluded window is ticked and not drawn: nothing of it is on screen, and on macOS a frame for it would
+        // wait for a drawable the display never takes (bgfx is given the Metal layer, not the window, and cannot ask
+        // for itself, as it does under EditorHost). The gate draws it again when SDL says it is seen.
+        if (!reachesScreen && !options.hidden)
+        {
+            ++diag.skipped;
+            gate.lost();
+            finish();
+            return;
+        }
         if (!forced && !panelWants)
         {
             ++diag.skipped;
