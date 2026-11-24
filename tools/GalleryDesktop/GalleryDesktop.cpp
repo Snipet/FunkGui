@@ -4,6 +4,7 @@
 // what a person runs to see and try FunkGui::desktop, and what a machine runs to prove a platform draws.
 //
 //   funkgui_gallery_desktop [--section <name>] [--theme <0|1>] [--frames <n>] [--shot <file.png>] [--info] [--list]
+//                           [--resize]
 //
 // - --section: a gallery section, "primitives" when it is not given (else the first registered one). In the window,
 //   F1 and F2 show the section before and after it and F3 the other theme; the window takes each section's size.
@@ -15,12 +16,17 @@
 // - --info: opens the window hidden, prints funkgui::version(), funkgui::gpuInfo(), the renderer, the window's size
 //   and scale, one line each, and exits 0.
 // - --list: the sections' names, one a line.
+// - --resize: in place of a section (which has one fixed size), a resizable Panel made for looking at a live resize:
+//   a frame along the window's edges, a block in each corner, a grid from the top left, and the Panel's size in
+//   logical px as text in the middle. While the window's edge is dragged the frame should stay on the edge, the
+//   blocks in the corners, and the text should say the size without lagging. F3 still changes the theme.
 // A clean exit prints one line, "fg.desktop: ok renderer=<name> frames=<n>". A failure to open prints why and exits 1.
 
 #include "../../test/gallery/GalleryPanel.h"
 
 #include <funkgui/canvas/SoftRaster.h>
 #include <funkgui/core/Theme.h>
+#include <funkgui/core/TypeScale.h>
 #include <funkgui/core/Version.h>
 #include <funkgui/desktop/DesktopHost.h>
 #include <funkgui/gpu/GpuInfo.h>
@@ -49,7 +55,56 @@ namespace
         std::string shot;
         int  theme = -1;
         long frames = 0;
-        bool info = false, list = false, bad = false;
+        bool info = false, list = false, resize = false, bad = false;
+    };
+
+    // --resize: a Panel of any size from 240 x 160 up, which draws its own bounds (the top of this file).
+    class ResizePanel final : public funkgui::Panel
+    {
+    public:
+        void attach(funkgui::HostServices&) override {}
+        int  width() const override { return w_; }
+        int  height() const override { return h_; }
+        void tick(float) override {}
+        bool wantsFullRate() const override { return false; }
+        void accessibility(std::vector<funkgui::A11yItem>&) const override {}
+        uint32_t a11yRevision() const override { return 0; }
+        void a11yAction(uint32_t, funkgui::A11yAction, double) override {}
+        void closeGestures() override {}
+        bool resizable() const override { return true; }
+        int  minWidth() const override { return 240; }
+        int  minHeight() const override { return 160; }
+        void resize(int w, int h) override
+        {
+            w_ = w;
+            h_ = h;
+            ++resizes_;
+        }
+
+        void draw(funkgui::Canvas& c, const funkgui::Theme& th) override
+        {
+            const float w = static_cast<float>(w_), h = static_cast<float>(h_);
+            for (float x = 40.0f; x < w; x += 40.0f)             // the grid: fixed from the top left
+                c.hairlineV(x, 0.0f, h, th.ink16);
+            for (float y = 40.0f; y < h; y += 40.0f)
+                c.hairlineH(0.0f, y, w, th.ink16);
+            c.rrect(4.0f, 4.0f, w - 8.0f, h - 8.0f, 6.0f, funkgui::Col{ 0, 0, 0, 0 }, 2.0f, th.accent);   // the frame
+            constexpr float k = 18.0f;                           // a block in each corner
+            c.rrect(0.0f, 0.0f, k, k, 0.0f, th.ink100);
+            c.rrect(w - k, 0.0f, k, k, 0.0f, th.ink100);
+            c.rrect(0.0f, h - k, k, k, 0.0f, th.ink100);
+            c.rrect(w - k, h - k, k, k, 0.0f, th.ink100);
+            char size[64];
+            std::snprintf(size, sizeof size, "%d x %d", w_, h_);
+            c.text(size, w * 0.5f, c.capCentreTop(h * 0.5f - 10.0f, funkgui::type::kValueP), funkgui::type::kValueP,
+                   th.ink100, funkgui::Align::centre);
+            std::snprintf(size, sizeof size, "RESIZED %d TIMES", resizes_);
+            c.text(size, w * 0.5f, c.capCentreTop(h * 0.5f + 22.0f, funkgui::type::kLabel), funkgui::type::kLabel,
+                   th.ink52, funkgui::Align::centre);
+        }
+
+    private:
+        int w_ = 480, h_ = 300, resizes_ = 0;
     };
 
     Args parse(int argc, char** argv)
@@ -71,6 +126,8 @@ namespace
                 a.info = true;
             else if (arg == "--list")
                 a.list = true;
+            else if (arg == "--resize")
+                a.resize = true;
             else
                 a.bad = true;
         }
@@ -91,7 +148,7 @@ int main(int argc, char** argv)
     if (args.bad)
     {
         std::fprintf(stderr, "usage: funkgui_gallery_desktop [--section <name>] [--theme <0|1>] [--frames <n>] "
-                             "[--shot <file.png>] [--info] [--list]\n");
+                             "[--shot <file.png>] [--info] [--list] [--resize]\n");
         return 2;
     }
     const std::vector<G::SectionInfo>& sections = G::sections();
@@ -112,11 +169,14 @@ int main(int argc, char** argv)
     }
 
     G::GalleryPanel panel(*section);
+    ResizePanel resizePanel;
+    funkgui::Panel& shown = args.resize ? static_cast<funkgui::Panel&>(resizePanel) : panel;
     const bool machine = args.frames > 0 || !args.shot.empty();
     const long frames = args.frames > 0 ? args.frames : 120;
 
     funkgui::desktop::Options options;
-    options.title = titleOf(*section);
+    options.title = args.resize ? std::string("FunkGui gallery: resize   (drag the window's edges; F3: theme)")
+                                : titleOf(*section);
     options.themeIndex = args.theme;
     options.hidden = args.info;
     options.fixedDt = machine ? 1.0f / 60.0f : 0.0f;
@@ -129,7 +189,7 @@ int main(int argc, char** argv)
     {
         if (e.type != SDL_EVENT_KEY_DOWN || e.key.repeat)
             return false;
-        if (e.key.key == SDLK_F1 || e.key.key == SDLK_F2)
+        if ((e.key.key == SDLK_F1 || e.key.key == SDLK_F2) && !args.resize)
         {
             std::size_t at = 0;
             for (std::size_t i = 0; i < sections.size(); ++i)
@@ -156,7 +216,7 @@ int main(int argc, char** argv)
         return false;
     };
 
-    funkgui::desktop::DesktopHost host(panel, std::move(options));
+    funkgui::desktop::DesktopHost host(shown, std::move(options));
     hostPtr = &host;
     std::string why;
     if (!host.open(why))
