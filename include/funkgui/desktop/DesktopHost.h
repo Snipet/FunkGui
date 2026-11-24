@@ -113,7 +113,8 @@ namespace funkgui::desktop
         bool vsync = true;
 
         // A pinned clock for tests and captures (EditorHost's UI_FIXED_DT): > 0, every tick gets this dt, every frame
-        // is drawn, and nowSeconds() is the sum of the dts.
+        // is drawn, nowSeconds() is the sum of the dts, and pump() draws a frame at every turn without waiting for
+        // the cadence (with vsync on, bgfx::frame() still waits for the display).
         float fixedDt = 0.0f;
 
         bool hidden = false;                         // the window is made hidden and stays so (tests)

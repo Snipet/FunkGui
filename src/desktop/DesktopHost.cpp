@@ -13,6 +13,7 @@
 #include <funkgui/core/Config.h>
 #include <funkgui/core/Theme.h>
 #include <funkgui/desktop/DesktopInput.h>
+#include <funkgui/desktop/MenuOverlay.h>
 #include <funkgui/gpu/BgfxContext.h>
 #include <funkgui/gpu/BgfxSink.h>
 #include <funkgui/prefs/UiPreferences.h>
@@ -57,6 +58,10 @@
 //   the pointer captured while a button is down, so a drag keeps arriving outside the window. A release counts as a
 //   double click by SDL's click count (the system's double-click time) unless the pointer moved 4 px from the press
 //   (JUCE's rule that a drag is no multiple click).
+// - Menus (desktop/MenuOverlay.h) are drawn into the frame after the Panel. While one shows, every pointer, wheel
+//   and key event is the menu's and the Panel gets none: it is told the pointer left (pointerExit) when the menu
+//   first takes a pointer event, and its next move after the menu closed is a move again. A press the Panel took
+//   before the menu opened (the click on a dropdown that opened it) stays the Panel's until its release.
 // - A window that is hidden or minimised ticks and draws nothing, and a frame drawn while SDL reports it occluded is
 //   drawn again once it is not (macOS presents nothing for such a window).
 // - The event watch draws only on the main thread, never inside a frame, and not more often than every 4 ms.
@@ -193,6 +198,11 @@ namespace funkgui::desktop
         std::vector<int> zoomSteps;
         std::string      zoomPrefKey;
         int zoomDefault = 100, zoomChosen = 100, zoomTarget = 100, zoomApplied = 100;
+
+        MenuOverlay menu;
+        uint32_t menuDrawn = 0;                      // menu.revision() of the last frame drawn
+        bool     menuHasPointer = false;             // the Panel was told the pointer left: the menu has it
+        bool     pressIsMenus = false;               // the press under way began while a menu showed
 
         // ---- sizes --------------------------------------------------------------------------------------------------
 
@@ -411,7 +421,7 @@ namespace funkgui::desktop
 
         void updateCursor()
         {
-            const Cursor c = panel.cursor();
+            const Cursor c = menu.showing() ? Cursor::normal : panel.cursor();
             if (cursorSet && c == cursor)
                 return;
             cursor = c;
@@ -421,6 +431,15 @@ namespace funkgui::desktop
                 cursors[id] = SDL_CreateSystemCursor(id);
             if (cursors[id] != nullptr)
                 SDL_SetCursor(cursors[id]);
+        }
+
+        // The menu takes a pointer event: the Panel is told once that the pointer left it.
+        void menuTakesPointer()
+        {
+            if (menuHasPointer)
+                return;
+            menuHasPointer = true;
+            panel.pointerExit();
         }
 
         void setUnbounded(bool on)
@@ -521,8 +540,9 @@ namespace funkgui::desktop
         state.theme = themeIdx;
         state.images = images::generation();
         state.shaders = shaders::detail::generation();
+        menu.setBounds(static_cast<float>(logicalW), static_cast<float>(logicalH));
         const bool always = firstFrame || fixedClock || !kKeepsFrame;
-        const bool forced = always || gate.mustDraw(state, reachesScreen);
+        const bool forced = always || menu.revision() != menuDrawn || gate.mustDraw(state, reachesScreen);
         const auto finish = [this]
         {
             cadence.requestRate(panel.wantsFullRate());
@@ -555,6 +575,8 @@ namespace funkgui::desktop
         info.overflows = diag.overflows;
         canvas.begin(info);
         panel.draw(canvas, theme);
+        menu.draw(canvas);                           // over the Panel's frame; nothing while no menu shows
+        menuDrawn = menu.revision();
         const PrimList& list = canvas.end();
 
         diag.scale = static_cast<double>(dpi);
@@ -641,7 +663,8 @@ namespace funkgui::desktop
                 if (e.window.windowID == windowId && !pressed)
                 {
                     nudge();
-                    panel.pointerExit();
+                    if (!menu.pointerExit())
+                        panel.pointerExit();
                     updateCursor();
                 }
                 break;
@@ -664,10 +687,23 @@ namespace funkgui::desktop
                     }
                     const float dx = virtX - pressX, dy = virtY - pressY;
                     pressMoved = pressMoved || dx * dx + dy * dy >= kDragPx * kDragPx;
-                    panel.pointerDrag(pointerAt(virtX, virtY, pressedButton, pressMoved ? 1 : pressClicks));
+                    const PointerEvent at = pointerAt(virtX, virtY, pressedButton, pressMoved ? 1 : pressClicks);
+                    if (pressIsMenus)
+                        static_cast<void>(menu.pointerMove(at.x, at.y));
+                    else
+                        panel.pointerDrag(at);
                 }
                 else
-                    panel.pointerMove(pointerAt(e.motion.x, e.motion.y, 0, 1));
+                {
+                    const PointerEvent at = pointerAt(e.motion.x, e.motion.y, 0, 1);
+                    if (menu.pointerMove(at.x, at.y))
+                        menuTakesPointer();
+                    else
+                    {
+                        menuHasPointer = false;
+                        panel.pointerMove(at);
+                    }
+                }
                 updateCursor();
                 break;
 
@@ -681,7 +717,17 @@ namespace funkgui::desktop
                 pressMoved = false;
                 pressX = virtX = e.button.x;
                 pressY = virtY = e.button.y;
-                panel.pointerDown(pointerAt(pressX, pressY, pressedButton, pressClicks));
+                {
+                    const PointerEvent at = pointerAt(pressX, pressY, pressedButton, pressClicks);
+                    pressIsMenus = menu.showing();
+                    if (pressIsMenus)
+                    {
+                        menuTakesPointer();
+                        static_cast<void>(menu.pointerDown(at.x, at.y));
+                    }
+                    else
+                        panel.pointerDown(at);
+                }
                 updateCursor();
                 break;
 
@@ -696,7 +742,22 @@ namespace funkgui::desktop
                         virtY = e.button.y;
                     }
                     const int clicks = pressMoved ? 1 : std::max(1, static_cast<int>(e.button.clicks));
-                    endPress(pointerAt(virtX, virtY, pressedButton, clicks), clicks >= 2);
+                    const PointerEvent at = pointerAt(virtX, virtY, pressedButton, clicks);
+                    if (pressIsMenus)
+                    {
+                        pressed = false;
+                        pressIsMenus = false;
+                        static_cast<void>(menu.pointerUp(at.x, at.y));
+                        updateCursor();
+                    }
+                    else
+                    {
+                        endPress(at, clicks >= 2);
+                        // The release of the press that opened a menu (a dropdown's click) may be on one of its
+                        // items: a press dragged onto an item and let go chooses it.
+                        if (menu.showing() && pressMoved)
+                            static_cast<void>(menu.pointerUp(at.x, at.y));
+                    }
                 }
                 break;
 
@@ -711,7 +772,8 @@ namespace funkgui::desktop
                     w.y = at.y;
                     w.mods = at.mods;
                     nudge();
-                    static_cast<void>(panel.wheel(w));
+                    if (!menu.wheel(w.x, w.y, w.dy))
+                        static_cast<void>(panel.wheel(w));
                     updateCursor();
                 }
                 break;
@@ -729,7 +791,8 @@ namespace funkgui::desktop
                     g.scale = e.pinch.scale;
                     g.mods = at.mods;
                     nudge();
-                    static_cast<void>(panel.magnify(g));
+                    if (!menu.showing())
+                        static_cast<void>(panel.magnify(g));
                     updateCursor();
                 }
                 break;
@@ -742,7 +805,8 @@ namespace funkgui::desktop
                     if (!keyFromSdl(static_cast<uint32_t>(e.key.key), static_cast<uint16_t>(e.key.mod), kApple, ev))
                         break;
                     nudge();
-                    static_cast<void>(panel.key(ev));
+                    if (!menu.key(ev, host.nowSeconds()))
+                        static_cast<void>(panel.key(ev));
                     updateCursor();
                 }
                 break;
@@ -763,7 +827,8 @@ namespace funkgui::desktop
                         ev.ch = cp;
                         ev.mods.shift = (mods & kModShift) != 0;     // typed text is no chord: the others stay off
                         nudge();
-                        static_cast<void>(panel.key(ev));
+                        if (!menu.key(ev, host.nowSeconds()))
+                            static_cast<void>(panel.key(ev));
                     }
                     updateCursor();
                 }
@@ -943,8 +1008,11 @@ namespace funkgui::desktop
         {
             // A window can close with a button still down, in which case the release never arrives; leaving the
             // gesture open would strand the product's parameter write (EditorHost's rule).
+            m.menu.dismiss();                        // unanswered: its callback does not run
             m.setUnbounded(false);
             m.pressed = false;
+            m.pressIsMenus = false;
+            m.menuHasPointer = false;
             m.panel.closeGestures();
             if (m.options.setUiAttached)
                 m.options.setUiAttached(false);
@@ -1006,15 +1074,16 @@ namespace funkgui::desktop
 
         // How long the loop may sleep: until the next frame is due by the cadence, and no longer than the next idle
         // call. At full rate a frame is due at once after a vsync-paced one (the wait was inside bgfx::frame()).
+        // Under a pinned clock (a test, a capture) nothing waits: every turn draws a frame.
+        const bool pinned = m.options.fixedDt > 0.0f;
         double now = nowMs();
         double wait = 0.0;
-        if (m.framed)
+        if (m.framed && !pinned)
         {
             const double period = m.cadence.wantedFullRate() ? web::FrameCadence::kFullMinMs
                                                              : web::FrameCadence::kIdleMinMs;
-            wait = m.lastFrameMs + period - now;
+            wait = std::min(m.lastFrameMs + period - now, m.lastIdleMs + kIdlePeriodMs - now);
         }
-        wait = std::min(wait, m.lastIdleMs + kIdlePeriodMs - now);
 
         SDL_Event e;
         bool got = wait >= 1.0 ? SDL_WaitEventTimeout(&e, static_cast<Sint32>(wait)) : SDL_PollEvent(&e);
@@ -1035,7 +1104,7 @@ namespace funkgui::desktop
             m.lastIdleMs = now;
             m.panel.idle(nowSeconds());
         }
-        if (m.cadence.due(now, false))
+        if (pinned || m.cadence.due(now, false))
             m.frame(now);
         return m.open;
     }
@@ -1233,15 +1302,24 @@ namespace funkgui::desktop
 
     unsigned DesktopHost::services() const
     {
-        return hostservice::clipboard;
+        return hostservice::menus | hostservice::clipboard;
     }
 
-    bool DesktopHost::showMenu(const MenuRequest&, MenuCallback)
+    bool DesktopHost::showMenu(const MenuRequest& request, MenuCallback done)
     {
-        return false;
+        Impl& m = *impl_;
+        if (!m.open)
+            return false;                            // `done` is dropped unrun
+        m.menuHasPointer = false;
+        m.nudge();                                   // drawn, or drawn away, at the next frame
+        return m.menu.show(request, std::move(done), static_cast<float>(m.logicalW), static_cast<float>(m.logicalH));
     }
 
-    void DesktopHost::dismissMenus() {}
+    void DesktopHost::dismissMenus()
+    {
+        impl_->menu.dismiss();
+        impl_->nudge();
+    }
 
     bool DesktopHost::chooseFiles(const FileRequest&, FilesCallback)
     {
