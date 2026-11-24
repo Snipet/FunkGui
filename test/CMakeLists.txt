@@ -4,13 +4,14 @@
 # Self-registration (mirrors FCompressor's FCMP_PROBE, 03 §2.9). Any test/**/*.cpp or test/**/*.mm (*.mm and
 # *_apple.cpp: Apple only; *_linux.cpp: Linux only) whose FIRST line is
 #
-#   // FUNKGUI_TEST name=fg.<x> timeout=<s> gpu=<0|1>[ links=<harness|core|gpu|presets>][ exe=<tool>[ args="<text>"]][ labels=<l>[,<l>…]]
+#   // FUNKGUI_TEST name=fg.<x> timeout=<s> gpu=<0|1>[ links=<harness|core|gpu|presets|desktop>][ exe=<tool>[ args="<text>"]][ labels=<l>[,<l>…]]
 #
 # (keys in that order, single spaces) is one CTest test named fg.<x>:
 # - Without exe=, the file is compiled into its own executable, run as `<exe> fg.<x> <harness flags>`. links= picks
 #   what it links: harness (FunkGui::harness only, no JUCE), core (+ FunkGui::core; the default when gpu=0), gpu
-#   (+ FunkGui::gpu and the shaders; the default when gpu=1) or presets (core + FunkGui::presets and SQLite; G8, S11;
-#   skipped without FUNKGUI_WITH_PRESETS). Every test executable gets ${FUNKGUI_GENERATED_DIR} on its include path and,
+#   (+ FunkGui::gpu and the shaders; the default when gpu=1), presets (core + FunkGui::presets and SQLite; G8, S11;
+#   skipped without FUNKGUI_WITH_PRESETS) or desktop (v0.28.0: core + FunkGui::gpu + FunkGui::desktop and SDL3; needs
+#   gpu=1; skipped without FUNKGUI_WITH_DESKTOP). Every test executable gets ${FUNKGUI_GENERATED_DIR} on its include path and,
 #   when gpu=1, builds after FunkGuiShaders. One that includes <funkgui/shaders/ui.es300.h> (v0.12.0: the GLSL ES text,
 #   generated in every configuration) builds after FunkGuiShaderText.
 # - With exe=<tool target>, the file is a registration stub and is not compiled: the test runs
@@ -114,6 +115,10 @@ function(_fg_add_test name timeout gpu links exe args labels source)
     message(STATUS "FunkGui tests: ${name} skipped (FUNKGUI_WITH_PRESETS is OFF)")
     return()
   endif()
+  if(links STREQUAL "desktop" AND NOT TARGET FunkGuiDesktop)
+    message(STATUS "FunkGui tests: ${name} skipped (FUNKGUI_WITH_DESKTOP is OFF)")
+    return()
+  endif()
   if(NOT FUNKGUI_WITH_JUCE AND NOT FUNKGUI_HARNESS_ONLY)
     get_property(_juce_tools GLOBAL PROPERTY FUNKGUI_JUCE_ONLY_TOOLS)
     set(_needs_juce OFF)
@@ -165,6 +170,8 @@ function(_fg_add_test name timeout gpu links exe args labels source)
       target_link_libraries(${_target} PRIVATE FunkGui::core FunkGui::harness)
       if(links STREQUAL "gpu")
         target_link_libraries(${_target} PRIVATE FunkGui::gpu)
+      elseif(links STREQUAL "desktop")
+        target_link_libraries(${_target} PRIVATE FunkGui::gpu FunkGui::desktop)
       elseif(links STREQUAL "presets")
         target_link_libraries(${_target} PRIVATE FunkGui::presets)
       endif()
@@ -252,7 +259,7 @@ foreach(_f IN LISTS _fg_test_files)
   set(_exe "")
   set(_args "")
   set(_labels "")
-  if(_rest MATCHES "^ links=(harness|core|gpu|presets)(.*)$")
+  if(_rest MATCHES "^ links=(harness|core|gpu|presets|desktop)(.*)$")
     set(_links ${CMAKE_MATCH_1})
     set(_rest "${CMAKE_MATCH_2}")
   endif()
@@ -281,8 +288,8 @@ foreach(_f IN LISTS _fg_test_files)
       set(_links core)
     endif()
   endif()
-  if(_links STREQUAL "gpu" AND NOT _gpu)
-    message(FATAL_ERROR "${_f}: links=gpu needs gpu=1")
+  if(_links MATCHES "^(gpu|desktop)$" AND NOT _gpu)
+    message(FATAL_ERROR "${_f}: links=${_links} needs gpu=1")
   endif()
   _fg_add_test(${_name} ${_timeout} ${_gpu} "${_links}" "${_exe}" "${_args}" "${_labels}" ${_f})
 endforeach()
@@ -307,7 +314,13 @@ if(NOT FUNKGUI_HARNESS_ONLY)
   endforeach()
   if(FUNKGUI_WITH_BGFX)
     target_link_libraries(fg_header_flags PRIVATE FunkGui::gpu)
-    list(APPEND _fg_headers_args --bgfx)
+    # v0.28.0: bgfx without JUCE. include/funkgui/gpu/ also holds the headers of what binds FunkGui::gpu to JUCE
+    # (EditorHost.h, FramePump.h, A11yBridge.h), which cannot compile there, and tools/check-headers.sh takes gpu/ as a
+    # whole or not at all: without JUCE it is not checked (the script says so of each header). Its JUCE-free headers
+    # are compiled by FunkGui::gpu's and FunkGui::desktop's own sources in such a build.
+    if(FUNKGUI_WITH_JUCE)
+      list(APPEND _fg_headers_args --bgfx)
+    endif()
   endif()
   if(NOT FUNKGUI_WITH_JUCE)
     list(APPEND _fg_headers_args --no-juce)            # juce/ and presets/ headers need JUCE: not checked without it
