@@ -759,6 +759,17 @@ if(FUNKGUI_BUILD_TOOLS)
     if(_stem STREQUAL "GalleryProbe")                       # the gallery sections live under test/gallery (G3)
       file(GLOB _extra CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/test/gallery/*.cpp)
     endif()
+    # Windows (v0.28.0, FunkGui's own build there): a tool whose source calls POSIX's open_memstream, which Windows'
+    # C runtime does not have, is not defined (FunkGuiGalleryProbe: its dump round trip writes into memory through
+    # it). Its name goes to FUNKGUI_UNAVAILABLE_TOOLS, which test/CMakeLists.txt reads to skip its tests.
+    if(WIN32)
+      file(STRINGS "${_src}" _fg_tool_posix LIMIT_COUNT 1 REGEX "open_memstream[ \t]*\\(")
+      if(_fg_tool_posix)
+        message(STATUS "FunkGui: tool ${_tool} needs POSIX's open_memstream (this is Windows); not defined")
+        set_property(GLOBAL APPEND PROPERTY FUNKGUI_UNAVAILABLE_TOOLS ${_tool})
+        continue()
+      endif()
+    endif()
     funkgui_add_tool(${_tool} SOURCES ${_src} ${_extra})
   endforeach()
   file(GLOB _fg_tool_dirs CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/tools/*/CMakeLists.txt)

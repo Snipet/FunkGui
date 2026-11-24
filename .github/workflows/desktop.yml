@@ -295,7 +295,8 @@ jobs:
                 echo "Run, from Terminal in this folder (the first line lets a downloaded program run):"
                 echo "    xattr -dr com.apple.quarantine ."
                 echo "    ./$EXE"
-                echo "    ./$EXE --info" ;;
+                echo "    ./$EXE --info"
+                echo "(On a laptop's keyboard the F keys below want fn held.)" ;;
               *)
                 echo "Run, from a terminal in this folder (an X11 or XWayland display and a Vulkan driver):"
                 echo "    ./$EXE"
@@ -334,7 +335,11 @@ jobs:
       - name: Build the rest
         id: rest
         continue-on-error: ${{ runner.os == 'Windows' }}
-        run: cmake --build "$BUILD" --target all funkgui_tools funkgui_tests --parallel ${{ matrix.jobs }}
+        run: |
+          cmd=(cmake --build "$BUILD" --target all funkgui_tools funkgui_tests --parallel ${{ matrix.jobs }})
+          # Windows: every failure in one run, while its build of the rest is still being brought up
+          if [ "$RUNNER_OS" = Windows ]; then cmd+=(-- -k 0); fi
+          "${cmd[@]}"
 
       - name: The compiler cache's statistics
         if: always()
