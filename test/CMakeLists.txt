@@ -141,6 +141,16 @@ function(_fg_add_test name timeout gpu links exe args labels source)
     endif()
   endif()
 
+  # A Windows host (v0.28.0, FunkGui's own build there): a compiled test whose source needs POSIX (open_memstream,
+  # <unistd.h>) does not compile there and is not defined.
+  if(CMAKE_HOST_WIN32 AND NOT exe)
+    file(STRINGS "${source}" _posix LIMIT_COUNT 1 REGEX "open_memstream[ \t]*\\(|^#include <unistd\\.h>")
+    if(_posix)
+      message(STATUS "FunkGui tests: ${name} skipped (its source needs POSIX, and this is Windows)")
+      return()
+    endif()
+  endif()
+
   set(_sandbox ${CMAKE_BINARY_DIR}/sandbox/${name})
   file(MAKE_DIRECTORY ${_sandbox})
   set(_harness_flags --golden-root ${FUNKGUI_GOLDEN_ROOT} --arch ${FUNKGUI_RUN_ARCH}

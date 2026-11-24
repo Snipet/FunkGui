@@ -7,9 +7,15 @@
 #
 # Nothing here has a GPU or a screen of its own. On Linux the tests and the gallery run on a headless X server (Xvfb,
 # with openbox as its window manager) and Mesa's software Vulkan (lavapipe): the real GPU path, drawn by a software
-# driver. `funkgui_gallery_desktop --frames 120 --shot` there writes the PNG kept in the artifact. On macOS and
-# Windows the same run is tried on the runner's own session (Metal in a virtual machine; Direct3D 11's software
-# adapter) and reported, and does not fail the job: those two are proven by a person running the artifact.
+# driver. `funkgui_gallery_desktop --frames 120 --shot` there writes the PNG kept as
+# funkgui-gallery-desktop-pictures-<platform>. On macOS and Windows the same run is tried on the runner's own session
+# (Metal in a virtual machine; Direct3D 11's software adapter) and reported, and does not fail the job: those two are
+# proven by a person running the artifact.
+#
+# The order is for a person waiting on an artifact: the gallery is built and kept first, then the desktop host's own
+# tests (fg.desktop.*) are built and run, which fail the job on every platform, then the rest of the preset. On
+# Windows the rest (FunkGui's other tools and tests, never built there before v0.28.0) is built and run and reported,
+# and does not fail the job yet.
 #
 # Three caches spare a run what does not change between runs (actions/cache's restore and save, apart):
 #
@@ -334,11 +340,35 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+      # Linux: a headless desktop for the tests and the gallery (Xvfb and openbox, with Mesa's software Vulkan chosen
+      # above), left running for the rest of the job
+      - name: A headless desktop (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp > "$RUNNER_TEMP/xvfb.log" 2>&1 &
+          for i in $(seq 100); do [ -S /tmp/.X11-unix/X99 ] && break; sleep 0.1; done
+          DISPLAY=:99 openbox > "$RUNNER_TEMP/openbox.log" 2>&1 &
+          sleep 1
+          echo "DISPLAY=:99" >> "$GITHUB_ENV"
+
+      # the desktop host's own tests next, on every platform: fg.desktop.host opens a real (hidden) window on the
+      # platform's GPU path
+      - name: Build the desktop tests
+        id: desktop-tests
+        run: >-
+          cmake --build "$BUILD" --parallel ${{ matrix.jobs }} --target
+          fg_desktop_files fg_desktop_host fg_desktop_input fg_desktop_menu fg_desktop_png fg_desktop_prefs
+
+      - name: Test the desktop host
+        id: desktop-test
+        run: ctest --test-dir "$BUILD" -R '^fg\.desktop\.' --output-on-failure --parallel ${{ matrix.jobs }}
+
       # the whole preset: FunkGuiCoreCheck, the JUCE-free tools and every test. On Windows this does not fail the job
-      # yet: FunkGui's own tools and tests were never built there before v0.28.0, and the job's first duty is the
-      # gallery, kept above.
+      # yet: FunkGui's own tools and tests were never built there before v0.28.0 (those that need POSIX are left out,
+      # saying so), and compiling them all takes a quarter of an hour there.
       - name: Build the rest
         id: rest
+        if: ${{ !cancelled() && steps.gallery.outcome == 'success' }}
         continue-on-error: ${{ runner.os == 'Windows' }}
         run: |
           cmd=(cmake --build "$BUILD" --target all funkgui_tools funkgui_tests --parallel ${{ matrix.jobs }})
@@ -366,25 +396,12 @@ jobs:
           path: ${{ env.FG_CI_CACHE }}
           key: ${{ steps.cache.outputs.cache-primary-key }}
 
-      # Linux: a headless desktop (Xvfb and openbox) with Mesa's software Vulkan, stopped when the tests end. Windows:
-      # reported, not yet a failure of the job (as its build of the rest, above).
+      # every test of the preset. Windows: reported, not yet a failure of the job (as its build of the rest, above).
       - name: Test
         id: test
         if: ${{ !cancelled() && steps.rest.outcome == 'success' }}
         continue-on-error: ${{ runner.os == 'Windows' }}
-        run: |
-          cmd=(ctest --test-dir "$BUILD" -L verify --output-on-failure --parallel ${{ matrix.jobs }})
-          if [ "$RUNNER_OS" = Linux ]; then
-            Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp > "$RUNNER_TEMP/xvfb.log" 2>&1 & xvfb=$!
-            for i in $(seq 100); do [ -S /tmp/.X11-unix/X99 ] && break; sleep 0.1; done
-            export DISPLAY=:99
-            openbox > "$RUNNER_TEMP/openbox.log" 2>&1 & wm=$!
-            sleep 1
-            rc=0; "${cmd[@]}" || rc=$?
-            kill "$wm" "$xvfb" 2>/dev/null || true
-            exit $rc
-          fi
-          "${cmd[@]}"
+        run: ctest --test-dir "$BUILD" -L verify --output-on-failure --parallel ${{ matrix.jobs }}
 
       # the gallery itself, drawn by the GPU path and read back: the Linux job's proof (it fails the job there); on
       # macOS and Windows a report of what the runner's session can do
@@ -398,18 +415,11 @@ jobs:
           out="$RUNNER_TEMP/pictures"
           mkdir -p "$out"
           exe="$BUILD/tools/GalleryDesktop/$EXE"
-          if [ "$RUNNER_OS" = Linux ]; then
-            Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp > "$RUNNER_TEMP/xvfb.log" 2>&1 & xvfb=$!
-            for i in $(seq 100); do [ -S /tmp/.X11-unix/X99 ] && break; sleep 0.1; done
-            export DISPLAY=:99
-            openbox > "$RUNNER_TEMP/openbox.log" 2>&1 & wm=$!
-            sleep 1
-          fi
           rc=0
           "$exe" --info || rc=$?
           "$exe" --frames 120 --shot "$out/gallery-${{ matrix.platform }}.png" || rc=$?
           "$exe" --section texteditor --theme 1 --frames 60 --shot "$out/texteditor-${{ matrix.platform }}.png" || rc=$?
-          if [ "$RUNNER_OS" = Linux ]; then kill "$wm" "$xvfb" 2>/dev/null || true; fi
+          "$exe" --resize --frames 30 --shot "$out/resize-${{ matrix.platform }}.png" || rc=$?
           ls -l "$out" || true
           exit $rc
 
@@ -423,7 +433,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Keep the test log
-        if: ${{ failure() || steps.test.outcome == 'failure' }}
+        if: ${{ failure() || steps.test.outcome == 'failure' || steps.desktop-test.outcome == 'failure' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tests-${{ matrix.platform }}
