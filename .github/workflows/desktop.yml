@@ -327,10 +327,12 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      # macOS and Linux build and test the whole preset. Windows builds the gallery alone for now: FunkGui's own
-      # tools and tests have not been built there yet.
+      # the whole preset: FunkGuiCoreCheck, the JUCE-free tools and every test. On Windows this does not fail the job
+      # yet: FunkGui's own tools and tests were never built there before v0.28.0, and the job's first duty is the
+      # gallery, kept above.
       - name: Build the rest
-        if: runner.os != 'Windows'
+        id: rest
+        continue-on-error: ${{ runner.os == 'Windows' }}
         run: cmake --build "$BUILD" --target all funkgui_tools funkgui_tests --parallel ${{ matrix.jobs }}
 
       - name: The compiler cache's statistics
@@ -353,9 +355,12 @@ jobs:
           path: ${{ env.FG_CI_CACHE }}
           key: ${{ steps.cache.outputs.cache-primary-key }}
 
-      # Linux: a headless desktop (Xvfb and openbox) with Mesa's software Vulkan, stopped when the tests end
+      # Linux: a headless desktop (Xvfb and openbox) with Mesa's software Vulkan, stopped when the tests end. Windows:
+      # reported, not yet a failure of the job (as its build of the rest, above).
       - name: Test
-        if: runner.os != 'Windows'
+        id: test
+        if: ${{ !cancelled() && steps.rest.outcome == 'success' }}
+        continue-on-error: ${{ runner.os == 'Windows' }}
         run: |
           cmd=(ctest --test-dir "$BUILD" -L verify --output-on-failure --parallel ${{ matrix.jobs }})
           if [ "$RUNNER_OS" = Linux ]; then
@@ -374,6 +379,7 @@ jobs:
       # macOS and Windows a report of what the runner's session can do
       - name: Run the gallery
         id: run
+        if: ${{ !cancelled() && steps.gallery.outcome == 'success' }}
         continue-on-error: ${{ runner.os != 'Linux' }}
         env:
           EXE: ${{ matrix.exe }}
@@ -406,7 +412,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Keep the test log
-        if: failure()
+        if: ${{ failure() || steps.test.outcome == 'failure' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tests-${{ matrix.platform }}

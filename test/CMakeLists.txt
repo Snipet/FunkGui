@@ -152,6 +152,19 @@ function(_fg_add_test name timeout gpu links exe args labels source)
     elseif(EXISTS "${PROJECT_SOURCE_DIR}/${exe}" AND NOT IS_DIRECTORY "${PROJECT_SOURCE_DIR}/${exe}")
       set(_command ${PROJECT_SOURCE_DIR}/${exe} ${_args})
       set(_harness OFF)
+      # A Windows host (v0.28.0) runs no script by its first line: a Python script is given to the interpreter CMake
+      # finds, and any other script's test is not defined there.
+      if(CMAKE_HOST_WIN32)
+        if(exe MATCHES "\\.py$")
+          find_package(Python3 COMPONENTS Interpreter QUIET)
+        endif()
+        if(exe MATCHES "\\.py$" AND Python3_Interpreter_FOUND)
+          set(_command ${Python3_EXECUTABLE} ${_command})
+        else()
+          message(STATUS "FunkGui tests: ${name} skipped (a Windows host cannot run ${exe})")
+          return()
+        endif()
+      endif()
     else()
       message(FATAL_ERROR "${source}: exe=${exe} is neither a target nor a file in ${PROJECT_SOURCE_DIR}")
     endif()
@@ -297,7 +310,12 @@ endforeach()
 # ---- fg.headers: every public header compiles standalone (tools/check-headers.sh; gpu/ only with bgfx) ---------------
 # The compile flags are a real consumer's: those of an OBJECT target that links FunkGui::core (+ ::gpu) and ::harness
 # and calls funkgui_configure_product (it is never built). The script reads them from fg-headers.flags.
-if(NOT FUNKGUI_HARNESS_ONLY)
+# Not on a Windows host (v0.28.0, FunkGui's own build there): the script is a shell script that drives a GNU-style
+# compiler with POSIX paths. The headers are checked on macOS and Linux, and compiled on Windows by what includes them.
+if(CMAKE_HOST_WIN32 AND NOT FUNKGUI_HARNESS_ONLY)
+  message(STATUS "FunkGui tests: fg.headers is not defined on a Windows host (tools/check-headers.sh is a shell script)")
+endif()
+if(NOT FUNKGUI_HARNESS_ONLY AND NOT CMAKE_HOST_WIN32)
   set_property(GLOBAL APPEND PROPERTY FUNKGUI_TEST_NAMES fg.headers)
   add_library(fg_header_flags OBJECT EXCLUDE_FROM_ALL)
   target_link_libraries(fg_header_flags PRIVATE FunkGui::core FunkGui::harness)
