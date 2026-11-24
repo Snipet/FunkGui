@@ -127,6 +127,12 @@ jobs:
           }
           "$vs\VC\Tools\Llvm\x64\bin" | Out-File $env:GITHUB_PATH -Append -Encoding utf8   # its clang-cl first
 
+      # the files as they are in the repository, on Windows too: the golden files and the shaders are compared and
+      # hashed byte for byte, and Git for Windows would check them out with CRLF line ends
+      - name: Line ends as committed (Windows)
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -226,14 +232,12 @@ jobs:
             ${{ env.FUNKGUI_DEPS_DIR }}/SDL-${{ steps.keys.outputs.sdl_tag }}
           key: ${{ steps.sources.outputs.cache-primary-key }}
 
-      # Release: the artifact is what a person runs. Windows: warnings are not errors yet (FunkGui's own sources were
-      # never built by clang-cl under FunkGui's own flags before v0.28.0).
+      # Release: the artifact is what a person runs. Warnings in FunkGui's own sources are errors on every platform.
       - name: Configure
         run: |
           cmd=(cmake --preset desktop -DCMAKE_BUILD_TYPE=Release)
           if [ "$RUNNER_OS" = Windows ]; then
-            cmd+=(-DCMAKE_C_COMPILER_LAUNCHER="$FG_SCCACHE" -DCMAKE_CXX_COMPILER_LAUNCHER="$FG_SCCACHE"
-                  -DFUNKGUI_WERROR=OFF)
+            cmd+=(-DCMAKE_C_COMPILER_LAUNCHER="$FG_SCCACHE" -DCMAKE_CXX_COMPILER_LAUNCHER="$FG_SCCACHE")
           else
             cmd+=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
           fi
